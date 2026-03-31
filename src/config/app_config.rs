@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub comfyui_path: Option<PathBuf>,
     pub bookmark_file_path: Option<PathBuf>,
     pub model_search_cache_path: Option<PathBuf>,
+    pub download_history_file_path: Option<PathBuf>,
     #[serde(default = "default_model_search_cache_ttl_hours")]
     pub model_search_cache_ttl_hours: u64,
 }
@@ -71,6 +72,12 @@ impl AppConfig {
             .clone()
             .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_search_cache.json")))
     }
+
+    pub fn download_history_path(&self) -> Option<PathBuf> {
+        self.download_history_file_path
+            .clone()
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("download_history.json")))
+    }
 }
 
 impl Default for AppConfig {
@@ -80,6 +87,7 @@ impl Default for AppConfig {
             comfyui_path: None,
             bookmark_file_path: None,
             model_search_cache_path: None,
+            download_history_file_path: None,
             model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
         }
     }

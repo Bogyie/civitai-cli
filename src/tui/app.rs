@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 use ratatui::widgets::ListState;
 use serde_json;
+use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
@@ -170,12 +171,14 @@ pub struct DownloadTracker {
     pub state: DownloadState,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub enum DownloadHistoryStatus {
     Completed,
     Failed(String),
     Cancelled,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DownloadHistoryEntry {
     pub model_id: u64,
     pub version_id: u64,
@@ -220,6 +223,7 @@ pub struct App {
     pub show_bookmark_confirm_modal: bool,
     pub pending_bookmark_remove_id: Option<u64>,
     pub bookmark_file_path: Option<PathBuf>,
+    pub download_history_file_path: Option<PathBuf>,
     pub selected_version_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, StatefulProtocol>,
     pub model_version_image_failed: HashSet<u64>,
@@ -249,6 +253,11 @@ impl App {
             .clone()
             .or_else(crate::config::AppConfig::bookmark_path);
         let bookmarks = load_bookmarks(bookmark_file_path.as_deref());
+        let download_history_file_path = config
+            .download_history_file_path
+            .clone()
+            .or_else(|| config.download_history_path());
+        let download_history = load_download_history(download_history_file_path.as_deref());
         let mut bookmark_list_state = ListState::default();
         if !bookmarks.is_empty() {
             bookmark_list_state.select(Some(0));
@@ -272,6 +281,7 @@ impl App {
             show_bookmark_confirm_modal: false,
             pending_bookmark_remove_id: None,
             bookmark_file_path,
+            download_history_file_path,
             selected_version_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
             model_version_image_failed: HashSet::new(),
@@ -282,7 +292,7 @@ impl App {
             active_download_order: Vec::new(),
             selected_download_index: 0,
             selected_history_index: 0,
-            download_history: Vec::new(),
+            download_history,
             status: "Initializing App...".to_string(),
             last_error: None,
             show_status_modal: false,
@@ -449,6 +459,7 @@ impl App {
             self.download_history.drain(0..extra);
             self.clamp_selected_history_index();
         }
+        self.persist_download_history();
     }
 
     pub fn selected_history_entry_index(&self) -> Option<usize> {
@@ -463,6 +474,7 @@ impl App {
         let idx = self.selected_history_entry_index()?;
         let removed = self.download_history.remove(idx);
         self.clamp_selected_history_index();
+        self.persist_download_history();
         Some(removed)
     }
 
@@ -695,6 +707,12 @@ impl App {
         self.config.bookmark_file_path = Some(path);
     }
 
+    pub fn set_download_history_file_path(&mut self, path: PathBuf) {
+        self.download_history_file_path = Some(path.clone());
+        self.config.download_history_file_path = Some(path);
+        self.persist_download_history();
+    }
+
     pub fn is_bookmark_export_prompt(&self) -> bool {
         matches!(self.bookmark_path_prompt_action, Some(BookmarkPathAction::Export))
     }
@@ -772,6 +790,16 @@ impl App {
             }
         }
     }
+
+    pub fn persist_download_history(&mut self) {
+        if let Some(path) = &self.download_history_file_path {
+            if let Err(err) = save_download_history_to_file(path, &self.download_history) {
+                self.last_error = Some(err.to_string());
+            } else {
+                self.last_error = None;
+            }
+        }
+    }
 }
 
 fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
@@ -804,6 +832,39 @@ fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String
     normalized.retain(|model| seen.insert(model.id));
 
     let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn load_download_history(path: Option<&Path>) -> Vec<DownloadHistoryEntry> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut history: Vec<DownloadHistoryEntry> = match serde_json::from_str(&content) {
+        Ok(history) => history,
+        Err(_) => Vec::new(),
+    };
+
+    if history.len() > 200 {
+        let extra = history.len() - 200;
+        history.drain(0..extra);
+    }
+
+    history
+}
+
+fn save_download_history_to_file(path: &Path, history: &[DownloadHistoryEntry]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let json = serde_json::to_string_pretty(&history).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;
     Ok(())
 }

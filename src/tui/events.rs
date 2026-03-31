@@ -169,7 +169,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.settings_form.focused_field < 4 {
+                                    if app.settings_form.focused_field < 5 {
                                         app.settings_form.focused_field += 1;
                                     }
                                 }
@@ -198,7 +198,7 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
-                                    } else {
+                                    } else if app.settings_form.focused_field == 2 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -206,6 +206,18 @@ pub async fn run_event_loop(
                                         };
                                         app.config.bookmark_file_path = path.clone();
                                         app.bookmark_file_path = path;
+                                    } else if app.settings_form.focused_field == 5 {
+                                        let path = if app.settings_form.input_buffer.is_empty() {
+                                            None
+                                        } else {
+                                            Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
+                                        };
+                                        if let Some(path) = path {
+                                            app.set_download_history_file_path(path);
+                                        } else {
+                                            app.config.download_history_file_path = None;
+                                            app.download_history_file_path = None;
+                                        }
                                     }
                                     if let Err(e) = app.config.save() {
                                         app.last_error = Some(format!("Failed to save config: {}", e));
