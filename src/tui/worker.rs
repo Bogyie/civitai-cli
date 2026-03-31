@@ -2,21 +2,109 @@ use anyhow::Result;
 use image::imageops::FilterType;
 use ratatui_image::picker::Picker;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 
-use crate::api::CivitaiClient;
+use crate::api::{CivitaiClient, Model};
 use crate::config::AppConfig;
 use crate::download::manager::DownloadControl;
 use crate::download::DownloadManager;
 use crate::tui::app::{AppMessage, WorkerCommand};
 
 type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
+type SearchCache = HashMap<String, CachedSearchResult>;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct CachedSearchResult {
+    models: Vec<Model>,
+    cached_at_unix_secs: u64,
+}
 
 enum CoverQueueCommand {
     Enqueue(Vec<(u64, String)>),
     Prioritize(u64, Option<String>),
+}
+
+fn cache_key_for_options(opts: &crate::api::client::SearchOptions) -> String {
+    let sort = opts.sort.as_deref().unwrap_or("All");
+    let types = opts.types.as_deref().unwrap_or("All");
+    let base_models = opts.base_models.as_deref().unwrap_or("All");
+    format!(
+        "q={}|t={}|sort={}|base={}",
+        opts.query.trim().to_ascii_lowercase(),
+        types.trim().to_ascii_lowercase(),
+        sort.trim().to_ascii_lowercase(),
+        base_models.trim().to_ascii_lowercase()
+    )
+}
+
+fn now_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs()
+}
+
+fn is_cache_valid(cached_at_unix_secs: u64, ttl_hours: u64) -> bool {
+    if ttl_hours == 0 {
+        return false;
+    }
+
+    let ttl_secs = ttl_hours.saturating_mul(3600);
+    now_unix_secs().saturating_sub(cached_at_unix_secs) < ttl_secs
+}
+
+fn model_search_cache_path(config: &AppConfig) -> Option<PathBuf> {
+    config.search_cache_path()
+}
+
+fn load_search_cache(path: Option<&Path>, ttl_hours: u64) -> SearchCache {
+    let Some(path) = path else {
+        return HashMap::new();
+    };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let mut cache = serde_json::from_str::<SearchCache>(&content).unwrap_or_else(|_| HashMap::new());
+    let _ = prune_search_cache(&mut cache, ttl_hours);
+    cache
+}
+
+fn save_search_cache(path: Option<&Path>, cache: &SearchCache, ttl_hours: u64) {
+    let Some(path) = path else {
+        return;
+    };
+
+    let mut normalized_cache = cache.to_owned();
+    let _ = prune_search_cache(&mut normalized_cache, ttl_hours);
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if let Ok(json) = serde_json::to_string_pretty(&normalized_cache) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn prune_search_cache(cache: &mut SearchCache, ttl_hours: u64) -> usize {
+    if ttl_hours == 0 {
+        let removed = cache.len();
+        cache.clear();
+        return removed;
+    }
+
+    let now = now_unix_secs();
+    let before = cache.len();
+    cache.retain(|_, entry| {
+        now.saturating_sub(entry.cached_at_unix_secs) < ttl_hours.saturating_mul(3600)
+    });
+
+    before.saturating_sub(cache.len())
 }
 
 fn pop_next_job(
@@ -62,6 +150,13 @@ pub async fn spawn_worker(
 
     let mut civitai = CivitaiClient::new(config.api_key.clone()).unwrap();
     let mut downloader_config = config.clone();
+    let search_cache_path = model_search_cache_path(&downloader_config);
+    let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours.max(1)));
+    let search_cache = Arc::new(Mutex::new(load_search_cache(
+        search_cache_path.as_deref(),
+        *search_cache_ttl_hours.lock().await,
+    )));
+    let search_cache_path = Arc::new(Mutex::new(search_cache_path));
     let req_client = Client::builder().user_agent("civitai-cli").build().unwrap();
 
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -291,12 +386,95 @@ pub async fn spawn_worker(
                         }
                     }
                 }
-                WorkerCommand::SearchModels(opts, preferred_model_id, preferred_version_id) => {
+                WorkerCommand::SearchModels(
+                    opts,
+                    preferred_model_id,
+                    preferred_version_id,
+                    force_refresh,
+                ) => {
                     let tx_msg_clone = tx_msg.clone();
                     let cover_cmd_tx = cover_cmd_tx.clone();
                     let civitai_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
+                    let search_cache = search_cache.clone();
+                    let search_cache_ttl_hours = search_cache_ttl_hours.clone();
+                    let search_cache_path = search_cache_path.clone();
 
                     tokio::spawn(async move {
+                        let cache_key = cache_key_for_options(&opts);
+                        let ttl_hours = *search_cache_ttl_hours.lock().await;
+                        let cache_path = search_cache_path.lock().await.clone();
+                        {
+                            let mut cache = search_cache.lock().await;
+                            let removed = prune_search_cache(&mut cache, ttl_hours);
+                            if removed > 0 {
+                                save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
+                            }
+                        }
+
+                        if !force_refresh {
+                            let cached = {
+                                let cache = search_cache.lock().await;
+                                if let Some(entry) = cache.get(&cache_key) {
+                                    if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
+                                        Some(entry.models.clone())
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let Some(cached) = cached {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::ModelsSearched(cached.clone()))
+                                    .await;
+
+                                let mut jobs = Vec::with_capacity(cached.len());
+                                let mut preferred_url = None;
+
+                                for model in &cached {
+                                    for version in &model.model_versions {
+                                        if let Some(image) = version.images.first() {
+                                            jobs.push((version.id, image.url.clone()));
+                                            if Some(model.id) == preferred_model_id
+                                                && Some(version.id) == preferred_version_id
+                                            {
+                                                preferred_url = Some(image.url.clone());
+                                            }
+                                        } else {
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::ModelCoverLoadFailed(version.id))
+                                                .await;
+                                        }
+                                    }
+                                }
+
+                                let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
+                                if let Some(version_id) = preferred_version_id {
+                                    let _ = cover_cmd_tx
+                                        .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
+                                        .await;
+                                }
+
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Loaded {} cached models",
+                                        cached.len()
+                                    )))
+                                    .await;
+                                return;
+                            }
+                        }
+
+                        if force_refresh {
+                            {
+                                let mut cache = search_cache.lock().await;
+                                cache.remove(&cache_key);
+                                save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
+                            }
+                        }
+
                         let _ = tx_msg_clone
                             .send(AppMessage::StatusUpdate(format!(
                                 "Fetching models matching '{}'...",
@@ -339,6 +517,19 @@ pub async fn spawn_worker(
                                         ))
                                         .await;
                                 }
+
+                                if ttl_hours > 0 {
+                                    let mut cache = search_cache.lock().await;
+                                    let cache_path = search_cache_path.lock().await.clone();
+                                    cache.insert(
+                                        cache_key,
+                                        CachedSearchResult {
+                                            models: res.items,
+                                            cached_at_unix_secs: now_unix_secs(),
+                                        },
+                                    );
+                                    save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
+                                }
                             }
                             Err(e) => {
                                 let _ = tx_msg_clone
@@ -350,6 +541,21 @@ pub async fn spawn_worker(
                             }
                         }
                     });
+                }
+                WorkerCommand::ClearSearchCache => {
+                    let cache_path = search_cache_path.lock().await.clone();
+                    let ttl_hours = *search_cache_ttl_hours.lock().await;
+                    let cleared = {
+                        let mut cache = search_cache.lock().await;
+                        let count = cache.len();
+                        cache.clear();
+                        count
+                    };
+
+                    save_search_cache(cache_path.as_deref(), &HashMap::new(), ttl_hours);
+                    let _ = tx_msg
+                        .send(AppMessage::StatusUpdate(format!("Cleared {} cached search item(s)", cleared)))
+                        .await;
                 }
                 WorkerCommand::PrioritizeModelCover(version_id, image_url) => {
                     let _ = cover_cmd_tx
@@ -364,6 +570,25 @@ pub async fn spawn_worker(
                             match DownloadManager::new(new_cfg.clone()) {
                                 Ok(_) => {
                                     downloader_config = new_cfg;
+                                    let ttl_hours = downloader_config.model_search_cache_ttl_hours.max(1);
+                                    {
+                                        let mut ttl_hours_ref = search_cache_ttl_hours.lock().await;
+                                        *ttl_hours_ref = ttl_hours;
+                                    }
+
+                                    let new_cache_path = model_search_cache_path(&downloader_config);
+                                    {
+                                        let mut cache_path = search_cache_path.lock().await;
+                                        let mut cache = search_cache.lock().await;
+                                        if *cache_path != new_cache_path {
+                                            *cache_path = new_cache_path.clone();
+                                            *cache = load_search_cache(new_cache_path.as_deref(), ttl_hours);
+                                        } else {
+                                            let _ = prune_search_cache(&mut cache, ttl_hours);
+                                            save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
+                                        }
+                                    }
+
                                     let _ = tx_msg
                                         .send(AppMessage::StatusUpdate(
                                             "Configuration sync applied to worker".into(),

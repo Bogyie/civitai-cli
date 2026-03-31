@@ -4,11 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+fn default_model_search_cache_ttl_hours() -> u64 {
+    3
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub api_key: Option<String>,
     pub comfyui_path: Option<PathBuf>,
     pub bookmark_file_path: Option<PathBuf>,
+    pub model_search_cache_path: Option<PathBuf>,
+    #[serde(default = "default_model_search_cache_ttl_hours")]
+    pub model_search_cache_ttl_hours: u64,
 }
 
 impl AppConfig {
@@ -57,5 +64,23 @@ impl AppConfig {
 
     pub fn bookmark_path() -> Option<PathBuf> {
         Self::config_dir().map(|config_dir| config_dir.join("bookmarks.json"))
+    }
+
+    pub fn search_cache_path(&self) -> Option<PathBuf> {
+        self.model_search_cache_path
+            .clone()
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_search_cache.json")))
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            comfyui_path: None,
+            bookmark_file_path: None,
+            model_search_cache_path: None,
+            model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
+        }
     }
 }

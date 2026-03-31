@@ -80,6 +80,7 @@ pub async fn run_event_loop(
                                             app.search_form.build_options(),
                                             selected_model_id,
                                             selected_version_id,
+                                            false,
                                         ));
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
                                     }
@@ -162,6 +163,16 @@ pub async fn run_event_loop(
 
                         if app.active_tab == MainTab::Settings && app.settings_form.editing {
                             match key.code {
+                                KeyCode::Up => {
+                                    if app.settings_form.focused_field > 0 {
+                                        app.settings_form.focused_field -= 1;
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if app.settings_form.focused_field < 4 {
+                                        app.settings_form.focused_field += 1;
+                                    }
+                                }
                                 KeyCode::Esc => {
                                     app.settings_form.editing = false;
                                 }
@@ -170,6 +181,23 @@ pub async fn run_event_loop(
                                         app.config.api_key = if app.settings_form.input_buffer.is_empty() { None } else { Some(app.settings_form.input_buffer.clone()) };
                                     } else if app.settings_form.focused_field == 1 {
                                         app.config.comfyui_path = if app.settings_form.input_buffer.is_empty() { None } else { Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone())) };
+                                    } else if app.settings_form.focused_field == 3 {
+                                        app.config.model_search_cache_path = if app.settings_form.input_buffer.is_empty() {
+                                            None
+                                        } else {
+                                            Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
+                                        };
+                                    } else if app.settings_form.focused_field == 4 {
+                                        match app.settings_form.input_buffer.trim().parse::<u64>() {
+                                            Ok(value) if value > 0 => {
+                                                app.config.model_search_cache_ttl_hours = value;
+                                            }
+                                            _ => {
+                                                app.last_error = Some("Cache TTL must be a positive integer".into());
+                                                app.status = "Invalid cache TTL value".into();
+                                                continue;
+                                            }
+                                        }
                                     } else {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
@@ -243,8 +271,16 @@ pub async fn run_event_loop(
                                         app.config.api_key.clone().unwrap_or_default()
                                     } else if app.settings_form.focused_field == 1 {
                                         app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
-                                    } else {
+                                    } else if app.settings_form.focused_field == 2 {
                                         app.config.bookmark_file_path.as_ref().map(|path| path.to_string_lossy().to_string()).unwrap_or_default()
+                                    } else if app.settings_form.focused_field == 3 {
+                                        app.config
+                                            .model_search_cache_path
+                                            .as_ref()
+                                            .map(|path| path.to_string_lossy().to_string())
+                                            .unwrap_or_default()
+                                    } else {
+                                        app.config.model_search_cache_ttl_hours.to_string()
                                     };
                                 } else if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.show_model_details = !app.show_model_details;
@@ -266,7 +302,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < 2 { app.settings_form.focused_field += 1; }
+                                    if app.settings_form.focused_field < 4 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -431,6 +467,32 @@ pub async fn run_event_loop(
                                     } else {
                                         "Model details panel disabled".into()
                                     };
+                                }
+                            }
+                            KeyCode::Char('R') => {
+                                if app.active_tab == MainTab::Models {
+                                    if let Some(tx) = &app.tx {
+                                        let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
+                                        let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
+                                        let _ = tx.try_send(WorkerCommand::SearchModels(
+                                            app.search_form.build_options(),
+                                            selected_model_id,
+                                            selected_version_id,
+                                            true,
+                                        ));
+                                        app.status = format!(
+                                            "Refreshing search cache for '{}'",
+                                            app.search_form.query
+                                        );
+                                    }
+                                }
+                            }
+                            KeyCode::Char('x') | KeyCode::Char('X') => {
+                                if app.active_tab == MainTab::Models {
+                                    if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::ClearSearchCache);
+                                        app.status = "Clearing cached search results...".into();
+                                    }
                                 }
                             }
                             KeyCode::Char('/') | KeyCode::Char('s') => {

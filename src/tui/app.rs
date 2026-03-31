@@ -191,7 +191,8 @@ pub struct DownloadHistoryEntry {
 
 pub enum WorkerCommand {
     FetchImages,
-    SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>),
+    SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>, bool),
+    ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
     DownloadModelForImage(u64),
     DownloadModel(u64, u64), // model_id, version_id
@@ -458,11 +459,6 @@ impl App {
         Some(self.download_history.len() - 1 - idx)
     }
 
-    pub fn selected_history(&self) -> Option<&DownloadHistoryEntry> {
-        let idx = self.selected_history_entry_index()?;
-        self.download_history.get(idx)
-    }
-
     pub fn remove_selected_history(&mut self) -> Option<DownloadHistoryEntry> {
         let idx = self.selected_history_entry_index()?;
         let removed = self.download_history.remove(idx);
@@ -694,12 +690,6 @@ impl App {
             .or_else(crate::config::AppConfig::bookmark_path)
     }
 
-    pub fn effective_bookmark_file_path_text(&self) -> String {
-        self.effective_bookmark_file_path()
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Not configured".to_string())
-    }
-
     pub fn set_bookmark_file_path(&mut self, path: PathBuf) {
         self.bookmark_file_path = Some(path.clone());
         self.config.bookmark_file_path = Some(path);
@@ -729,14 +719,6 @@ impl App {
         self.status = "Bookmark search cancelled.".to_string();
     }
 
-    pub fn export_bookmarks_to_file(&mut self) {
-        let Some(path) = self.effective_bookmark_file_path() else {
-            self.status = "No bookmark export path available.".to_string();
-            return;
-        };
-        self.export_bookmarks_to_path(path)
-    }
-
     pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {
         self.set_bookmark_file_path(path.clone());
 
@@ -752,14 +734,6 @@ impl App {
             self.bookmarks.len(),
             path.display()
         );
-    }
-
-    pub fn import_bookmarks_from_file(&mut self) {
-        let Some(path) = self.effective_bookmark_file_path() else {
-            self.status = "No bookmark import path available.".to_string();
-            return;
-        };
-        self.import_bookmarks_from_path(path)
     }
 
     pub fn import_bookmarks_from_path(&mut self, path: PathBuf) {

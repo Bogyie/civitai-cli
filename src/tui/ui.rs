@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3), // Tabs
             Constraint::Min(10),   // Main content
-            Constraint::Length(2), // Footer Status
+            Constraint::Length(3), // Footer Status
         ])
         .split(f.area());
 
@@ -515,6 +515,45 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(
             bookmark_path_val,
             if fm.focused_field == 2 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
+    let model_search_cache_path_val = if fm.editing && fm.focused_field == 3 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config
+            .model_search_cache_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .or_else(|| app.config.search_cache_path().map(|path| path.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "Not Configured".to_string())
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 3 { "> Model Search Cache File: " } else { "  Model Search Cache File: " },
+            Style::default().fg(if fm.focused_field == 3 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            model_search_cache_path_val,
+            if fm.focused_field == 3 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
+    let cache_ttl_val = if fm.editing && fm.focused_field == 4 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config.model_search_cache_ttl_hours.to_string()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 4 { "> Model Search Cache TTL (hours): " } else { "  Model Search Cache TTL (hours): " },
+            Style::default().fg(if fm.focused_field == 4 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            cache_ttl_val,
+            if fm.focused_field == 4 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
         ),
     ]));
 
@@ -1181,7 +1220,7 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Length(2)])
         .split(area);
 
     let left_status = if let Some(error) = app.last_error.as_deref() {
@@ -1194,16 +1233,56 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [/] Search | [b] Bookmark | [Space/Enter] Details",
+        MainTab::Models => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details",
         MainTab::Bookmarks => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
         MainTab::Images => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [d] Download | [m] Status",
         MainTab::Downloads => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [p] Pause/Resume | [c] Cancel",
         MainTab::Settings => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [Enter] Edit | [m] Status",
     };
 
-    let shortcut_line = Line::from(Span::styled(shortcuts, Style::default().fg(Color::DarkGray)));
-    let shortcuts_row = Paragraph::new(shortcut_line).alignment(Alignment::Left);
+    let shortcut_chunks = wrap_hint_lines(shortcuts, rows[1].width.saturating_sub(2) as usize);
+    let shortcut_lines = if shortcut_chunks.is_empty() {
+        vec![Line::from(Span::styled("", Style::default().fg(Color::DarkGray)))]
+    } else {
+        shortcut_chunks
+            .into_iter()
+            .map(|text| Line::from(Span::styled(text, Style::default().fg(Color::DarkGray))))
+            .collect()
+    };
+    let shortcuts_row = Paragraph::new(shortcut_lines)
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: false });
     f.render_widget(shortcuts_row, rows[1]);
+}
+
+fn wrap_hint_lines(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    for token in text.split_inclusive(' ') {
+        let token_len = token.chars().count();
+        if current.is_empty() {
+            current.push_str(token);
+            current_len = token_len;
+        } else if current_len + token_len <= width {
+            current.push_str(token);
+            current_len += token_len;
+        } else {
+            lines.push(current.trim_end().to_string());
+            current = token.to_string();
+            current_len = token_len;
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current.trim_end().to_string());
+    }
+
+    lines
 }
 
 fn rotate_left_chars(src: &str, shift: usize) -> String {
