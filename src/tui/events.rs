@@ -1,10 +1,12 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::fs;
 use std::io::Stdout;
+use std::io::ErrorKind;
 use tokio::sync::mpsc;
 
-use crate::tui::app::{App, AppMessage, AppMode, MainTab, WorkerCommand};
+use crate::tui::app::{App, AppMessage, AppMode, DownloadState, MainTab, WorkerCommand, DownloadHistoryStatus};
 use crate::tui::ui;
 
 pub async fn run_event_loop(
@@ -12,6 +14,14 @@ pub async fn run_event_loop(
     app: &mut App,
     mut rx: mpsc::Receiver<AppMessage>,
 ) -> Result<()> {
+    let send_cover_priority = |app: &mut App| {
+        if let Some((_, version_id, cover_url)) = app.selected_model_version_with_cover_url() {
+            if let Some(tx) = &app.tx {
+                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(version_id, cover_url));
+            }
+        }
+    };
+
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
@@ -63,8 +73,14 @@ pub async fn run_event_loop(
                                 }
                                 KeyCode::Enter => {
                                     app.mode = AppMode::Browsing;
+                                    let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
+                                    let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
                                     if let Some(tx) = &app.tx {
-                                        let _ = tx.try_send(WorkerCommand::SearchModels(app.search_form.build_options()));
+                                        let _ = tx.try_send(WorkerCommand::SearchModels(
+                                            app.search_form.build_options(),
+                                            selected_model_id,
+                                            selected_version_id,
+                                        ));
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
                                     }
                                 }
@@ -109,6 +125,9 @@ pub async fn run_event_loop(
                                     } else {
                                         app.last_error = None;
                                         app.status = "Settings saved to config.json".into();
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
+                                        }
                                     }
                                     app.settings_form.editing = false;
                                 }
@@ -150,26 +169,184 @@ pub async fn run_event_loop(
                                     } else {
                                         app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
                                     };
+                                } else if app.active_tab == MainTab::Models {
+                                    app.show_model_details = !app.show_model_details;
+                                    app.status = if app.show_model_details {
+                                        "Model details panel enabled".into()
+                                    } else {
+                                        "Model details panel disabled".into()
+                                    };
                                 }
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field < 1 { app.settings_form.focused_field += 1; }
+                                } else if app.active_tab == MainTab::Downloads {
+                                    if app.active_downloads.is_empty() {
+                                        app.select_next_history();
+                                    } else {
+                                        app.select_next_download();
+                                    }
                                 } else {
                                     app.select_next();
+                                    if app.active_tab == MainTab::Models {
+                                        send_cover_priority(app);
+                                    }
                                 }
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
                                 if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field > 0 { app.settings_form.focused_field -= 1; }
+                                } else if app.active_tab == MainTab::Downloads {
+                                    if app.active_downloads.is_empty() {
+                                        app.select_previous_history();
+                                    } else {
+                                        app.select_previous_download();
+                                    }
                                 } else {
                                     app.select_previous();
+                                    if app.active_tab == MainTab::Models {
+                                        send_cover_priority(app);
+                                    }
                                 }
                             }
-                            KeyCode::Char('h') | KeyCode::Left => app.select_previous_version(),
-                            KeyCode::Char('l') | KeyCode::Right => app.select_next_version(),
-                            KeyCode::Char('d') => app.request_download(),
+                            KeyCode::Char('h') | KeyCode::Left => {
+                                if app.active_tab == MainTab::Models {
+                                    app.select_previous_version();
+                                    send_cover_priority(app);
+                                }
+                            },
+                            KeyCode::Char('l') | KeyCode::Right => {
+                                if app.active_tab == MainTab::Models {
+                                    app.select_next_version();
+                                    send_cover_priority(app);
+                                }
+                            },
+                            KeyCode::Char('J') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    app.select_next_history();
+                                }
+                            }
+                            KeyCode::Char('K') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    app.select_previous_history();
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    if let Some(removed) = app.remove_selected_history() {
+                                        let was_active = app.active_downloads.contains_key(&removed.model_id);
+                                        if was_active {
+                                            if let Some(tx) = &app.tx {
+                                                let _ = tx.try_send(WorkerCommand::CancelDownload(removed.model_id));
+                                            }
+                                        }
+
+                                        app.status = if was_active {
+                                            format!(
+                                                "Deleted history for {} and cancelled active download",
+                                                removed.model_name
+                                            )
+                                        } else {
+                                            format!("Deleted history for {}", removed.model_name)
+                                        };
+                                    } else {
+                                        app.status = "No download history selected".into();
+                                    }
+                                } else {
+                                    app.request_download();
+                                }
+                            }
+                            KeyCode::Char('D') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    if let Some(removed) = app.remove_selected_history() {
+                                        let was_active = app.active_downloads.contains_key(&removed.model_id);
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::CancelDownload(removed.model_id));
+                                        }
+
+                                        match removed.file_path {
+                                            Some(path) => match fs::remove_file(&path) {
+                                                Ok(()) => {
+                                                    app.last_error = None;
+                                                    app.status = format!(
+                                                        "Deleted history and file for {}",
+                                                        removed.model_name
+                                                    );
+                                                }
+                                                Err(err) => {
+                                                    app.last_error = Some(err.to_string());
+                                                    app.status = if err.kind() == ErrorKind::NotFound {
+                                                        format!("No file found for {}", removed.model_name)
+                                                    } else {
+                                                        format!(
+                                                            "Failed to delete file for {}: {}",
+                                                            removed.model_name,
+                                                            err
+                                                        )
+                                                    };
+                                                }
+                                            },
+                                            None => {
+                                                app.last_error = None;
+                                                app.status = format!("No file path recorded for {}", removed.model_name);
+                                            }
+                                        }
+
+                                        if was_active {
+                                            app.status = format!(
+                                                "{} (and cancelled active download)",
+                                                app.status
+                                            );
+                                        }
+                                    } else {
+                                        app.status = "No download history selected".into();
+                                    }
+                                } else {
+                                    app.request_download();
+                                }
+                            }
+                            KeyCode::Char('p') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    if let Some(download_id) = app.selected_download_id() {
+                                        if let Some(tracker) = app.active_downloads.get(&download_id) {
+                                            if tracker.state == DownloadState::Running {
+                                                if let Some(tx) = &app.tx {
+                                                    let _ = tx.try_send(WorkerCommand::PauseDownload(download_id));
+                                                }
+                                            } else {
+                                                if let Some(tx) = &app.tx {
+                                                    let _ = tx.try_send(WorkerCommand::ResumeDownload(download_id));
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    app.request_download();
+                                }
+                            }
+                            KeyCode::Char('c') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    if let Some(download_id) = app.selected_download_id() {
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::CancelDownload(download_id));
+                                        }
+                                    }
+                                } else {
+                                    app.request_download();
+                                }
+                            }
                             KeyCode::Char('m') => { app.show_status_modal = true; }
+                            KeyCode::Char(' ') => {
+                                if app.active_tab == MainTab::Models {
+                                    app.show_model_details = !app.show_model_details;
+                                    app.status = if app.show_model_details {
+                                        "Model details panel enabled".into()
+                                    } else {
+                                        "Model details panel disabled".into()
+                                    };
+                                }
+                            }
                             KeyCode::Char('/') | KeyCode::Char('s') => {
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
@@ -193,24 +370,127 @@ pub async fn run_event_loop(
                      AppMessage::ImageDecoded(id, protocol) => {
                          app.image_cache.insert(id, protocol);
                      }
-                     AppMessage::ModelCoverDecoded(id, protocol) => {
-                         app.model_image_cache.insert(id, protocol);
+                     AppMessage::ModelCoverDecoded(version_id, protocol) => {
+                         app.model_version_image_cache.insert(version_id, protocol);
+                         app.model_version_image_failed.remove(&version_id);
+                     }
+                     AppMessage::ModelCoverLoadFailed(version_id) => {
+                         app.model_version_image_failed.insert(version_id);
                      }
                      AppMessage::ModelsSearched(results) => {
                          app.models = results;
                          app.model_list_state.select(Some(0));
+                         send_cover_priority(app);
                          app.status = format!("Found {} models", app.models.len());
                      }
                      AppMessage::StatusUpdate(status) => {
                          app.status = status;
                      }
-                     AppMessage::DownloadProgress(model_id, filename, progress) => {
-                         if progress >= 100.0 {
-                             app.active_downloads.remove(&model_id);
-                             app.status = format!("Finished downloading {}", filename);
-                         } else {
-                             app.active_downloads.insert(model_id, crate::tui::app::DownloadTracker { filename, progress });
+                     AppMessage::DownloadProgress(model_id, filename, progress, downloaded_bytes, total_bytes) => {
+                         if let Some(existing) = app.active_downloads.get_mut(&model_id) {
+                             existing.filename = filename;
+                             existing.progress = progress;
+                             existing.downloaded_bytes = downloaded_bytes;
+                             existing.total_bytes = total_bytes;
                          }
+                     }
+                     AppMessage::DownloadStarted(
+                        model_id,
+                        filename,
+                        version_id,
+                        model_name,
+                        total_bytes,
+                        file_path,
+                    ) => {
+                         if !app.active_download_order.contains(&model_id) {
+                             app.active_download_order.push(model_id);
+                         }
+
+                         app.active_downloads.insert(
+                             model_id,
+                             crate::tui::app::DownloadTracker {
+                                 filename,
+                                 progress: 0.0,
+                                 downloaded_bytes: 0,
+                                 total_bytes,
+                                 file_path,
+                                 model_name,
+                                 version_id,
+                                 state: DownloadState::Running,
+                            },
+                        );
+                         app.status = format!("Download started for model {} ({})", model_id, version_id);
+                     }
+                     AppMessage::DownloadPaused(model_id) => {
+                         if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+                             tracker.state = DownloadState::Paused;
+                             app.status = format!("Download paused: {}", tracker.filename);
+                         }
+                     }
+                     AppMessage::DownloadResumed(model_id) => {
+                         if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+                             tracker.state = DownloadState::Running;
+                             app.status = format!("Download resumed: {}", tracker.filename);
+                         }
+                     }
+                     AppMessage::DownloadCompleted(model_id) => {
+                         app.last_error = None;
+                         if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                             app.push_download_history(
+                                 model_id,
+                                     tracker.version_id,
+                                     tracker.filename,
+                                     tracker.model_name,
+                                     tracker.file_path,
+                                     tracker.downloaded_bytes,
+                                     tracker.total_bytes,
+                                     DownloadHistoryStatus::Completed,
+                                     tracker.progress,
+                                 );
+                         }
+                         app.active_download_order.retain(|id| *id != model_id);
+                         app.clamp_selected_download_index();
+                         app.clamp_selected_history_index();
+                         app.status = format!("Download complete: {}", model_id);
+                     }
+                     AppMessage::DownloadFailed(model_id, reason) => {
+                            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                            app.push_download_history(
+                                 model_id,
+                                 tracker.version_id,
+                                 tracker.filename,
+                                 tracker.model_name,
+                                 tracker.file_path,
+                                 tracker.downloaded_bytes,
+                                 tracker.total_bytes,
+                                 DownloadHistoryStatus::Failed(reason.clone()),
+                                 tracker.progress,
+                             );
+                         }
+                         app.active_download_order.retain(|id| *id != model_id);
+                         app.clamp_selected_download_index();
+                         app.clamp_selected_history_index();
+                         app.last_error = Some(reason.clone());
+                         app.status = format!("Download failed: {}", reason);
+                     }
+                    AppMessage::DownloadCancelled(model_id) => {
+                         if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                             app.push_download_history(
+                                 model_id,
+                                 tracker.version_id,
+                                 tracker.filename,
+                                 tracker.model_name,
+                                 tracker.file_path,
+                                 tracker.downloaded_bytes,
+                                 tracker.total_bytes,
+                                 DownloadHistoryStatus::Cancelled,
+                                 tracker.progress,
+                             );
+                         }
+                         app.active_download_order.retain(|id| *id != model_id);
+                         app.clamp_selected_download_index();
+                         app.clamp_selected_history_index();
+                         app.status = format!("Download cancelled: {}", model_id);
                      }
                  }
              }

@@ -36,6 +36,8 @@ pub struct ModelVersion {
     pub model_id: Option<u64>,
     pub name: String,
     pub base_model: String, // e.g., "SD 1.5", "SDXL"
+    #[serde(default)]
+    pub description: Option<String>,
     pub stats: Option<VersionStats>,
     #[serde(default)]
     pub images: Vec<ModelImage>,
