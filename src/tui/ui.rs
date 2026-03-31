@@ -723,25 +723,25 @@ fn draw_model_list(
         .min(models.len().saturating_sub(1));
     let show_metadata = !show_model_details;
     let mut rows_cache: Vec<(String, String, String, bool, bool)> = Vec::with_capacity(models.len());
-    let mut down_width = "Down".len();
-    let mut rate_width = "Rate".len();
+    let mut down_width = "⬇".chars().count();
+    let mut thumbs_width = "👍".chars().count();
 
     for model in models.iter() {
         let downloads = model.stats.as_ref().map(|s| s.download_count).unwrap_or(0);
-        let rating = normalized_model_rating(model.stats.as_ref());
+        let thumbs_up = model.stats.as_ref().map(|s| s.thumbs_up_count).unwrap_or(0);
         let down_text = if show_metadata {
-            format!("D {}", compact_number(downloads))
+            format!("⬇ {}", compact_number(downloads))
         } else {
             String::new()
         };
         let rate_text = if show_metadata {
-            format!("R {:.1}", rating)
+            format!("👍 {}", compact_number(thumbs_up))
         } else {
             String::new()
         };
 
         down_width = down_width.max(down_text.chars().count());
-        rate_width = rate_width.max(rate_text.chars().count());
+        thumbs_width = thumbs_width.max(rate_text.chars().count());
         let is_bookmarked = bookmarked_ids.contains(&model.id);
         rows_cache.push((down_text, rate_text, model.name.clone(), model.nsfw, is_bookmarked));
     }
@@ -749,19 +749,19 @@ fn draw_model_list(
     if down_width < 6 {
         down_width = 6;
     }
-    if rate_width < 6 {
-        rate_width = 6;
+    if thumbs_width < 3 {
+        thumbs_width = 3;
     }
 
     let inner_width = area.width.saturating_sub(2) as usize;
-    if inner_width <= down_width.saturating_add(rate_width) + 2 {
+    if inner_width <= down_width.saturating_add(thumbs_width) + 2 {
         down_width = down_width.min(inner_width / 2).max(4);
-        rate_width = rate_width.min(inner_width / 2).max(4);
+        thumbs_width = thumbs_width.min(inner_width / 2).max(3);
     }
 
     let name_width = if show_metadata {
         inner_width
-            .saturating_sub(down_width.saturating_add(rate_width))
+            .saturating_sub(down_width.saturating_add(thumbs_width))
             .saturating_sub(4)
             .max(1)
     } else {
@@ -774,7 +774,7 @@ fn draw_model_list(
     {
         let is_selected = idx == selected_idx;
         let down_text = compact_cell_text(down_text, down_width);
-        let rate_text = compact_cell_text(rate_text, rate_width);
+        let rate_text = compact_cell_text(rate_text, thumbs_width);
         let mut display_name = if is_bookmarked {
             format!("★ {}", name)
         } else {
@@ -810,16 +810,16 @@ fn draw_model_list(
                     ),
                     Style::default().fg(Color::White),
                 ),
-                Span::styled(" ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     format!(
                         "{:>width$}",
                         rate_text,
-                        width = rate_width
+                        width = thumbs_width
                     ),
                     Style::default().fg(Color::White),
                 ),
-                Span::styled(" ", Style::default().fg(Color::DarkGray)),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled(compact_cell_text(display_name.clone(), name_width), style),
             ];
             let item = ListItem::new(Line::from(spans));
@@ -952,6 +952,7 @@ fn draw_model_sidebar(
         let stats = selected_version.and_then(|version| version.stats.as_ref());
         let down_val = compact_number(stats.map(|s| s.download_count).unwrap_or(0));
         let rate_val = normalized_version_rating(stats);
+        let thumbs_up_val = compact_number(stats.map(|s| s.thumbs_up_count).unwrap_or(0));
         let active_file = selected_version
             .and_then(|version| version.files.iter().find(|f| f.primary).or_else(|| version.files.first()));
         let format_value = active_file
@@ -968,14 +969,15 @@ fn draw_model_sidebar(
         let detail_row = vec![
             down_val,
             format!("{:.1}", rate_val),
+            thumbs_up_val,
             model.r#type.clone(),
             format_value.to_string(),
             base_model,
             file_size,
         ];
-        let headers = ["Down", "Rate", "Type", "Format", "Base Model", "File Size"];
-        let mut widths = [5usize; 6];
-        for i in 0..6 {
+        let headers = ["Down", "Rate", "Thumbs Up", "Type", "Format", "Base Model", "File Size"];
+        let mut widths = [5usize; 7];
+        for i in 0..7 {
             widths[i] = widths[i]
                 .max(detail_row[i].chars().count())
                 .max(headers[i].chars().count())
@@ -985,7 +987,7 @@ fn draw_model_sidebar(
         let total_with_separators = widths.iter().sum::<usize>() + widths.len();
         let max_width = split[2].width as usize;
         if total_with_separators > max_width {
-            for i in (2..6).rev() {
+            for i in (3..7).rev() {
                 while widths.iter().sum::<usize>() + widths.len() > max_width && widths[i] > 5 {
                     widths[i] -= 1;
                 }
@@ -1034,6 +1036,7 @@ fn draw_model_sidebar(
                 Constraint::Length(widths[3] as u16),
                 Constraint::Length(widths[4] as u16),
                 Constraint::Length(widths[5] as u16),
+                Constraint::Length(widths[6] as u16),
             ],
         )
         .header(Row::new(header_cells).style(Style::default().add_modifier(Modifier::BOLD)))
@@ -1449,25 +1452,6 @@ fn compact_number(v: u64) -> String {
 
     let rounded = format!("{:>5.1}", value);
     format!("{}{}", rounded, UNITS[idx])
-}
-
-fn normalized_model_rating(stats: Option<&crate::api::ModelStats>) -> f64 {
-    let Some(stats) = stats else {
-        return 0.0;
-    };
-
-    if stats.rating.is_finite() && stats.rating > 0.0 {
-        return stats.rating;
-    }
-
-    let thumbs_up = stats.thumbs_up_count as f64;
-    let thumbs_down = stats.thumbs_down_count as f64;
-    let total = thumbs_up + thumbs_down;
-    if total > 0.0 {
-        (thumbs_up / total) * 5.0
-    } else {
-        0.0
-    }
 }
 
 fn normalized_version_rating(stats: Option<&crate::api::VersionStats>) -> f64 {
