@@ -58,7 +58,12 @@ impl DownloadManager {
         }
     }
 
-    pub async fn download_version(&self, model: &Model, version: &ModelVersion) -> Result<PathBuf> {
+    pub async fn download_version(
+        &self, 
+        model: &Model, 
+        version: &ModelVersion,
+        tx: Option<tokio::sync::mpsc::Sender<crate::tui::app::AppMessage>>,
+    ) -> Result<PathBuf> {
         let file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first())
             .context("No files found across this model version")?;
 
@@ -82,14 +87,41 @@ impl DownloadManager {
         }
 
         let res = req.send().await?.error_for_status()?;
+        let total_size = res.content_length().unwrap_or(0) as f64;
 
         // Stream to file
         let mut file_obj = tokio::fs::File::create(&target_path).await?;
         let mut stream = res.bytes_stream();
+        let mut downloaded: f64 = 0.0;
+        let mut last_percent = -1.0;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             file_obj.write_all(&chunk).await?;
+            downloaded += chunk.len() as f64;
+
+            if let Some(ref chan) = tx {
+                if total_size > 0.0 {
+                    let percent = (downloaded / total_size) * 100.0;
+                    // Only send update if progressed more than 1% to prevent channel flooding
+                    if percent - last_percent >= 1.0 {
+                        last_percent = percent;
+                        let _ = chan.try_send(crate::tui::app::AppMessage::DownloadProgress(
+                            model.id,
+                            smart_filename.clone(),
+                            percent,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(ref chan) = tx {
+            let _ = chan.try_send(crate::tui::app::AppMessage::DownloadProgress(
+                model.id,
+                smart_filename.clone(),
+                100.0,
+            ));
         }
 
         Ok(target_path)

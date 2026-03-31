@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
                 
                 // For simplicity, download the latest or primary version
                 if let Some(version) = model.model_versions.first() {
-                    let path = manager.download_version(&model, version).await?;
+                    let path = manager.download_version(&model, &version, None).await?;
                     println!("Successfully downloaded to {:?}", path);
                 } else {
                     println!("No downloadable versions found for model {}", model_id);
@@ -48,9 +48,13 @@ async fn main() -> Result<()> {
             } else if let Some(model_hash) = hash {
                 println!("Fetching version by hash {}...", model_hash);
                 let version = client.get_model_version_by_hash(model_hash).await?;
-                let model = client.get_model(version.model_id).await?;
-                let path = manager.download_version(&model, &version).await?;
-                println!("Successfully downloaded to {:?}", path);
+                if let Some(mid) = version.model_id {
+                    let model = client.get_model(mid).await?;
+                    let path = manager.download_version(&model, &version, None).await?;
+                    println!("Successfully downloaded to {:?}", path);
+                } else {
+                    println!("Could not resolve the parent model ID for this version.");
+                }
             } else {
                 println!("Please provide an --id or --hash to download.");
             }

@@ -1,7 +1,16 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, IntoUrl};
 
-use super::types::{Model, ModelVersion, ImageResponse};
+use super::types::{Model, ModelVersion, ImageResponse, PaginatedResponse};
+
+#[derive(Clone, Default, Debug)]
+pub struct SearchOptions {
+    pub query: String,
+    pub limit: u32,
+    pub sort: Option<String>,
+    pub types: Option<String>,
+    pub base_models: Option<String>,
+}
 
 pub struct CivitaiClient {
     client: Client,
@@ -25,6 +34,25 @@ impl CivitaiClient {
 
     pub async fn get_model_version_by_hash(&self, hash: &str) -> Result<ModelVersion> {
         let url = format!("https://civitai.com/api/v1/model-versions/by-hash/{}", hash);
+        self.fetch(&url).await
+    }
+
+    pub async fn search_models(&self, opts: SearchOptions) -> Result<PaginatedResponse<Model>> {
+        let mut url = format!("https://civitai.com/api/v1/models?limit={}", opts.limit);
+
+        if !opts.query.is_empty() {
+            url.push_str(&format!("&query={}", opts.query.replace(" ", "%20")));
+        }
+        if let Some(s) = &opts.sort {
+            if s != "All" { url.push_str(&format!("&sort={}", s.replace(" ", "%20"))); }
+        }
+        if let Some(t) = &opts.types {
+            if t != "All" { url.push_str(&format!("&types={}", t.replace(" ", "%20"))); }
+        }
+        if let Some(b) = &opts.base_models {
+            if b != "All" { url.push_str(&format!("&baseModels={}", b.replace(" ", "%20"))); }
+        }
+
         self.fetch(&url).await
     }
 

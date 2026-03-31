@@ -10,6 +10,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 crossterm = "0.29.0"
 directories = "6.0.0"
 futures-util = "0.3.32"
+html2text = "0.16.7"
 image = "0.25.10"
 ratatui = "0.30.0"
 ratatui-image = { version = "10.0.6", default-features = false, features = ["crossterm"] }

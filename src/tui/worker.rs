@@ -58,6 +58,38 @@ pub async fn spawn_worker(
                         }
                     }
                 }
+                WorkerCommand::SearchModels(opts) => {
+                    let tx_msg_clone = tx_msg.clone();
+                    let civitai_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
+                    let req_client_clone = req_client.clone();
+                    let mut picker_clone = picker.clone();
+
+                    tokio::spawn(async move {
+                        let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Fetching models matching '{}'...", opts.query)));
+                        match civitai_clone.search_models(opts).await {
+                            Ok(res) => {
+                                let _ = tx_msg_clone.try_send(AppMessage::ModelsSearched(res.items.clone()));
+                                
+                                for model in res.items {
+                                    if let Some(version) = model.model_versions.first() {
+                                        if let Some(image) = version.images.first() {
+                                            if let Ok(bytes) = fetch_image_bytes(&req_client_clone, &image.url).await {
+                                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                                    let resized = img.resize(600, 600, image::imageops::FilterType::Triangle);
+                                                    let protocol = picker_clone.new_resize_protocol(resized.into());
+                                                    let _ = tx_msg_clone.try_send(AppMessage::ModelCoverDecoded(model.id, protocol));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Search failed: {}", e)));
+                            }
+                        }
+                    });
+                }
                 WorkerCommand::DownloadModelForImage(image_id) => {
                     // Start downloading logic in background... (mocked for now, need model lookup)
                     let tx_msg_clone = tx_msg.clone();
@@ -74,6 +106,26 @@ pub async fn spawn_worker(
                         
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                         let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate("Download finished (Placeholder)!".into()));
+                    });
+                }
+                WorkerCommand::DownloadModel(model_id) => {
+                    let tx_msg_clone = tx_msg.clone();
+                    let cv_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
+                    let dl_clone = crate::download::manager::DownloadManager::new(downloader_config.clone().into()).unwrap();
+                    
+                    tokio::spawn(async move {
+                        let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Fetching Model {} metadata for download...", model_id)));
+                        if let Ok(model) = cv_clone.get_model(model_id).await {
+                            if let Some(version) = model.model_versions.first() {
+                                let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Starting download stream for {}", model_id)));
+                                let res = dl_clone.download_version(&model, version, Some(tx_msg_clone.clone())).await;
+                                if let Err(e) = res {
+                                    let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Download {} failed: {:?}", model_id, e)));
+                                }
+                            }
+                        } else {
+                            let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Failed to retrieve Model {} metadata", model_id)));
+                        }
                     });
                 }
                 WorkerCommand::Quit => break,
