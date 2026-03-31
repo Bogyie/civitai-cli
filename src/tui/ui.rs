@@ -45,26 +45,32 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         " Models (1) ",
         " Bookmarks (2) ",
         " Image Feed (3) ",
-        " Downloads (4) ",
-        " Settings (5) ",
+        " Image Bookmarks (4) ",
+        " Downloads (5) ",
+        " Settings (6) ",
     ];
     let active_idx = match app.active_tab {
         MainTab::Models => 0,
         MainTab::Bookmarks => 1,
         MainTab::Images => 2,
-        MainTab::Downloads => 3,
-        MainTab::Settings => 4,
+        MainTab::ImageBookmarks => 3,
+        MainTab::Downloads => 4,
+        MainTab::Settings => 5,
     };
     let enable_name_rolling = !matches!(
         app.mode,
-        AppMode::SearchForm | AppMode::SearchImages | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt
+        AppMode::SearchForm
+            | AppMode::SearchImages
+            | AppMode::SearchBookmarks
+            | AppMode::SearchImageBookmarks
+            | AppMode::BookmarkPathPrompt
     );
     
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Civitai CLI | [1-5] Switch tab | Tab: cycle tabs "),
+                .title(" Civitai CLI | [1-6] Switch tab | Tab: cycle tabs "),
         )
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
         .select(active_idx)
@@ -174,6 +180,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             draw_image_sidebar(f, app, main_chunks[1]);
             if app.mode == AppMode::SearchImages {
                 draw_image_search_popup(f, app);
+            }
+        }
+        MainTab::ImageBookmarks => {
+            let image_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(0)])
+                .split(chunks[1]);
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(image_chunks[1]);
+            draw_image_bookmark_search_summary(f, app, image_chunks[0]);
+            draw_image_panel(f, app, main_chunks[0]);
+            draw_image_sidebar(f, app, main_chunks[1]);
+            if app.mode == AppMode::SearchImageBookmarks {
+                draw_image_bookmark_search_popup(f, app);
             }
         }
         MainTab::Downloads => {
@@ -679,13 +701,23 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Image View ");
+    let items = app.active_image_items();
+    let selected_index = app.active_image_selected_index();
 
-    if app.images.is_empty() {
-        f.render_widget(Paragraph::new("Loading feed...").block(block), area);
+    if items.is_empty() {
+        let empty_message = if app.active_tab == MainTab::ImageBookmarks {
+            "No bookmarked images."
+        } else {
+            "Loading feed..."
+        };
+        f.render_widget(Paragraph::new(empty_message).block(block), area);
         return;
     }
 
-    let img = &app.images[app.selected_index];
+    let Some(img) = items.get(selected_index) else {
+        f.render_widget(Paragraph::new("No image selected").block(block), area);
+        return;
+    };
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
@@ -693,7 +725,7 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
         let image_widget = StatefulImage::new();
         f.render_stateful_widget(image_widget, inner_area, protocol);
     } else {
-        let text = format!("Decoding media {}/{}...", app.selected_index + 1, app.images.len());
+        let text = format!("Decoding media {}/{}...", selected_index + 1, items.len());
         f.render_widget(Paragraph::new(text), inner_area);
     }
 }
@@ -701,7 +733,7 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Metadata ");
 
-    if let Some(img) = app.images.get(app.selected_index) {
+    if let Some(img) = app.selected_image_in_active_view() {
         let dimensions = match (img.width, img.height) {
             (Some(width), Some(height)) => format!("{} x {}", width, height),
             _ => "<none>".to_string(),
@@ -850,6 +882,25 @@ fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
         "🔍 Bookmarks Query: \"{}\" | Total: {}",
         query,
         app.visible_bookmarks().len()
+    );
+
+    let para = Paragraph::new(summary)
+        .alignment(Alignment::Left)
+        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .wrap(Wrap { trim: true });
+    f.render_widget(para, area);
+}
+
+fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
+    let query = if app.image_bookmark_query.is_empty() {
+        "<all>"
+    } else {
+        &app.image_bookmark_query
+    };
+    let summary = format!(
+        "🔍 Image Bookmarks Query: \"{}\" | Total: {}",
+        query,
+        app.visible_image_bookmarks().len()
     );
 
     let para = Paragraph::new(summary)
@@ -1402,6 +1453,29 @@ fn draw_bookmark_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Image Bookmark Search ");
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}█", app.image_bookmark_query_draft)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Enter] Apply | [Esc] Cancel | [Type] Query",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let area = centered_rect(40, 25, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
 fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1598,7 +1672,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let shortcuts = match app.active_tab {
         MainTab::Models => "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details",
         MainTab::Bookmarks => "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
-        MainTab::Images => "[/] Search | [d] Download | [m] Status",
+        MainTab::Images => "[/] Search | [b] Bookmark | [d] Download | [m] Status",
+        MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
         MainTab::Downloads => "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel",
         MainTab::Settings => "[Enter] Edit | [m] Status",
     };

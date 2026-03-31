@@ -93,7 +93,11 @@ pub async fn run_event_loop(
 
     loop {
         let poll_timeout_ms = match app.mode {
-            AppMode::SearchForm | AppMode::SearchImages | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt => 200,
+            AppMode::SearchForm
+            | AppMode::SearchImages
+            | AppMode::SearchBookmarks
+            | AppMode::SearchImageBookmarks
+            | AppMode::BookmarkPathPrompt => 200,
             _ => 50,
         };
 
@@ -320,6 +324,25 @@ pub async fn run_event_loop(
                                 }
                                 KeyCode::Backspace => {
                                     app.bookmark_query_draft.pop();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.mode == AppMode::SearchImageBookmarks {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.cancel_image_bookmark_search();
+                                }
+                                KeyCode::Enter => {
+                                    app.apply_image_bookmark_query();
+                                }
+                                KeyCode::Char(c) => {
+                                    app.image_bookmark_query_draft.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.image_bookmark_query_draft.pop();
                                 }
                                 _ => {}
                             }
@@ -582,7 +605,8 @@ pub async fn run_event_loop(
                                 let next_tab = match app.active_tab {
                                     MainTab::Models => MainTab::Bookmarks,
                                     MainTab::Bookmarks => MainTab::Images,
-                                    MainTab::Images => MainTab::Downloads,
+                                    MainTab::Images => MainTab::ImageBookmarks,
+                                    MainTab::ImageBookmarks => MainTab::Downloads,
                                     MainTab::Downloads => MainTab::Settings,
                                     MainTab::Settings => MainTab::Models,
                                 };
@@ -593,6 +617,8 @@ pub async fn run_event_loop(
                                 }
                                 if app.active_tab == MainTab::Bookmarks {
                                     app.clamp_bookmark_selection();
+                                } else if app.active_tab == MainTab::ImageBookmarks {
+                                    app.clamp_image_bookmark_selection();
                                 }
                             }
                             KeyCode::Char('1') => {
@@ -610,9 +636,13 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('4') => {
-                                app.active_tab = MainTab::Downloads;
+                                app.active_tab = MainTab::ImageBookmarks;
+                                app.clamp_image_bookmark_selection();
                             }
                             KeyCode::Char('5') => {
+                                app.active_tab = MainTab::Downloads;
+                            }
+                            KeyCode::Char('6') => {
                                 app.active_tab = MainTab::Settings;
                             }
                             KeyCode::Char('q') | KeyCode::Esc if !is_ctrl_c_exit => {
@@ -681,6 +711,10 @@ pub async fn run_event_loop(
                                     }
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.request_bookmark_remove_selected();
+                                } else if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
+                                    if let Some(image) = app.selected_image_in_active_view().cloned() {
+                                        app.toggle_bookmark_for_selected_image(&image);
+                                    }
                                 }
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
@@ -979,6 +1013,8 @@ pub async fn run_event_loop(
                                 } else if app.active_tab == MainTab::Images {
                                     app.mode = AppMode::SearchImages;
                                     app.status = "Configure image search options. Press Enter to submit, Esc to cancel.".into();
+                                } else if app.active_tab == MainTab::ImageBookmarks {
+                                    app.begin_image_bookmark_search();
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.begin_bookmark_search();
                                 }

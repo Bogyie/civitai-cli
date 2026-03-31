@@ -14,6 +14,7 @@ pub enum MainTab {
     Models,
     Bookmarks,
     Images,
+    ImageBookmarks,
     Downloads,
     Settings,
 }
@@ -24,6 +25,7 @@ pub enum AppMode {
     SearchForm,
     SearchImages,
     SearchBookmarks,
+    SearchImageBookmarks,
     BookmarkPathPrompt,
 }
 
@@ -327,14 +329,19 @@ pub struct App {
     pub model_search_loading_more: bool,
     pub model_search_next_page: Option<String>,
     pub bookmarks: Vec<Model>,
+    pub image_bookmarks: Vec<ImageItem>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
     pub bookmark_list_state: ListState,
+    pub image_bookmark_list_state: ListState,
     pub bookmark_query: String,
     pub bookmark_query_draft: String,
+    pub image_bookmark_query: String,
+    pub image_bookmark_query_draft: String,
     pub show_bookmark_confirm_modal: bool,
     pub pending_bookmark_remove_id: Option<u64>,
     pub bookmark_file_path: Option<PathBuf>,
+    pub image_bookmark_file_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
     pub interrupted_download_file_path: Option<PathBuf>,
     pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
@@ -344,6 +351,7 @@ pub struct App {
 
     pub images: Vec<ImageItem>,
     pub selected_index: usize,
+    pub selected_image_bookmark_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
@@ -373,6 +381,11 @@ impl App {
             .clone()
             .or_else(crate::config::AppConfig::bookmark_path);
         let bookmarks = load_bookmarks(bookmark_file_path.as_deref());
+        let image_bookmark_file_path = config
+            .image_bookmark_file_path
+            .clone()
+            .or_else(crate::config::AppConfig::image_bookmark_path);
+        let image_bookmarks = load_image_bookmarks(image_bookmark_file_path.as_deref());
         let download_history_file_path = config
             .download_history_file_path
             .clone()
@@ -403,6 +416,10 @@ impl App {
         if !bookmarks.is_empty() {
             bookmark_list_state.select(Some(0));
         }
+        let mut image_bookmark_list_state = ListState::default();
+        if !image_bookmarks.is_empty() {
+            image_bookmark_list_state.select(Some(0));
+        }
         let mut model_list_state = ListState::default();
         model_list_state.select(Some(0));
 
@@ -418,20 +435,26 @@ impl App {
             model_search_loading_more: false,
             model_search_next_page: None,
             bookmarks,
+            image_bookmarks,
             show_model_details: false,
             model_list_state,
             bookmark_list_state,
+            image_bookmark_list_state,
             bookmark_query: String::new(),
             bookmark_query_draft: String::new(),
+            image_bookmark_query: String::new(),
+            image_bookmark_query_draft: String::new(),
             show_bookmark_confirm_modal: false,
             pending_bookmark_remove_id: None,
             bookmark_file_path,
+            image_bookmark_file_path,
             download_history_file_path,
             selected_version_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
             selected_index: 0,
+            selected_image_bookmark_index: 0,
             image_cache: HashMap::new(),
             image_feed_loaded: false,
             image_feed_loading: false,
@@ -497,6 +520,74 @@ impl App {
         self.image_feed_next_page.clone()
     }
 
+    pub fn visible_image_bookmarks(&self) -> Vec<ImageItem> {
+        let query = self.image_bookmark_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            self.image_bookmarks.clone()
+        } else {
+            self.image_bookmarks
+                .iter()
+                .filter(|image| {
+                    let username = image.username.as_deref().unwrap_or_default().to_ascii_lowercase();
+                    let base_model = image.base_model.as_deref().unwrap_or_default().to_ascii_lowercase();
+                    image.id.to_string().contains(&query)
+                        || username.contains(&query)
+                        || base_model.contains(&query)
+                        || image
+                            .meta
+                            .as_ref()
+                            .map(|meta| meta.to_string().to_ascii_lowercase().contains(&query))
+                            .unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        }
+    }
+
+    pub fn clamp_image_bookmark_selection(&mut self) {
+        let visible = self.visible_image_bookmarks();
+        if visible.is_empty() {
+            self.selected_image_bookmark_index = 0;
+            self.image_bookmark_list_state.select(None);
+            return;
+        }
+
+        if self.selected_image_bookmark_index >= visible.len() {
+            self.selected_image_bookmark_index = visible.len() - 1;
+        }
+        self.image_bookmark_list_state
+            .select(Some(self.selected_image_bookmark_index));
+    }
+
+    pub fn selected_image_in_active_view(&self) -> Option<&ImageItem> {
+        match self.active_tab {
+            MainTab::Images => self.images.get(self.selected_index),
+            MainTab::ImageBookmarks => {
+                let visible = self.visible_image_bookmarks();
+                let selected = self.selected_image_bookmark_index;
+                let id = visible.get(selected)?.id;
+                self.image_bookmarks.iter().find(|image| image.id == id)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn active_image_items(&self) -> Vec<ImageItem> {
+        match self.active_tab {
+            MainTab::Images => self.images.clone(),
+            MainTab::ImageBookmarks => self.visible_image_bookmarks(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn active_image_selected_index(&self) -> usize {
+        match self.active_tab {
+            MainTab::Images => self.selected_index,
+            MainTab::ImageBookmarks => self.selected_image_bookmark_index,
+            _ => 0,
+        }
+    }
+
     pub fn set_image_feed_results(
         &mut self,
         mut images: Vec<ImageItem>,
@@ -547,6 +638,13 @@ impl App {
             if !self.images.is_empty() && self.selected_index < self.images.len() - 1 {
                 self.selected_index += 1;
             }
+        } else if self.active_tab == MainTab::ImageBookmarks {
+            let visible = self.visible_image_bookmarks();
+            if !visible.is_empty() && self.selected_image_bookmark_index < visible.len() - 1 {
+                self.selected_image_bookmark_index += 1;
+                self.image_bookmark_list_state
+                    .select(Some(self.selected_image_bookmark_index));
+            }
         } else if self.active_tab == MainTab::Models {
             if !self.models.is_empty() {
                 let current = self.model_list_state.selected().unwrap_or(0);
@@ -570,6 +668,12 @@ impl App {
         if self.active_tab == MainTab::Images {
             if self.selected_index > 0 {
                 self.selected_index -= 1;
+            }
+        } else if self.active_tab == MainTab::ImageBookmarks {
+            if self.selected_image_bookmark_index > 0 {
+                self.selected_image_bookmark_index -= 1;
+                self.image_bookmark_list_state
+                    .select(Some(self.selected_image_bookmark_index));
             }
         } else if self.active_tab == MainTab::Models {
             let current = self.model_list_state.selected().unwrap_or(0);
@@ -830,6 +934,51 @@ impl App {
             }
             _ => None,
         }
+    }
+
+    pub fn is_image_bookmarked(&self, image_id: u64) -> bool {
+        self.image_bookmarks.iter().any(|image| image.id == image_id)
+    }
+
+    pub fn toggle_bookmark_for_selected_image(&mut self, image: &ImageItem) {
+        if self.is_image_bookmarked(image.id) {
+            self.image_bookmarks.retain(|item| item.id != image.id);
+            self.status = format!("Removed image bookmark: {}", image.id);
+            if self.active_tab == MainTab::ImageBookmarks {
+                self.clamp_image_bookmark_selection();
+            }
+        } else {
+            self.image_bookmarks.push(image.clone());
+            self.status = format!("Added image bookmark: {}", image.id);
+        }
+        self.deduplicate_image_bookmarks();
+        self.persist_image_bookmarks();
+    }
+
+    pub fn begin_image_bookmark_search(&mut self) {
+        self.image_bookmark_query_draft = self.image_bookmark_query.clone();
+        self.mode = AppMode::SearchImageBookmarks;
+        self.status = "Search image bookmarks. Enter apply, Esc cancel".to_string();
+    }
+
+    pub fn apply_image_bookmark_query(&mut self) {
+        self.image_bookmark_query = self.image_bookmark_query_draft.clone();
+        self.mode = AppMode::Browsing;
+        self.clamp_image_bookmark_selection();
+        self.status = format!(
+            "Image bookmark query applied: {}",
+            if self.image_bookmark_query.is_empty() {
+                "<all>".to_string()
+            } else {
+                self.image_bookmark_query.clone()
+            }
+        );
+    }
+
+    pub fn cancel_image_bookmark_search(&mut self) {
+        self.image_bookmark_query_draft = self.image_bookmark_query.clone();
+        self.mode = AppMode::Browsing;
+        self.status = "Image bookmark search cancelled.".to_string();
     }
 
     pub fn is_model_bookmarked(&self, model_id: u64) -> bool {
@@ -1146,9 +1295,24 @@ impl App {
         self.bookmarks.retain(|model| seen.insert(model.id));
     }
 
+    fn deduplicate_image_bookmarks(&mut self) {
+        let mut seen = HashSet::new();
+        self.image_bookmarks.retain(|image| seen.insert(image.id));
+    }
+
     pub fn persist_bookmarks(&mut self) {
         if let Some(path) = &self.bookmark_file_path {
             if let Err(err) = save_bookmarks_to_file(path, &self.bookmarks) {
+                self.last_error = Some(err.to_string());
+            } else {
+                self.last_error = None;
+            }
+        }
+    }
+
+    pub fn persist_image_bookmarks(&mut self) {
+        if let Some(path) = &self.image_bookmark_file_path {
+            if let Err(err) = save_image_bookmarks_to_file(path, &self.image_bookmarks) {
                 self.last_error = Some(err.to_string());
             } else {
                 self.last_error = None;
@@ -1187,6 +1351,22 @@ fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
     models
 }
 
+fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut images: Vec<ImageItem> = serde_json::from_str(&content).unwrap_or_default();
+    let mut seen = HashSet::new();
+    images.retain(|image| seen.insert(image.id));
+    images
+}
+
 fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -1195,6 +1375,20 @@ fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String
     let mut normalized = bookmarks.to_vec();
     let mut seen = HashSet::new();
     normalized.retain(|model| seen.insert(model.id));
+
+    let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn save_image_bookmarks_to_file(path: &Path, bookmarks: &[ImageItem]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let mut normalized = bookmarks.to_vec();
+    let mut seen = HashSet::new();
+    normalized.retain(|image| seen.insert(image.id));
 
     let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use reqwest::Client;
+use reqwest::header::CONTENT_TYPE;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
@@ -66,6 +67,75 @@ impl DownloadManager {
         }
     }
 
+    fn tokenized_download_url(&self, url: &str) -> String {
+        let Some(token) = self.config.api_key.as_deref() else {
+            return url.to_string();
+        };
+
+        if url.contains("token=") {
+            return url.to_string();
+        }
+
+        let separator = if url.contains('?') { '&' } else { '?' };
+        format!("{}{}token={}", url, separator, token)
+    }
+
+    async fn send_download_request(
+        &self,
+        url: &str,
+        range_start: Option<u64>,
+    ) -> Result<reqwest::Response> {
+        let request_url = self.tokenized_download_url(url);
+        let mut req = self
+            .client
+            .get(&request_url)
+            .header(CONTENT_TYPE, "application/json");
+        if let Some(token) = &self.config.api_key {
+            req = req.bearer_auth(token);
+        }
+        if let Some(start) = range_start {
+            req = req.header("Range", format!("bytes={}-", start));
+        }
+
+        match req.send().await {
+            Ok(res) if res.status().is_success() => return Ok(res),
+            Ok(res) => {
+                let status = res.status();
+                if self.config.api_key.is_some() && matches!(status.as_u16(), 401 | 403) {
+                    let mut fallback_req = self
+                        .client
+                        .get(url)
+                        .header(CONTENT_TYPE, "application/json");
+                    if let Some(token) = &self.config.api_key {
+                        fallback_req = fallback_req.bearer_auth(token);
+                    }
+                    if let Some(start) = range_start {
+                        fallback_req = fallback_req.header("Range", format!("bytes={}-", start));
+                    }
+                    return Ok(fallback_req.send().await?.error_for_status()?);
+                }
+                return Err(res.error_for_status().unwrap_err().into());
+            }
+            Err(err) => {
+                if self.config.api_key.is_some() {
+                    let mut fallback_req = self
+                        .client
+                        .get(url)
+                        .header(CONTENT_TYPE, "application/json");
+                    if let Some(token) = &self.config.api_key {
+                        fallback_req = fallback_req.bearer_auth(token);
+                    }
+                    if let Some(start) = range_start {
+                        fallback_req = fallback_req.header("Range", format!("bytes={}-", start));
+                    }
+                    return Ok(fallback_req.send().await?.error_for_status()?);
+                }
+                Err(err)?;
+                unreachable!()
+            }
+        }
+    }
+
     pub async fn download_version(
         &self, 
         model: &Model, 
@@ -87,12 +157,7 @@ impl DownloadManager {
 
         let target_path = dest_dir.join(&smart_filename);
 
-        let mut req = self.client.get(url);
-        if let Some(token) = &self.config.api_key {
-            req = req.bearer_auth(token);
-        }
-
-        let res = req.send().await?.error_for_status()?;
+        let res = self.send_download_request(url, None).await?;
         let total_size = res.content_length().unwrap_or(0) as f64;
 
         // Stream to file
@@ -160,11 +225,6 @@ impl DownloadManager {
             dest_dir.join(&smart_filename)
         });
 
-        let mut req = self.client.get(url);
-        if let Some(token) = &self.config.api_key {
-            req = req.bearer_auth(token);
-        }
-
         let existing_metadata = tokio::fs::metadata(&target_path).await.ok();
         let existing_size = existing_metadata.as_ref().map(|entry| entry.len()).unwrap_or(0);
         let resume_hint = resume_from_bytes.unwrap_or(0);
@@ -175,11 +235,9 @@ impl DownloadManager {
         };
         let mut resumable = downloaded > 0;
 
-        if resumable {
-            req = req.header("Range", format!("bytes={}-", downloaded));
-        }
-
-        let res = req.send().await?.error_for_status()?;
+        let res = self
+            .send_download_request(url, if resumable { Some(downloaded) } else { None })
+            .await?;
 
         let mut total_size = expected_total_bytes.unwrap_or(0);
         if resumable {
