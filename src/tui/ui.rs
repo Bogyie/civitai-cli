@@ -8,13 +8,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Tabs, Wrap},
     Frame, Terminal,
 };
 use ratatui_image::StatefulImage;
 use std::io::{self, Stdout};
 
-use crate::tui::app::{App, AppMode};
+use crate::tui::app::{App, AppMode, MainTab};
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = io::stdout();
@@ -31,46 +31,146 @@ pub fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Re
 }
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let mut root_constraints = vec![Constraint::Min(10)];
-    let has_downloads = !app.active_downloads.is_empty();
-    
-    if has_downloads {
-        root_constraints.push(Constraint::Length((app.active_downloads.len() + 2) as u16));
-    }
-    root_constraints.push(Constraint::Length(3)); // Footer Status
-    
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(root_constraints)
+        .constraints([
+            Constraint::Length(3), // Tabs
+            Constraint::Min(10),   // Main content
+            Constraint::Length(3), // Footer Status
+        ])
         .split(f.area());
 
-    let main_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Left view (List / Feed)
-            Constraint::Percentage(50), // Right view (Details & Images)
-        ])
-        .split(chunks[0]);
-
-    if app.mode == AppMode::ImageFeed {
-        draw_image_panel(f, app, main_chunks[0]);
-        draw_image_sidebar(f, app, main_chunks[1]);
-    } else {
-        draw_model_list(f, app, main_chunks[0]);
-        draw_model_sidebar(f, app, main_chunks[1]);
-    }
+    let titles = vec![
+        " Models (1) ",
+        " Image Feed (2) ",
+        " Downloads (3) ",
+        " Settings (4) ",
+    ];
+    let active_idx = match app.active_tab {
+        MainTab::Models => 0,
+        MainTab::Images => 1,
+        MainTab::Downloads => 2,
+        MainTab::Settings => 3,
+    };
     
-    // Draw downloads tracker if present
-    if has_downloads {
-        draw_downloads_tracker(f, app, chunks[1]);
-        draw_footer(f, app, chunks[2]);
-    } else {
-        draw_footer(f, app, chunks[1]);
+    let tabs = Tabs::new(titles)
+        .block(Block::default().borders(Borders::ALL).title(" Civitai CLI "))
+        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .select(active_idx)
+        .divider(" | ");
+    
+    f.render_widget(tabs, chunks[0]);
+
+    match app.active_tab {
+        MainTab::Models => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(chunks[1]);
+            draw_model_list(f, app, main_chunks[0]);
+            draw_model_sidebar(f, app, main_chunks[1]);
+            
+            if app.mode == AppMode::SearchForm {
+                draw_search_popup(f, app);
+            }
+        }
+        MainTab::Images => {
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(chunks[1]);
+            draw_image_panel(f, app, main_chunks[0]);
+            draw_image_sidebar(f, app, main_chunks[1]);
+        }
+        MainTab::Downloads => {
+            draw_downloads_tab(f, app, chunks[1]);
+        }
+        MainTab::Settings => {
+            draw_settings_tab(f, app, chunks[1]);
+        }
     }
 
-    if app.mode == AppMode::SearchForm {
-        draw_search_popup(f, app);
+    draw_footer(f, app, chunks[2]);
+
+    if app.show_status_modal {
+        draw_status_modal(f, app);
     }
+}
+
+fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
+    if app.active_downloads.is_empty() {
+        let p = Paragraph::new("No active downloads.").alignment(Alignment::Center).block(Block::default().borders(Borders::ALL).title(" Downloads "));
+        f.render_widget(p, area);
+        return;
+    }
+
+    let block = Block::default().borders(Borders::ALL).title(" Downloads ");
+    f.render_widget(block.clone(), area);
+    let inner_area = block.inner(area);
+
+    let constraints = std::iter::repeat(Constraint::Length(1))
+        .take(app.active_downloads.len())
+        .collect::<Vec<_>>();
+    let sub_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner_area);
+
+    for (i, (&id, tracker)) in app.active_downloads.iter().enumerate() {
+        if i < sub_chunks.len() {
+            let ratio = (tracker.progress / 100.0).clamp(0.0, 1.0);
+            let label = format!("Model {}: {} ({:.1}%)", id, tracker.filename, tracker.progress);
+            let gauge = Gauge::default()
+                .block(Block::default())
+                .gauge_style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
+                .ratio(ratio)
+                .label(label);
+            f.render_widget(gauge, sub_chunks[i]);
+        }
+    }
+}
+
+fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title(" Settings ");
+    let fm = &app.settings_form;
+    
+    let mut lines = vec![
+        Line::from(Span::styled("--- Civitai CLI Configuration ---", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(""),
+    ];
+
+    let api_key_val = if fm.editing && fm.focused_field == 0 {
+        format!("{}█", fm.input_buffer)
+    } else if let Some(key) = &app.config.api_key {
+        format!("Present (starts with {})", &key.chars().take(5).collect::<String>())
+    } else {
+        "None (Restricted search and downloads)".to_string()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(if fm.focused_field == 0 { "> API Key: " } else { "  API Key: " }, Style::default().fg(if fm.focused_field == 0 { Color::Yellow } else { Color::White })),
+        Span::styled(api_key_val, if fm.focused_field == 0 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) })
+    ]));
+
+    let path_val = if fm.editing && fm.focused_field == 1 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "Not Configured".to_string())
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(if fm.focused_field == 1 { "> ComfyUI Path: " } else { "  ComfyUI Path: " }, Style::default().fg(if fm.focused_field == 1 { Color::Yellow } else { Color::White })),
+        Span::styled(path_val, if fm.focused_field == 1 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) })
+    ]));
+
+    lines.push(Line::from(""));
+    if fm.editing {
+        lines.push(Line::from(Span::styled(" [Type to edit] | [Enter] Save | [Esc] Cancel", Style::default().fg(Color::DarkGray))));
+    } else {
+        lines.push(Line::from(Span::styled(" [Up/Down] Highlight | [Enter] Edit string", Style::default().fg(Color::DarkGray))));
+    }
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -170,18 +270,25 @@ fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             Line::from(format!("Type: {}", model.r#type)),
         ];
 
-        if let Some(stats) = &model.stats {
+        let v_idx = *app.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = model.model_versions.get(v_idx) {
+            lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                Span::styled("Stats: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("⭐ {:.1} ({}) | ❤️ {} | ⬇️ {}", stats.rating, stats.rating_count, stats.favorite_count, stats.download_count)),
+                Span::styled(format!("Version: {} ", version.name), Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow)),
+                Span::styled(format!("({} of {})", v_idx + 1, model.model_versions.len()), Style::default().fg(Color::DarkGray)),
             ]));
-        }
-
-        // Safe file parsing
-        if let Some(version) = model.model_versions.first() {
+            
             lines.push(Line::from(format!("Base Model: {}", version.base_model)));
+
+            if let Some(stats) = &version.stats {
+                lines.push(Line::from(vec![
+                    Span::styled("Ver. Stats: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format!("⭐ {:.1} ({}) | ⬇️ {}", stats.rating, stats.rating_count, stats.download_count)),
+                ]));
+            }
+
             if let Some(file) = version.files.first() {
-                lines.push(Line::from(format!("File Size: {:.2} MB", file.size_kb / 1024.0)));
+                lines.push(Line::from(format!("File: {} ({:.2} MB)", file.name, file.size_kb / 1024.0)));
                 if let Some(meta) = &file.metadata {
                     lines.push(Line::from(format!("Format: {} {}", 
                         meta.format.as_deref().unwrap_or("?"), 
@@ -218,27 +325,7 @@ fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_downloads_tracker(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Active Downloads ");
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(vec![Constraint::Length(1); app.active_downloads.len()])
-        .split(block.inner(area));
 
-    f.render_widget(block, area);
-
-    for (i, dl) in app.active_downloads.values().enumerate() {
-        if i >= layout.len() { break; } // safety bounds
-
-        let label = format!("{} ({:.1}%)", dl.filename, dl.progress);
-        let gauge = Gauge::default()
-            .gauge_style(Style::default().fg(Color::Yellow).bg(Color::DarkGray))
-            .ratio((dl.progress / 100.0).clamp(0.0, 1.0))
-            .label(label);
-        
-        f.render_widget(gauge, layout[i]);
-    }
-}
 
 fn draw_search_popup(f: &mut Frame, app: &App) {
     let block = Block::default()
@@ -275,25 +362,65 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let info = if app.mode == AppMode::ImageFeed {
-        format!("Image: {}/{} | Status: {}",
-            if app.images.is_empty() { 0 } else { app.selected_index + 1 },
-            app.images.len(),
-            app.status)
+fn draw_status_modal(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Full Status Message ");
+        
+    let err_msg = app.last_error.as_deref().unwrap_or("");
+    let full_text = if !err_msg.is_empty() {
+        format!("{}\n\nERROR:\n{}", app.status, err_msg)
     } else {
-        format!("Model: {}/{} | Status: {}",
-            if app.models.is_empty() { 0 } else { app.model_list_state.selected().unwrap_or(0) + 1 },
-            app.models.len(),
-            app.status)
+        app.status.clone()
     };
 
     let text = vec![
-        Line::from(Span::styled(" [i] Image Feed | [/] Search | [q] Quit | [j/k] Navigate | [d] Download ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
-        Line::from(Span::raw(info)),
+        Line::from(full_text),
+        Line::from(""),
+        Line::from(Span::styled(" [m] Close | [Esc] Close ", Style::default().add_modifier(Modifier::BOLD).fg(Color::DarkGray))),
     ];
 
-    f.render_widget(Paragraph::new(text).block(Block::default().borders(Borders::ALL)), area);
+    let p = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
+    let area = centered_rect(80, 60, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
+fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL);
+    let err_msg = app.last_error.as_deref().unwrap_or("");
+    
+    let left_width_budget = area.width.saturating_sub(40) as usize; // Account for menus and error text footprint
+    
+    let mut trunc_status = app.status.clone();
+    if trunc_status.chars().count() > left_width_budget {
+        trunc_status = format!("{}...", trunc_status.chars().take(left_width_budget.saturating_sub(3)).collect::<String>());
+    }
+    
+    let left_text = match app.active_tab {
+        MainTab::Models => {
+            let m_len = app.models.len();
+            let m_curr = app.model_list_state.selected().unwrap_or(0);
+            format!(" Models: {}/{} | {} | [m] Modal | [h/l] Version | [j/k] Browse | [d] DL ", if m_len == 0 { 0 } else { m_curr + 1 }, m_len, trunc_status)
+        }
+        MainTab::Images => {
+            let i_len = app.images.len();
+            let i_curr = app.selected_index;
+            format!(" Images: {}/{} | {} | [m] Modal", if i_len == 0 { 0 } else { i_curr + 1 }, i_len, trunc_status)
+        }
+        _ => format!(" {} | [m] Modal (Press 1..4 or Tab to Navigate) ", trunc_status),
+    };
+
+    let p = if !err_msg.is_empty() {
+        Paragraph::new(Line::from(vec![
+            Span::raw(left_text),
+            Span::styled(format!(" | ERROR: {}", err_msg), Style::default().fg(Color::Red)),
+        ])).block(block)
+    } else {
+        Paragraph::new(Span::styled(left_text, Style::default().fg(Color::Cyan))).block(block)
+    };
+
+    f.render_widget(p, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

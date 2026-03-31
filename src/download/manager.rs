@@ -79,8 +79,6 @@ impl DownloadManager {
 
         let target_path = dest_dir.join(&smart_filename);
 
-        println!("Downloading {} to {:?}", url, target_path);
-
         let mut req = self.client.get(url);
         if let Some(token) = &self.config.api_key {
             req = req.bearer_auth(token);

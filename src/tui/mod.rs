@@ -9,7 +9,7 @@ use events::run_event_loop;
 use crate::config::AppConfig;
 
 pub async fn run_tui(config: AppConfig) -> Result<()> {
-    let mut app = App::new();
+    let mut app = App::new(config.clone());
     
     // Spawn background worker, get back channels
     let (tx, rx) = worker::spawn_worker(config).await;

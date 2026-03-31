@@ -108,7 +108,7 @@ pub async fn spawn_worker(
                         let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate("Download finished (Placeholder)!".into()));
                     });
                 }
-                WorkerCommand::DownloadModel(model_id) => {
+                WorkerCommand::DownloadModel(model_id, version_id) => {
                     let tx_msg_clone = tx_msg.clone();
                     let cv_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
                     let dl_clone = crate::download::manager::DownloadManager::new(downloader_config.clone().into()).unwrap();
@@ -116,7 +116,7 @@ pub async fn spawn_worker(
                     tokio::spawn(async move {
                         let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Fetching Model {} metadata for download...", model_id)));
                         if let Ok(model) = cv_clone.get_model(model_id).await {
-                            if let Some(version) = model.model_versions.first() {
+                            if let Some(version) = model.model_versions.iter().find(|v| v.id == version_id) {
                                 let _ = tx_msg_clone.try_send(AppMessage::StatusUpdate(format!("Starting download stream for {}", model_id)));
                                 let res = dl_clone.download_version(&model, version, Some(tx_msg_clone.clone())).await;
                                 if let Err(e) = res {

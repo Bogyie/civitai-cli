@@ -36,10 +36,22 @@ pub struct ModelVersion {
     pub model_id: Option<u64>,
     pub name: String,
     pub base_model: String, // e.g., "SD 1.5", "SDXL"
+    pub stats: Option<VersionStats>,
     #[serde(default)]
     pub images: Vec<ModelImage>,
     #[serde(default)]
     pub files: Vec<ModelFile>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionStats {
+    #[serde(default)]
+    pub download_count: u64,
+    #[serde(default)]
+    pub rating_count: u64,
+    #[serde(default)]
+    pub rating: f64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -56,7 +68,7 @@ pub struct ModelFile {
     pub name: String,
     #[serde(default)]
     pub primary: bool,
-    #[serde(default)]
+    #[serde(default, rename = "sizeKB")]
     pub size_kb: f64,
     pub metadata: Option<FileMetadata>,
     pub download_url: String,
