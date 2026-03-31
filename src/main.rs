@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Ui) | None => {
             // Run Interactive TUI
-            tui::run_tui().await?;
+            tui::run_tui(app_config.clone()).await?;
         }
     }
 

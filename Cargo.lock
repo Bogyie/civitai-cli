@@ -388,6 +388,7 @@ name = "civitai-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "clap",
  "crossterm",
  "directories",
