@@ -7,7 +7,6 @@ use super::types::{Model, ModelVersion, ImageResponse, PaginatedResponse};
 pub struct SearchOptions {
     pub query: String,
     pub limit: u32,
-    pub page: Option<u32>,
     pub tag: Option<String>,
     pub username: Option<String>,
     pub sort: Option<String>,
@@ -54,11 +53,6 @@ impl CivitaiClient {
 
     pub async fn search_models(&self, opts: SearchOptions) -> Result<PaginatedResponse<Model>> {
         let mut url = format!("https://civitai.com/api/v1/models?limit={}", opts.limit);
-        if let Some(page) = opts.page {
-            if page > 0 {
-                url.push_str(&format!("&page={}", page));
-            }
-        }
 
         if !opts.query.is_empty() {
             url.push_str(&format!("&query={}", opts.query.replace(" ", "%20")));
@@ -143,8 +137,12 @@ impl CivitaiClient {
         self.fetch(&url).await
     }
 
-    pub async fn get_images(&self, limit: u32, page: u32) -> Result<ImageResponse> {
-        let url = format!("https://civitai.com/api/v1/images?limit={}&page={}", limit, page);
+    pub async fn get_images(&self, limit: u32) -> Result<ImageResponse> {
+        let url = format!("https://civitai.com/api/v1/images?limit={}", limit);
+        self.fetch(&url).await
+    }
+
+    pub async fn get_images_by_url(&self, url: String) -> Result<ImageResponse> {
         self.fetch(&url).await
     }
 

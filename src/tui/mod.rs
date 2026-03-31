@@ -25,9 +25,6 @@ pub async fn run_tui(config: AppConfig) -> Result<()> {
                 None,
             ))
             .await;
-        let _ = tx
-            .send(app::WorkerCommand::FetchImages)
-            .await;
     }
     app.status = "Searching default model list...".to_string();
 

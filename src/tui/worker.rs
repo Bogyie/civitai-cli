@@ -98,12 +98,6 @@ fn normalize_search_options_for_cache(mut opts: crate::api::client::SearchOption
 fn build_search_url(opts: &crate::api::client::SearchOptions) -> String {
     let mut url = format!("https://civitai.com/api/v1/models?limit={}", opts.limit);
 
-    if let Some(page) = opts.page {
-        if page > 0 {
-            url.push_str(&format!("&page={}", page));
-        }
-    }
-
     if !opts.query.is_empty() {
         url.push_str(&format!("&query={}", opts.query.replace(' ', "%20")));
     }
@@ -197,6 +191,18 @@ fn build_search_url(opts: &crate::api::client::SearchOptions) -> String {
     }
 
     url
+}
+
+fn build_model_url(model_id: u64) -> String {
+    format!("https://civitai.com/api/v1/models/{}", model_id)
+}
+
+fn status_with_url(action: &str, url: &str) -> String {
+    format!("{} | {}", action, url)
+}
+
+fn error_status_with_url(action: &str, url: &str, err: &str) -> String {
+    format!("{} | {} | {}", action, url, err)
 }
 
 fn now_unix_secs() -> u64 {
@@ -426,36 +432,16 @@ fn load_cached_search_entry(cache_root: &Path, cache_key: &str) -> Option<Cached
         .map(|(entry, _)| entry)
 }
 
-fn parse_metadata_u64(value: Option<&str>) -> Option<u64> {
-    value.and_then(|raw| raw.trim().parse::<u64>().ok())
-}
-
-fn has_more_from_metadata(metadata: Option<&PaginationMetadata>, current_page: u32) -> bool {
+fn has_more_from_metadata(metadata: Option<&PaginationMetadata>) -> bool {
     let Some(metadata) = metadata else {
         return false;
     };
 
-    if metadata
+    metadata
         .next_page
         .as_deref()
         .map(str::trim)
         .is_some_and(|value| !value.is_empty())
-    {
-        return true;
-    }
-
-    if let Some(total_pages) = parse_metadata_u64(metadata.total_pages.as_deref()) {
-        return (current_page as u64) < total_pages;
-    }
-
-    let Some(total_items) = parse_metadata_u64(metadata.total_items.as_deref()) else {
-        return false;
-    };
-    let Some(page_size) = parse_metadata_u64(metadata.page_size.as_deref()).filter(|size| *size > 0) else {
-        return false;
-    };
-    let estimated_pages = (total_items + page_size - 1) / page_size;
-    (current_page as u64) < estimated_pages
 }
 
 fn remove_cached_search_entry(cache_root: &Path, cache_key: &str) {
@@ -717,7 +703,7 @@ pub async fn spawn_worker(
 
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
-                WorkerCommand::FetchImages => {
+                WorkerCommand::FetchImages(next_page_url) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -726,10 +712,6 @@ pub async fn spawn_worker(
 
                     tokio::spawn(async move {
                         debug_fetch_log(&debug_config, "FetchImages: started");
-                        let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate("Fetching feed...".into()))
-                            .await;
-
                         let client = match CivitaiClient::new(api_key) {
                             Ok(client) => client,
                             Err(e) => {
@@ -747,13 +729,32 @@ pub async fn spawn_worker(
                             }
                         };
 
-                        let image_feed_url =
-                            "https://civitai.com/api/v1/images?limit=50&page=1".to_string();
+                        let use_next_page = next_page_url.filter(|url| !url.trim().is_empty());
+                        let is_append = use_next_page.is_some();
+                        let image_feed_url = use_next_page.unwrap_or_else(|| {
+                            "https://civitai.com/api/v1/images?limit=10".to_string()
+                        });
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate(status_with_url(
+                                if is_append {
+                                    "Fetching image feed next page"
+                                } else {
+                                    "Fetching image feed"
+                                },
+                                &image_feed_url,
+                            )))
+                            .await;
                         debug_fetch_log(
                             &debug_config,
                             &format!("FetchImages: request -> {}", image_feed_url),
                         );
-                        match client.get_images(50, 1).await {
+                        let fetch_result = if is_append {
+                            client.get_images_by_url(image_feed_url.clone()).await
+                        } else {
+                            client.get_images(10).await
+                        };
+
+                        match fetch_result {
                             Ok(res) => {
                                 debug_fetch_log(
                                     &debug_config,
@@ -763,8 +764,13 @@ pub async fn spawn_worker(
                                         res.metadata.is_some()
                                     ),
                                 );
+                                let next_page = res.metadata.and_then(|metadata| metadata.next_page);
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::ImagesLoaded(res.items.clone()))
+                                    .send(AppMessage::ImagesLoaded(
+                                        res.items.clone(),
+                                        is_append,
+                                        next_page,
+                                    ))
                                     .await;
 
                                 let fetch_semaphore = Arc::new(Semaphore::new(3));
@@ -795,8 +801,12 @@ pub async fn spawn_worker(
                                 );
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
-                                        "Error fetching images: {}",
-                                        e
+                                        "{}",
+                                        error_status_with_url(
+                                            "Error fetching images",
+                                            &image_feed_url,
+                                            &e.to_string(),
+                                        )
                                     )))
                                     .await;
                             }
@@ -830,13 +840,14 @@ pub async fn spawn_worker(
                         let next_page_url = next_page_url.filter(|url| !url.trim().is_empty());
                         let use_next_page_url = next_page_url.is_some();
                         let effective_force_refresh = force_refresh || !use_cache;
-                        let page = opts.page.unwrap_or(1).max(1);
+                        let mut request_url = next_page_url.clone().unwrap_or_else(|| {
+                            build_search_url(&opts)
+                        });
 
                         debug_fetch_log(
                             &debug_config,
                             &format!(
-                                "SearchModels: request page={} limit={} query=\"{}\" sort={:?} type={:?} base={:?} force_refresh={} append={} cache_used={} next_page_url={:?}",
-                                page,
+                                "SearchModels: request limit={} query=\"{}\" sort={:?} type={:?} base={:?} force_refresh={} append={} cache_used={} next_page_url={:?}",
                                 opts.limit,
                                 query_label,
                                 opts.sort,
@@ -859,9 +870,6 @@ pub async fn spawn_worker(
                         let cache_key = cache_key_for_options(&opts);
                         let ttl_hours = *search_cache_ttl_hours.lock().await;
                         let cache_path = search_cache_path.lock().await.clone();
-                        let limit = opts.limit.max(1);
-                        let start_idx = (page.saturating_sub(1).saturating_mul(limit)) as usize;
-                        let end_idx = start_idx.saturating_add(limit as usize);
                         let mut cached_slice: Option<Vec<Model>> = None;
                         let mut cached_has_more = false;
                         let mut cached_next_page: Option<String> = None;
@@ -923,62 +931,9 @@ pub async fn spawn_worker(
                             if let Some(entry) = entry {
                                 if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
                                     cached_next_page = entry.metadata.as_ref().and_then(|metadata| metadata.next_page.clone());
-                                    if append {
-                                        if start_idx < entry.models.len() {
-                                            let take_end = end_idx.min(entry.models.len());
-                                            let has_more = has_more_from_metadata(
-                                                entry.metadata.as_ref(),
-                                                page,
-                                            );
-                                            cached_slice = Some(entry.models[start_idx..take_end].to_vec());
-                                            cached_has_more = take_end < entry.models.len() || has_more;
-                                            debug_fetch_log(
-                                                &debug_config,
-                                                &format!(
-                                                    "SearchModels: in-memory cache page hit query=\"{}\", start={}, end={}, total={}",
-                                                    query_label,
-                                                    start_idx,
-                                                    take_end,
-                                                    entry.models.len()
-                                                ),
-                                            );
-                                            let _ = tx_msg_clone
-                                                .send(AppMessage::StatusUpdate(format!(
-                                                    "Using cached page for \"{}\"",
-                                                    query_label
-                                                )))
-                                                .await;
-                                    } else {
-                                        cached_slice = None;
-                                        cached_has_more = has_more_from_metadata(
-                                            entry.metadata.as_ref(),
-                                            page,
-                                        );
-                                        debug_fetch_log(
-                                            &debug_config,
-                                            &format!(
-                                                "SearchModels: in-memory cache page missing range for query=\"{}\"",
-                                                query_label
-                                            ),
-                                        );
-                                    }
-                                        let cache_status = if cached_has_more {
-                                            format!(
-                                                "Reached cached page boundary for \"{}\"",
-                                                query_label
-                                            )
-                                        } else {
-                                            format!(
-                                                "Cached page not complete for \"{}\", refreshing from network",
-                                                query_label
-                                            )
-                                        };
-                                        let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(cache_status))
-                                            .await;
-                                    } else {
+                                    if !append {
                                         cached_slice = Some(entry.models.clone());
-                                        cached_has_more = has_more_from_metadata(entry.metadata.as_ref(), page);
+                                        cached_has_more = has_more_from_metadata(entry.metadata.as_ref());
                                         debug_fetch_log(
                                             &debug_config,
                                             &format!(
@@ -992,6 +947,14 @@ pub async fn spawn_worker(
                                                 query_label
                                             )))
                                             .await;
+                                    } else {
+                                        debug_fetch_log(
+                                            &debug_config,
+                                            &format!(
+                                                "SearchModels: append request bypasses in-memory slice cache for query=\"{}\"",
+                                                query_label
+                                            ),
+                                        );
                                     }
                                 } else {
                                     let _ = tx_msg_clone
@@ -1125,9 +1088,9 @@ pub async fn spawn_worker(
 
                         if let Some(url) = next_page_url.as_deref() {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "Fetching next models page for '{}'",
-                                    query_label
+                                .send(AppMessage::StatusUpdate(status_with_url(
+                                    &format!("Fetching next models page for '{}'", query_label),
+                                    url,
                                 )))
                                 .await;
                             debug_fetch_log(
@@ -1136,26 +1099,22 @@ pub async fn spawn_worker(
                             );
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "Fetching models matching '{}' (page {})...",
-                                    opts.query,
-                                    page
+                                .send(AppMessage::StatusUpdate(status_with_url(
+                                    &format!("Fetching models matching '{}'", opts.query),
+                                    &request_url,
                                 )))
                                 .await;
-                            let mut query_opts = opts.clone();
-                            query_opts.page = None;
                             debug_fetch_log(
                                 &debug_config,
-                                &format!("SearchModels request url={}", build_search_url(&query_opts)),
+                                &format!("SearchModels request url={}", request_url),
                             );
                         }
 
                         let fetch_result = if let Some(url) = next_page_url {
+                            request_url = url.clone();
                             civitai_clone.search_models_by_url(url).await
                         } else {
-                            let mut request_opts = opts.clone();
-                            request_opts.page = None;
-                            civitai_clone.search_models(request_opts).await
+                            civitai_clone.search_models(opts.clone()).await
                         };
 
                         match fetch_result {
@@ -1164,11 +1123,10 @@ pub async fn spawn_worker(
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
-                                        "SearchModels response query=\"{}\" page={} count={} has_more={} next_page={} items={}",
+                                        "SearchModels response query=\"{}\" count={} has_more={} next_page={} items={}",
                                         query_label,
-                                        page,
                                         res.items.len(),
-                                        has_more_from_metadata(res.metadata.as_ref(), page),
+                                        has_more_from_metadata(res.metadata.as_ref()),
                                         next_page.as_deref().unwrap_or("<none>"),
                                         res
                                             .metadata
@@ -1177,17 +1135,16 @@ pub async fn spawn_worker(
                                             .unwrap_or_else(|| "unknown".to_string()),
                                     ),
                                 );
-                                let has_more = has_more_from_metadata(res.metadata.as_ref(), page);
+                                let has_more = has_more_from_metadata(res.metadata.as_ref());
                                 let models = res.items.clone();
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
-                                        "SearchModels: emitting network chunk append={} count={} has_more={} next_page={:?} page={} preferred_model={:?} preferred_version={:?}",
+                                        "SearchModels: emitting network chunk append={} count={} has_more={} next_page={:?} preferred_model={:?} preferred_version={:?}",
                                         append,
                                         models.len(),
                                         has_more,
                                         next_page,
-                                        page,
                                         preferred_model_id,
                                         preferred_version_id
                                     ),
@@ -1201,12 +1158,13 @@ pub async fn spawn_worker(
                                     ))
                                     .await;
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "Fetched {} models for \"{}\" (page {})",
-                                        models.len(),
-                                        query_label
-                                            ,
-                                        page
+                                    .send(AppMessage::StatusUpdate(status_with_url(
+                                        &format!(
+                                            "Fetched {} models for \"{}\"",
+                                            models.len(),
+                                            query_label
+                                        ),
+                                        &request_url,
                                     )))
                                     .await;
 
@@ -1269,16 +1227,16 @@ pub async fn spawn_worker(
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
-                                        "SearchModels: network fetch failed query=\"{}\", page={}, err={}",
+                                        "SearchModels: network fetch failed query=\"{}\", err={}",
                                         query_label,
-                                        page,
                                         e
                                     ),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "Search failed: {}",
-                                        e
+                                    .send(AppMessage::StatusUpdate(error_status_with_url(
+                                        "Search failed",
+                                        &request_url,
+                                        &e.to_string(),
                                     )))
                                     .await;
                             }
@@ -1413,10 +1371,11 @@ pub async fn spawn_worker(
                     let control_map = download_controls.clone();
 
                     tokio::spawn(async move {
+                        let model_url = build_model_url(model_id);
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(format!(
-                                "Fetching Model {} metadata for download...",
-                                model_id
+                            .send(AppMessage::StatusUpdate(status_with_url(
+                                &format!("Fetching model {} metadata for download", model_id),
+                                &model_url,
                             )))
                             .await;
 
@@ -1512,10 +1471,11 @@ pub async fn spawn_worker(
                             }
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "Failed to retrieve Model {} metadata",
-                                    model_id
-                            )))
+                                .send(AppMessage::StatusUpdate(error_status_with_url(
+                                    &format!("Failed to retrieve model {} metadata", model_id),
+                                    &model_url,
+                                    "request failed",
+                                )))
                             .await;
                         }
                         {
@@ -1543,10 +1503,11 @@ pub async fn spawn_worker(
                     let control_map = download_controls.clone();
 
                     tokio::spawn(async move {
+                        let model_url = build_model_url(model_id);
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(format!(
-                                "Resuming download for model {}...",
-                                model_id
+                            .send(AppMessage::StatusUpdate(status_with_url(
+                                &format!("Resuming download for model {}", model_id),
+                                &model_url,
                             )))
                             .await;
 
@@ -1660,9 +1621,10 @@ pub async fn spawn_worker(
                             }
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "Failed to retrieve Model {} metadata",
-                                    model_id
+                                .send(AppMessage::StatusUpdate(error_status_with_url(
+                                    &format!("Failed to retrieve model {} metadata", model_id),
+                                    &model_url,
+                                    "request failed",
                                 )))
                                 .await;
                         }

@@ -135,7 +135,6 @@ impl SearchFormState {
         crate::api::client::SearchOptions {
             query: self.query.clone(),
             limit: 50,
-            page: None,
             tag: None,
             username: None,
             types: Some(self.types[self.selected_type].clone()),
@@ -158,7 +157,7 @@ impl SearchFormState {
 }
 
 pub enum AppMessage {
-    ImagesLoaded(Vec<ImageItem>),
+    ImagesLoaded(Vec<ImageItem>, bool, Option<String>),
     ImageDecoded(u64, StatefulProtocol),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<String>),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
@@ -225,7 +224,7 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages,
+    FetchImages(Option<String>),
     SearchModels(
         crate::api::client::SearchOptions,
         Option<u64>,
@@ -254,7 +253,6 @@ pub struct App {
     pub settings_form: SettingsFormState,
     
     pub models: Vec<Model>,
-    pub model_search_page: u32,
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
     pub model_search_next_page: Option<String>,
@@ -277,6 +275,10 @@ pub struct App {
     pub images: Vec<ImageItem>,
     pub selected_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
+    pub image_feed_loaded: bool,
+    pub image_feed_loading: bool,
+    pub image_feed_next_page: Option<String>,
+    pub image_feed_has_more: bool,
     
     pub active_downloads: HashMap<u64, DownloadTracker>,
     pub active_download_order: Vec<u64>,
@@ -341,7 +343,6 @@ impl App {
             search_form: SearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
-            model_search_page: 1,
             model_search_has_more: true,
             model_search_loading_more: false,
             model_search_next_page: None,
@@ -361,6 +362,10 @@ impl App {
             images: Vec::new(),
             selected_index: 0,
             image_cache: HashMap::new(),
+            image_feed_loaded: false,
+            image_feed_loading: false,
+            image_feed_next_page: None,
+            image_feed_has_more: true,
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,
@@ -401,18 +406,60 @@ impl App {
         self.tx = Some(tx.clone());
     }
 
-    pub fn model_search_options(&self, page: u32) -> crate::api::client::SearchOptions {
-        let mut options = self.search_form.build_options();
-        options.page = if page > 1 { Some(page) } else { None };
-        options
-    }
-
     pub fn can_request_more_models(&self) -> bool {
         self.active_tab == MainTab::Models
             && !self.models.is_empty()
             && self.model_search_has_more
             && !self.model_search_loading_more
-            && self.model_search_page >= 1
+    }
+
+    pub fn can_request_more_images(&self, threshold: usize) -> bool {
+        self.active_tab == MainTab::Images
+            && !self.images.is_empty()
+            && self.image_feed_has_more
+            && !self.image_feed_loading
+            && !self.images.is_empty()
+            && self.selected_index + threshold >= self.images.len()
+    }
+
+    pub fn next_image_feed_page(&self) -> Option<String> {
+        self.image_feed_next_page.clone()
+    }
+
+    pub fn set_image_feed_results(
+        &mut self,
+        mut images: Vec<ImageItem>,
+        next_page: Option<String>,
+    ) {
+        self.image_feed_next_page = next_page;
+        self.image_feed_has_more = self.image_feed_next_page.is_some();
+        self.image_feed_loaded = true;
+        self.image_feed_loading = false;
+        self.images = std::mem::take(&mut images);
+        if self.images.is_empty() {
+            self.selected_index = 0;
+        } else if self.selected_index >= self.images.len() {
+            self.selected_index = self.images.len() - 1;
+        }
+    }
+
+    pub fn append_image_feed_results(
+        &mut self,
+        mut images: Vec<ImageItem>,
+        next_page: Option<String>,
+    ) {
+        if !self.images.is_empty() && !images.is_empty() {
+            let known_ids: HashSet<u64> = self.images.iter().map(|item| item.id).collect();
+            images.retain(|item| !known_ids.contains(&item.id));
+        }
+
+        self.images.append(&mut images);
+        self.image_feed_next_page = next_page;
+        self.image_feed_has_more = self.image_feed_next_page.is_some();
+        self.image_feed_loading = false;
+        if !self.images.is_empty() && self.selected_index >= self.images.len() {
+            self.selected_index = self.images.len() - 1;
+        }
     }
 
     pub fn next_model_search_options_if_needed(&mut self) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
@@ -420,9 +467,8 @@ impl App {
             return None;
         }
 
-        self.model_search_page = self.model_search_page.saturating_add(1);
         self.model_search_loading_more = true;
-        Some((self.model_search_options(self.model_search_page), self.model_search_next_page.clone()))
+        Some((self.search_form.build_options(), self.model_search_next_page.clone()))
     }
 
     pub fn select_next(&mut self) {
@@ -483,7 +529,6 @@ impl App {
 
     pub fn set_models_results(&mut self, models: Vec<Model>, has_more: bool, next_page: Option<String>) {
         self.models = models;
-        self.model_search_page = 1;
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
         self.model_search_next_page = next_page;

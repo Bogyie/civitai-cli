@@ -52,6 +52,42 @@ pub async fn run_event_loop(
         }
     };
 
+    let request_image_feed_if_needed = |app: &mut App, next_page: Option<String>| {
+        match &next_page {
+            None => {
+                if app.image_feed_loaded {
+                    return;
+                }
+            }
+            Some(requested_next_page) => {
+                if app.image_feed_loading
+                    || app.image_feed_next_page.is_none()
+                    || app.image_feed_next_page.as_ref() != Some(requested_next_page)
+                {
+                    return;
+                }
+            }
+        };
+
+        if app.image_feed_loading {
+            return;
+        }
+
+        if let Some(tx) = &app.tx {
+            match tx.try_send(WorkerCommand::FetchImages(next_page)) {
+                Ok(_) => {
+                    app.image_feed_loading = true;
+                    app.status = if app.image_feed_loaded {
+                        "Loading more images...".to_string()
+                    } else {
+                        "Fetching image feed...".to_string()
+                    };
+                }
+                Err(_) => {}
+            }
+        }
+    };
+
     loop {
         let poll_timeout_ms = match app.mode {
             AppMode::SearchForm | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt => 200,
@@ -123,7 +159,7 @@ pub async fn run_event_loop(
                                     debug_fetch_log(
                                         &app.config,
                                         &format!(
-                                            "UI: search submit query=\"{}\" limit={} page=1 append=false force_refresh=false",
+                                            "UI: search submit query=\"{}\" limit={} append=false force_refresh=false",
                                             app.search_form.query,
                                             search_options.limit
                                         ),
@@ -137,7 +173,6 @@ pub async fn run_event_loop(
                                             false,
                                             None,
                                         ));
-                                        app.model_search_page = 1;
                                         app.model_search_has_more = true;
                                         app.model_search_loading_more = false;
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
@@ -400,13 +435,18 @@ pub async fn run_event_loop(
 
                         match key.code {
                             KeyCode::Tab => {
-                                app.active_tab = match app.active_tab {
+                                let next_tab = match app.active_tab {
                                     MainTab::Models => MainTab::Bookmarks,
                                     MainTab::Bookmarks => MainTab::Images,
                                     MainTab::Images => MainTab::Downloads,
                                     MainTab::Downloads => MainTab::Settings,
                                     MainTab::Settings => MainTab::Models,
                                 };
+                                let prev_tab = app.active_tab;
+                                app.active_tab = next_tab;
+                                if prev_tab != next_tab && next_tab == MainTab::Images {
+                                    request_image_feed_if_needed(app, None);
+                                }
                                 if app.active_tab == MainTab::Bookmarks {
                                     app.clamp_bookmark_selection();
                                 }
@@ -419,7 +459,11 @@ pub async fn run_event_loop(
                                 app.clamp_bookmark_selection();
                             }
                             KeyCode::Char('3') => {
+                                let prev_tab = app.active_tab;
                                 app.active_tab = MainTab::Images;
+                                if prev_tab != MainTab::Images {
+                                    request_image_feed_if_needed(app, None);
+                                }
                             }
                             KeyCode::Char('4') => {
                                 app.active_tab = MainTab::Downloads;
@@ -504,9 +548,10 @@ pub async fn run_event_loop(
                                                 debug_fetch_log(
                                                     &app.config,
                                                     &format!(
-                                                    "UI: request more models page={} append=true query=\"{}\"",
-                                                    opts.page.unwrap_or(0),
+                                                    "UI: request more models append=true query=\"{}\" next_page={}",
                                                     opts.query
+                                                    ,
+                                                    next_page.is_some()
                                                 ),
                                             );
                                             if let Some(tx) = &app.tx {
@@ -518,10 +563,14 @@ pub async fn run_event_loop(
                                                     true,
                                                     next_page,
                                                 ));
-                                                    app.status =
-                                                        format!("Loading more results (page {})...", app.model_search_page);
+                                                    app.status = "Loading more results...".to_string();
                                                 }
                                             }
+                                        }
+                                    }
+                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5) {
+                                        if let Some(next_page) = app.next_image_feed_page() {
+                                            request_image_feed_if_needed(app, Some(next_page));
                                         }
                                     }
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
@@ -746,7 +795,6 @@ pub async fn run_event_loop(
                                             false,
                                             None,
                                         ));
-                                        app.model_search_page = 1;
                                         app.model_search_has_more = true;
                                         app.model_search_loading_more = false;
                                         app.status = format!(
@@ -790,12 +838,27 @@ pub async fn run_event_loop(
              // Receiving decoded image bytes and status ticks from worker
              Some(msg) = rx.recv() => {
                  match msg {
-                     AppMessage::ImagesLoaded(new_images) => {
-                         app.images = new_images;
-                         if app.active_tab == MainTab::Images {
-                             app.status = format!("Loaded {} images", app.images.len());
-                         }
-                     }
+                    AppMessage::ImagesLoaded(new_images, append, next_page) => {
+                        if append {
+                            let before = app.images.len();
+                            app.append_image_feed_results(new_images, next_page);
+                            if app.active_tab == MainTab::Images {
+                                app.status = format!(
+                                    "Loaded {} more images (total {})",
+                                    app.images.len().saturating_sub(before),
+                                    app.images.len()
+                                );
+                            }
+                        } else {
+                            app.set_image_feed_results(new_images, next_page);
+                            if app.active_tab == MainTab::Images {
+                                app.status = format!("Loaded {} images", app.images.len());
+                            }
+                        }
+                        if app.status.is_empty() && app.active_tab == MainTab::Images {
+                            app.status = format!("Loaded {} images", app.images.len());
+                        }
+                    }
                      AppMessage::ImageDecoded(id, protocol) => {
                          app.image_cache.insert(id, protocol);
                      }
@@ -832,9 +895,8 @@ pub async fn run_event_loop(
                                  ),
                              );
                              app.status = format!(
-                                 "Loaded {} more models (page {}, total {})",
+                                 "Loaded {} more models (total {})",
                                  appended_len,
-                                 app.model_search_page,
                                  app.models.len()
                              );
                          } else {
@@ -853,6 +915,9 @@ pub async fn run_event_loop(
                      }
                      AppMessage::StatusUpdate(status) => {
                          app.status = status;
+                         if app.status.contains("Error fetching images") {
+                            app.image_feed_loading = false;
+                         }
                          if is_error_status(&app.status) {
                              app.last_error = Some(app.status.clone());
                              app.show_status_modal = true;
