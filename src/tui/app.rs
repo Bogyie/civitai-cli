@@ -1,13 +1,17 @@
 use crate::api::{ImageItem, Model};
 use ratatui_image::protocol::StatefulProtocol;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 use ratatui::widgets::ListState;
+use serde_json;
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
     Models,
+    Bookmarks,
     Images,
     Downloads,
     Settings,
@@ -17,6 +21,14 @@ pub enum MainTab {
 pub enum AppMode {
     Browsing,
     SearchForm,
+    SearchBookmarks,
+    BookmarkPathPrompt,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BookmarkPathAction {
+    Export,
+    Import,
 }
 
 pub struct SearchFormState {
@@ -198,8 +210,15 @@ pub struct App {
     pub settings_form: SettingsFormState,
     
     pub models: Vec<Model>,
+    pub bookmarks: Vec<Model>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
+    pub bookmark_list_state: ListState,
+    pub bookmark_query: String,
+    pub bookmark_query_draft: String,
+    pub show_bookmark_confirm_modal: bool,
+    pub pending_bookmark_remove_id: Option<u64>,
+    pub bookmark_file_path: Option<PathBuf>,
     pub selected_version_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, StatefulProtocol>,
     pub model_version_image_failed: HashSet<u64>,
@@ -217,11 +236,22 @@ pub struct App {
     pub status: String,
     pub last_error: Option<String>,
     pub show_status_modal: bool,
+    pub bookmark_path_prompt_action: Option<BookmarkPathAction>,
+    pub bookmark_path_draft: String,
     pub tx: Option<mpsc::Sender<WorkerCommand>>,
 }
 
 impl App {
     pub fn new(config: crate::config::AppConfig) -> Self {
+        let bookmark_file_path = config
+            .bookmark_file_path
+            .clone()
+            .or_else(crate::config::AppConfig::bookmark_path);
+        let bookmarks = load_bookmarks(bookmark_file_path.as_deref());
+        let mut bookmark_list_state = ListState::default();
+        if !bookmarks.is_empty() {
+            bookmark_list_state.select(Some(0));
+        }
         let mut model_list_state = ListState::default();
         model_list_state.select(Some(0));
 
@@ -232,8 +262,15 @@ impl App {
             search_form: SearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
+            bookmarks,
             show_model_details: false,
             model_list_state,
+            bookmark_list_state,
+            bookmark_query: String::new(),
+            bookmark_query_draft: String::new(),
+            show_bookmark_confirm_modal: false,
+            pending_bookmark_remove_id: None,
+            bookmark_file_path,
             selected_version_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
             model_version_image_failed: HashSet::new(),
@@ -248,6 +285,8 @@ impl App {
             status: "Initializing App...".to_string(),
             last_error: None,
             show_status_modal: false,
+            bookmark_path_prompt_action: None,
+            bookmark_path_draft: String::new(),
             tx: None,
         }
     }
@@ -269,6 +308,15 @@ impl App {
                     self.model_list_state.select(Some(current + 1));
                 }
             }
+        } else if self.active_tab == MainTab::Bookmarks {
+            let visible = self.visible_bookmarks();
+            if let Some(current) = self.bookmark_list_state.selected() {
+                if current < visible.len().saturating_sub(1) {
+                    self.bookmark_list_state.select(Some(current + 1));
+                }
+            } else if !visible.is_empty() {
+                self.bookmark_list_state.select(Some(0));
+            }
         }
     }
 
@@ -282,15 +330,21 @@ impl App {
             if current > 0 {
                 self.model_list_state.select(Some(current - 1));
             }
+        } else if self.active_tab == MainTab::Bookmarks {
+            let current = self.bookmark_list_state.selected().unwrap_or(0);
+            if current > 0 {
+                self.bookmark_list_state.select(Some(current - 1));
+            }
         }
     }
 
     pub fn select_next_version(&mut self) {
-        if self.active_tab == MainTab::Models {
-            let current = self.model_list_state.selected().unwrap_or(0);
-            if let Some(model) = self.models.get(current) {
-                let v_idx = self.selected_version_index.entry(model.id).or_insert(0);
-                if *v_idx < model.model_versions.len().saturating_sub(1) {
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view() {
+                let model_id = model.id;
+                let version_len = model.model_versions.len();
+                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
+                if *v_idx < version_len.saturating_sub(1) {
                     *v_idx += 1;
                 }
             }
@@ -298,10 +352,10 @@ impl App {
     }
 
     pub fn select_previous_version(&mut self) {
-        if self.active_tab == MainTab::Models {
-            let current = self.model_list_state.selected().unwrap_or(0);
-            if let Some(model) = self.models.get(current) {
-                let v_idx = self.selected_version_index.entry(model.id).or_insert(0);
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view() {
+                let model_id = model.id;
+                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
                 if *v_idx > 0 {
                     *v_idx -= 1;
                 }
@@ -317,15 +371,13 @@ impl App {
                     self.status = format!("Initiated download search for image {}...", img.id);
                 }
             }
-        } else if self.active_tab == MainTab::Models {
-            if let Some(current) = self.model_list_state.selected() {
-                if let Some(model) = self.models.get(current) {
-                    let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                    if let Some(version) = model.model_versions.get(v_idx) {
-                        if let Some(tx) = &self.tx {
-                            let _ = tx.try_send(WorkerCommand::DownloadModel(model.id, version.id));
-                            self.status = format!("Initiated download for {} (v: {})", model.name, version.name);
-                        }
+        } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
+                let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+                if let Some(version) = model.model_versions.get(v_idx) {
+                    if let Some(tx) = &self.tx {
+                        let _ = tx.try_send(WorkerCommand::DownloadModel(model.id, version.id));
+                        self.status = format!("Initiated download for {} (v: {})", model.name, version.name);
                     }
                 }
             }
@@ -439,16 +491,14 @@ impl App {
     }
 
     pub fn selected_model_version(&self) -> Option<(u64, u64)> {
-        let idx = self.model_list_state.selected()?;
-        let model = self.models.get(idx)?;
+        let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
         let version = model.model_versions.get(version_index)?;
         Some((model.id, version.id))
     }
 
     pub fn selected_model_version_with_cover_url(&self) -> Option<(u64, u64, Option<String>)> {
-        let idx = self.model_list_state.selected()?;
-        let model = self.models.get(idx)?;
+        let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
         let version = model.model_versions.get(version_index)?;
         Some((
@@ -457,4 +507,329 @@ impl App {
             version.images.first().map(|image| image.url.clone()),
         ))
     }
+
+    pub fn visible_bookmarks(&self) -> Vec<Model> {
+        let query = self.bookmark_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            self.bookmarks.clone()
+        } else {
+            self.bookmarks
+                .iter()
+                .filter(|model| model.name.to_ascii_lowercase().contains(&query))
+                .cloned()
+                .collect()
+        }
+    }
+
+    pub fn visible_bookmark_indices(&self) -> Vec<usize> {
+        let query = self.bookmark_query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            (0..self.bookmarks.len()).collect()
+        } else {
+            self.bookmarks
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, model)| {
+                    if model.name.to_ascii_lowercase().contains(&query) {
+                        Some(idx)
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+    }
+
+    pub fn clamp_bookmark_selection(&mut self) {
+        let visible = self.visible_bookmark_indices();
+        if visible.is_empty() {
+            self.bookmark_list_state.select(None);
+            return;
+        }
+
+        let selected = self.bookmark_list_state.selected().unwrap_or(0);
+        if selected >= visible.len() {
+            self.bookmark_list_state.select(Some(visible.len() - 1));
+        }
+    }
+
+    pub fn selected_model_in_active_view(&self) -> Option<&Model> {
+        match self.active_tab {
+            MainTab::Models => self
+                .models
+                .get(self.model_list_state.selected().unwrap_or(0)),
+            MainTab::Bookmarks => {
+                let visible = self.visible_bookmark_indices();
+                let selected = self.bookmark_list_state.selected().unwrap_or(0);
+                self.bookmarks.get(*visible.get(selected)?)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_model_bookmarked(&self, model_id: u64) -> bool {
+        self.bookmarks.iter().any(|model| model.id == model_id)
+    }
+
+    pub fn toggle_bookmark_for_selected_model(&mut self, model: &Model) {
+        if self.is_model_bookmarked(model.id) {
+            self.bookmarks.retain(|item| item.id != model.id);
+            self.status = format!("Removed bookmark: {}", model.name);
+            if self.active_tab == MainTab::Bookmarks {
+                self.clamp_bookmark_selection();
+            }
+        } else {
+            self.bookmarks.push(model.clone());
+            self.status = format!("Added bookmark: {}", model.name);
+        }
+        self.deduplicate_bookmarks();
+        self.persist_bookmarks();
+    }
+
+    pub fn confirm_remove_selected_bookmark(&mut self) {
+        let Some(model_id) = self.pending_bookmark_remove_id.take() else {
+            self.show_bookmark_confirm_modal = false;
+            return;
+        };
+
+        if let Some(pos) = self.bookmarks.iter().position(|model| model.id == model_id) {
+            let name = self.bookmarks[pos].name.clone();
+            self.bookmarks.remove(pos);
+            self.persist_bookmarks();
+            self.clamp_bookmark_selection();
+            self.status = format!("Removed bookmark: {}", name);
+        } else {
+            self.status = "Bookmark already removed.".to_string();
+        }
+
+        self.show_bookmark_confirm_modal = false;
+        self.pending_bookmark_remove_id = None;
+    }
+
+    pub fn cancel_bookmark_remove(&mut self) {
+        self.show_bookmark_confirm_modal = false;
+        self.pending_bookmark_remove_id = None;
+    }
+
+    pub fn request_bookmark_remove_selected(&mut self) {
+        if self.active_tab != MainTab::Bookmarks {
+            return;
+        }
+
+        if let Some(model) = self.selected_model_in_active_view() {
+            self.pending_bookmark_remove_id = Some(model.id);
+            self.show_bookmark_confirm_modal = true;
+        } else {
+            self.status = "No bookmark selected".to_string();
+        }
+    }
+
+    pub fn begin_bookmark_search(&mut self) {
+        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.mode = AppMode::SearchBookmarks;
+        self.status = "Search bookmarks. Enter apply, Esc cancel".to_string();
+    }
+
+    pub fn begin_bookmark_export_prompt(&mut self) {
+        self.bookmark_path_draft = self
+            .effective_bookmark_file_path()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.bookmark_path_prompt_action = Some(BookmarkPathAction::Export);
+        self.mode = AppMode::BookmarkPathPrompt;
+        self.status = "Bookmark export path. Enter to confirm, Esc to cancel.".to_string();
+    }
+
+    pub fn begin_bookmark_import_prompt(&mut self) {
+        self.bookmark_path_draft = self
+            .effective_bookmark_file_path()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
+        self.bookmark_path_prompt_action = Some(BookmarkPathAction::Import);
+        self.mode = AppMode::BookmarkPathPrompt;
+        self.status = "Bookmark import path. Enter to confirm, Esc to cancel.".to_string();
+    }
+
+    pub fn cancel_bookmark_path_prompt(&mut self) {
+        self.bookmark_path_prompt_action = None;
+        self.mode = AppMode::Browsing;
+        self.status = "Bookmark path input cancelled.".to_string();
+    }
+
+    pub fn apply_bookmark_path_prompt(&mut self) {
+        let action = self.bookmark_path_prompt_action.take();
+        if action.is_none() {
+            self.mode = AppMode::Browsing;
+            return;
+        }
+
+        self.mode = AppMode::Browsing;
+
+        let path = {
+            let trimmed = self.bookmark_path_draft.trim();
+            if trimmed.is_empty() {
+                self.effective_bookmark_file_path()
+            } else {
+                Some(PathBuf::from(trimmed))
+            }
+        };
+
+        let Some(path) = path else {
+            self.status = "No bookmark file path configured.".to_string();
+            return;
+        };
+
+        self.set_bookmark_file_path(path.clone());
+
+        match action {
+            Some(BookmarkPathAction::Export) => self.export_bookmarks_to_path(path),
+            Some(BookmarkPathAction::Import) => self.import_bookmarks_from_path(path),
+            None => {}
+        }
+    }
+
+    pub fn effective_bookmark_file_path(&self) -> Option<PathBuf> {
+        self.bookmark_file_path
+            .clone()
+            .or_else(crate::config::AppConfig::bookmark_path)
+    }
+
+    pub fn effective_bookmark_file_path_text(&self) -> String {
+        self.effective_bookmark_file_path()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Not configured".to_string())
+    }
+
+    pub fn set_bookmark_file_path(&mut self, path: PathBuf) {
+        self.bookmark_file_path = Some(path.clone());
+        self.config.bookmark_file_path = Some(path);
+    }
+
+    pub fn is_bookmark_export_prompt(&self) -> bool {
+        matches!(self.bookmark_path_prompt_action, Some(BookmarkPathAction::Export))
+    }
+
+    pub fn apply_bookmark_query(&mut self) {
+        self.bookmark_query = self.bookmark_query_draft.clone();
+        self.mode = AppMode::Browsing;
+        self.clamp_bookmark_selection();
+        self.status = format!(
+            "Bookmark query applied: {}",
+            if self.bookmark_query.is_empty() {
+                "<all>".to_string()
+            } else {
+                self.bookmark_query.clone()
+            }
+        );
+    }
+
+    pub fn cancel_bookmark_search(&mut self) {
+        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.mode = AppMode::Browsing;
+        self.status = "Bookmark search cancelled.".to_string();
+    }
+
+    pub fn export_bookmarks_to_file(&mut self) {
+        let Some(path) = self.effective_bookmark_file_path() else {
+            self.status = "No bookmark export path available.".to_string();
+            return;
+        };
+        self.export_bookmarks_to_path(path)
+    }
+
+    pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {
+        self.set_bookmark_file_path(path.clone());
+
+        if let Err(err) = save_bookmarks_to_file(&path, &self.bookmarks) {
+            self.last_error = Some(err.to_string());
+            self.status = "Failed to export bookmarks".to_string();
+            return;
+        }
+
+        self.last_error = None;
+        self.status = format!(
+            "Exported {} bookmarks to {}",
+            self.bookmarks.len(),
+            path.display()
+        );
+    }
+
+    pub fn import_bookmarks_from_file(&mut self) {
+        let Some(path) = self.effective_bookmark_file_path() else {
+            self.status = "No bookmark import path available.".to_string();
+            return;
+        };
+        self.import_bookmarks_from_path(path)
+    }
+
+    pub fn import_bookmarks_from_path(&mut self, path: PathBuf) {
+        self.set_bookmark_file_path(path.clone());
+        let mut imported = load_bookmarks(Some(path.as_path()));
+        if imported.is_empty() {
+            self.status = "No bookmarks found in import file.".to_string();
+            return;
+        }
+
+        let before = self.bookmarks.len();
+        self.bookmarks.append(&mut imported);
+        self.deduplicate_bookmarks();
+        self.clamp_bookmark_selection();
+        self.persist_bookmarks();
+
+        if self.bookmarks.len() > before {
+            self.status = format!("Imported {} new bookmark(s).", self.bookmarks.len() - before);
+            self.last_error = None;
+        } else {
+            self.status = "Import completed, no new bookmarks.".to_string();
+        }
+    }
+
+    fn deduplicate_bookmarks(&mut self) {
+        let mut seen = HashSet::new();
+        self.bookmarks.retain(|model| seen.insert(model.id));
+    }
+
+    pub fn persist_bookmarks(&mut self) {
+        if let Some(path) = &self.bookmark_file_path {
+            if let Err(err) = save_bookmarks_to_file(path, &self.bookmarks) {
+                self.last_error = Some(err.to_string());
+            } else {
+                self.last_error = None;
+            }
+        }
+    }
+}
+
+fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut models: Vec<Model> = match serde_json::from_str(&content) {
+        Ok(models) => models,
+        Err(_) => Vec::new(),
+    };
+
+    let mut seen = HashSet::new();
+    models.retain(|model| seen.insert(model.id));
+    models
+}
+
+fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let mut normalized = bookmarks.to_vec();
+    let mut seen = HashSet::new();
+    normalized.retain(|model| seen.insert(model.id));
+
+    let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
 }

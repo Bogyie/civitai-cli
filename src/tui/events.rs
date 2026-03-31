@@ -99,10 +99,61 @@ pub async fn run_event_loop(
                             continue; // Skip global navigation if form is active
                         }
 
+                        if app.mode == AppMode::SearchBookmarks {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.cancel_bookmark_search();
+                                }
+                                KeyCode::Enter => {
+                                    app.apply_bookmark_query();
+                                }
+                                KeyCode::Char(c) => {
+                                    app.bookmark_query_draft.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.bookmark_query_draft.pop();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.mode == AppMode::BookmarkPathPrompt {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.cancel_bookmark_path_prompt();
+                                }
+                                KeyCode::Enter => {
+                                    app.apply_bookmark_path_prompt();
+                                }
+                                KeyCode::Char(c) => {
+                                    app.bookmark_path_draft.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.bookmark_path_draft.pop();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if app.show_status_modal {
                             match key.code {
                                 KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter => {
                                     app.show_status_modal = false;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.show_bookmark_confirm_modal {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    app.confirm_remove_selected_bookmark();
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                    app.cancel_bookmark_remove();
                                 }
                                 _ => {}
                             }
@@ -117,8 +168,16 @@ pub async fn run_event_loop(
                                 KeyCode::Enter => {
                                     if app.settings_form.focused_field == 0 {
                                         app.config.api_key = if app.settings_form.input_buffer.is_empty() { None } else { Some(app.settings_form.input_buffer.clone()) };
-                                    } else {
+                                    } else if app.settings_form.focused_field == 1 {
                                         app.config.comfyui_path = if app.settings_form.input_buffer.is_empty() { None } else { Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone())) };
+                                    } else {
+                                        let path = if app.settings_form.input_buffer.is_empty() {
+                                            None
+                                        } else {
+                                            Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
+                                        };
+                                        app.config.bookmark_file_path = path.clone();
+                                        app.bookmark_file_path = path;
                                     }
                                     if let Err(e) = app.config.save() {
                                         app.last_error = Some(format!("Failed to save config: {}", e));
@@ -145,16 +204,32 @@ pub async fn run_event_loop(
                         match key.code {
                             KeyCode::Tab => {
                                 app.active_tab = match app.active_tab {
-                                    MainTab::Models => MainTab::Images,
+                                    MainTab::Models => MainTab::Bookmarks,
+                                    MainTab::Bookmarks => MainTab::Images,
                                     MainTab::Images => MainTab::Downloads,
                                     MainTab::Downloads => MainTab::Settings,
                                     MainTab::Settings => MainTab::Models,
                                 };
+                                if app.active_tab == MainTab::Bookmarks {
+                                    app.clamp_bookmark_selection();
+                                }
                             }
-                            KeyCode::Char('1') => app.active_tab = MainTab::Models,
-                            KeyCode::Char('2') => app.active_tab = MainTab::Images,
-                            KeyCode::Char('3') => app.active_tab = MainTab::Downloads,
-                            KeyCode::Char('4') => app.active_tab = MainTab::Settings,
+                            KeyCode::Char('1') => {
+                                app.active_tab = MainTab::Models;
+                            }
+                            KeyCode::Char('2') => {
+                                app.active_tab = MainTab::Bookmarks;
+                                app.clamp_bookmark_selection();
+                            }
+                            KeyCode::Char('3') => {
+                                app.active_tab = MainTab::Images;
+                            }
+                            KeyCode::Char('4') => {
+                                app.active_tab = MainTab::Downloads;
+                            }
+                            KeyCode::Char('5') => {
+                                app.active_tab = MainTab::Settings;
+                            }
                             KeyCode::Char('q') | KeyCode::Esc => {
                                 if let Some(tx) = &app.tx {
                                     let _ = tx.try_send(WorkerCommand::Quit);
@@ -166,10 +241,12 @@ pub async fn run_event_loop(
                                     app.settings_form.editing = true;
                                     app.settings_form.input_buffer = if app.settings_form.focused_field == 0 {
                                         app.config.api_key.clone().unwrap_or_default()
-                                    } else {
+                                    } else if app.settings_form.focused_field == 1 {
                                         app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+                                    } else {
+                                        app.config.bookmark_file_path.as_ref().map(|path| path.to_string_lossy().to_string()).unwrap_or_default()
                                     };
-                                } else if app.active_tab == MainTab::Models {
+                                } else if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.show_model_details = !app.show_model_details;
                                     app.status = if app.show_model_details {
                                         "Model details panel enabled".into()
@@ -178,9 +255,18 @@ pub async fn run_event_loop(
                                     };
                                 }
                             }
+                            KeyCode::Char('b') => {
+                                if app.active_tab == MainTab::Models {
+                                    if let Some(model) = app.selected_model_in_active_view().cloned() {
+                                        app.toggle_bookmark_for_selected_model(&model);
+                                    }
+                                } else if app.active_tab == MainTab::Bookmarks {
+                                    app.request_bookmark_remove_selected();
+                                }
+                            }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < 1 { app.settings_form.focused_field += 1; }
+                                    if app.settings_form.focused_field < 2 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -189,7 +275,7 @@ pub async fn run_event_loop(
                                     }
                                 } else {
                                     app.select_next();
-                                    if app.active_tab == MainTab::Models {
+                                    if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                     }
                                 }
@@ -205,19 +291,19 @@ pub async fn run_event_loop(
                                     }
                                 } else {
                                     app.select_previous();
-                                    if app.active_tab == MainTab::Models {
+                                    if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                     }
                                 }
                             }
                             KeyCode::Char('h') | KeyCode::Left => {
-                                if app.active_tab == MainTab::Models {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_previous_version();
                                     send_cover_priority(app);
                                 }
                             },
                             KeyCode::Char('l') | KeyCode::Right => {
-                                if app.active_tab == MainTab::Models {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_next_version();
                                     send_cover_priority(app);
                                 }
@@ -338,7 +424,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('m') => { app.show_status_modal = true; }
                             KeyCode::Char(' ') => {
-                                if app.active_tab == MainTab::Models {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.show_model_details = !app.show_model_details;
                                     app.status = if app.show_model_details {
                                         "Model details panel enabled".into()
@@ -351,8 +437,20 @@ pub async fn run_event_loop(
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
                                     app.status = "Configure search options. Press Enter to submit, Esc to cancel.".into();
+                                } else if app.active_tab == MainTab::Bookmarks {
+                                    app.begin_bookmark_search();
                                 }
                             }
+                                KeyCode::Char('e') => {
+                                    if app.active_tab == MainTab::Bookmarks {
+                                        app.begin_bookmark_export_prompt();
+                                    }
+                                }
+                                KeyCode::Char('i') => {
+                                    if app.active_tab == MainTab::Bookmarks {
+                                        app.begin_bookmark_import_prompt();
+                                    }
+                                }
                             _ => {}
                         }
                      }

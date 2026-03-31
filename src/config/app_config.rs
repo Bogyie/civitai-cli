@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub struct AppConfig {
     pub api_key: Option<String>,
     pub comfyui_path: Option<PathBuf>,
+    pub bookmark_file_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -48,5 +49,13 @@ impl AppConfig {
     pub fn config_path() -> Option<PathBuf> {
         ProjectDirs::from("com", "civitai", "civitai-cli")
             .map(|proj_dirs| proj_dirs.config_dir().join("config.toml"))
+    }
+
+    pub fn config_dir() -> Option<PathBuf> {
+        ProjectDirs::from("com", "civitai", "civitai-cli").map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
+    }
+
+    pub fn bookmark_path() -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("bookmarks.json"))
     }
 }

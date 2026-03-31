@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap},
     Frame, Terminal,
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{protocol::StatefulProtocol, StatefulImage};
 use std::io::{self, Stdout};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -43,15 +43,17 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     let titles = vec![
         " Models (1) ",
-        " Image Feed (2) ",
-        " Downloads (3) ",
-        " Settings (4) ",
+        " Bookmarks (2) ",
+        " Image Feed (3) ",
+        " Downloads (4) ",
+        " Settings (5) ",
     ];
     let active_idx = match app.active_tab {
         MainTab::Models => 0,
-        MainTab::Images => 1,
-        MainTab::Downloads => 2,
-        MainTab::Settings => 3,
+        MainTab::Bookmarks => 1,
+        MainTab::Images => 2,
+        MainTab::Downloads => 3,
+        MainTab::Settings => 4,
     };
     
     let tabs = Tabs::new(titles)
@@ -70,6 +72,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .split(chunks[1]);
 
             draw_model_search_summary(f, app, model_chunks[0]);
+            let show_model_details = app.show_model_details;
+            let selected_model = app.selected_model_in_active_view().cloned();
+            let bookmarked_ids: Vec<u64> = app.bookmarks.iter().map(|model| model.id).collect();
 
             if app.show_model_details {
                 let split = Layout::default()
@@ -77,14 +82,70 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
                     .split(model_chunks[1]);
 
-                draw_model_list(f, app, split[0]);
-                draw_model_sidebar(f, app, split[1]);
+                draw_model_list(
+                    f,
+                    split[0],
+                    &app.models,
+                    &app.model_list_state,
+                    show_model_details,
+                    &bookmarked_ids,
+                );
+                draw_model_sidebar(f, app, split[1], selected_model.as_ref());
             } else {
-                draw_model_list(f, app, model_chunks[1]);
+                draw_model_list(
+                    f,
+                    model_chunks[1],
+                    &app.models,
+                    &app.model_list_state,
+                    show_model_details,
+                    &bookmarked_ids,
+                );
             }
             
             if app.mode == AppMode::SearchForm {
                 draw_search_popup(f, app);
+            }
+        }
+        MainTab::Bookmarks => {
+            let bookmark_items = app.visible_bookmarks();
+            let bookmark_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(chunks[1]);
+            let selected_bookmark_model = app.selected_model_in_active_view().cloned();
+
+            draw_bookmark_search_summary(f, app, bookmark_chunks[0]);
+            if app.show_model_details {
+                let split = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
+                    .split(bookmark_chunks[1]);
+
+                draw_model_list(
+                    f,
+                    split[0],
+                    &bookmark_items,
+                    &app.bookmark_list_state,
+                    app.show_model_details,
+                    &[],
+                );
+                draw_model_sidebar(f, app, split[1], selected_bookmark_model.as_ref());
+            } else {
+                draw_model_list(
+                    f,
+                    bookmark_chunks[1],
+                    &bookmark_items,
+                    &app.bookmark_list_state,
+                    app.show_model_details,
+                    &[],
+                );
+            }
+
+            if app.mode == AppMode::SearchBookmarks {
+                draw_bookmark_search_popup(f, app);
+            }
+            if app.mode == AppMode::BookmarkPathPrompt {
+                draw_bookmark_path_prompt(f, app);
             }
         }
         MainTab::Images => {
@@ -108,6 +169,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_status_modal {
         draw_status_modal(f, app);
     }
+
+    if app.show_bookmark_confirm_modal {
+        draw_bookmark_confirm_modal(f, app);
+    }
+
 }
 
 fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
@@ -430,9 +496,34 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(path_val, if fm.focused_field == 1 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) })
     ]));
 
+    let bookmark_path_val = if fm.editing && fm.focused_field == 2 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config
+            .bookmark_file_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .or_else(|| crate::config::AppConfig::bookmark_path().map(|path| path.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "Not Configured".to_string())
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 2 { "> Bookmark File: " } else { "  Bookmark File: " },
+            Style::default().fg(if fm.focused_field == 2 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            bookmark_path_val,
+            if fm.focused_field == 2 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
     lines.push(Line::from(""));
     if fm.editing {
-        lines.push(Line::from(Span::styled(" [Type to edit] | [Enter] Save | [Esc] Cancel", Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(
+            " [Type to edit] | [Enter] Save | [Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )));
     } else {
         lines.push(Line::from(Span::styled(" [Up/Down] Highlight | [Enter] Edit string", Style::default().fg(Color::DarkGray))));
     }
@@ -509,25 +600,50 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_model_list(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
+    let query = if app.bookmark_query.is_empty() {
+        "<all>"
+    } else {
+        &app.bookmark_query
+    };
+    let summary = format!(
+        "🔍 Bookmarks Query: \"{}\" | Total: {}",
+        query,
+        app.visible_bookmarks().len()
+    );
+
+    let para = Paragraph::new(summary)
+        .alignment(Alignment::Left)
+        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .wrap(Wrap { trim: true });
+    f.render_widget(para, area);
+}
+
+fn draw_model_list(
+    f: &mut Frame,
+    area: Rect,
+    models: &[crate::api::Model],
+    list_state: &ListState,
+    show_model_details: bool,
+    bookmarked_ids: &[u64],
+) {
     let block = Block::default().borders(Borders::ALL).title(" Searched Models ");
 
-    if app.models.is_empty() {
+    if models.is_empty() {
         f.render_widget(Paragraph::new("No models found. Press '/' to search.").block(block), area);
         return;
     }
 
-    let selected_idx = app
-        .model_list_state
+    let selected_idx = list_state
         .selected()
         .unwrap_or(0)
-        .min(app.models.len().saturating_sub(1));
-    let show_metadata = !app.show_model_details;
-    let mut rows_cache: Vec<(String, String, String, bool)> = Vec::with_capacity(app.models.len());
+        .min(models.len().saturating_sub(1));
+    let show_metadata = !show_model_details;
+    let mut rows_cache: Vec<(String, String, String, bool, bool)> = Vec::with_capacity(models.len());
     let mut down_width = "Down".len();
     let mut rate_width = "Rate".len();
 
-    for model in app.models.iter() {
+    for model in models.iter() {
         let downloads = model.stats.as_ref().map(|s| s.download_count).unwrap_or(0);
         let rating = model.stats.as_ref().map(|s| s.rating).unwrap_or(0.0);
         let down_text = if show_metadata {
@@ -543,7 +659,8 @@ fn draw_model_list(f: &mut Frame, app: &mut App, area: Rect) {
 
         down_width = down_width.max(down_text.chars().count());
         rate_width = rate_width.max(rate_text.chars().count());
-        rows_cache.push((down_text, rate_text, model.name.clone(), model.nsfw));
+        let is_bookmarked = bookmarked_ids.contains(&model.id);
+        rows_cache.push((down_text, rate_text, model.name.clone(), model.nsfw, is_bookmarked));
     }
 
     if down_width < 6 {
@@ -569,21 +686,35 @@ fn draw_model_list(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let mut items: Vec<ListItem> = Vec::with_capacity(rows_cache.len());
-    for (idx, (down_text, rate_text, mut name, is_nsfw)) in rows_cache.into_iter().enumerate() {
+    for (idx, (down_text, rate_text, name, is_nsfw, is_bookmarked)) in
+        rows_cache.into_iter().enumerate()
+    {
         let is_selected = idx == selected_idx;
         let down_text = compact_cell_text(down_text, down_width);
         let rate_text = compact_cell_text(rate_text, rate_width);
-        if is_selected && name.chars().count() > name_width {
+        let mut display_name = if is_bookmarked {
+            format!("★ {}", name)
+        } else {
+            name
+        };
+
+        if is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_else(|_| Duration::from_millis(0))
                 .as_millis();
-            let shift = ((now_ms / 260) as usize) % name.chars().count().max(1);
-            name = rotate_left_chars(&name, shift);
+            let shift = ((now_ms / 260) as usize) % display_name.chars().count().max(1);
+            display_name = rotate_left_chars(&display_name, shift);
         }
 
         if show_metadata {
-            let style = if is_nsfw { Style::default().fg(Color::Red) } else { Style::default().fg(Color::White) };
+            let style = if is_bookmarked {
+                Style::default().fg(Color::Green)
+            } else if is_nsfw {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::White)
+            };
             let spans = vec![
                 Span::styled(
                     format!(
@@ -603,14 +734,20 @@ fn draw_model_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(" ", Style::default().fg(Color::DarkGray)),
-                Span::styled(compact_cell_text(name, name_width), style),
+                Span::styled(compact_cell_text(display_name.clone(), name_width), style),
             ];
             let item = ListItem::new(Line::from(spans));
             items.push(item);
         } else {
-            let style = if is_nsfw { Style::default().fg(Color::Red) } else { Style::default().fg(Color::White) };
+            let style = if is_bookmarked {
+                Style::default().fg(Color::Green)
+            } else if is_nsfw {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::White)
+            };
             let item = ListItem::new(Line::from(Span::styled(
-                compact_cell_text(name, name_width),
+                compact_cell_text(display_name, name_width),
                 style,
             )));
             items.push(item);
@@ -643,12 +780,19 @@ fn draw_model_list(f: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD))
         .highlight_symbol("");
-    let mut list_state = ListState::default();
-    list_state.select(Some(selected_idx.saturating_sub(start_idx)));
-    f.render_stateful_widget(list, area, &mut list_state);
+    let mut state = list_state.clone();
+    if !models.is_empty() {
+        state.select(Some(selected_idx.saturating_sub(start_idx)));
+    }
+    f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+fn draw_model_sidebar(
+    f: &mut Frame,
+    app: &mut App,
+    area: Rect,
+    selected_model: Option<&crate::api::Model>,
+) {
     let split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -659,12 +803,7 @@ fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         ])
         .split(area);
 
-    let selected_idx = app
-        .model_list_state
-        .selected()
-        .unwrap_or(0)
-        .min(app.models.len().saturating_sub(1));
-    if let Some(model) = app.models.get(selected_idx) {
+    if let Some(model) = selected_model {
         let v_idx = *app.selected_version_index.get(&model.id).unwrap_or(&0);
         let safe_v_idx = v_idx.min(model.model_versions.len().saturating_sub(1));
         let selected_version = model.model_versions.get(safe_v_idx);
@@ -880,9 +1019,9 @@ fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
 
         if let Some(image_version_id) = image_version_id {
             let protocol = app.model_version_image_cache.get_mut(&image_version_id);
-            let image_widget = StatefulImage::new();
-            if let Some(protocol) = protocol {
-                f.render_stateful_widget(image_widget, inner_img_area, protocol);
+            if let Some(mut protocol) = protocol {
+                let image_widget: StatefulImage<StatefulProtocol> = StatefulImage::new();
+                f.render_stateful_widget(image_widget, inner_img_area, &mut protocol);
             } else {
                 if !selected_version_has_image {
                     f.render_widget(Paragraph::new("No thumbnail available.").alignment(Alignment::Center), inner_img_area);
@@ -943,6 +1082,57 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_bookmark_search_popup(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Bookmark Search ");
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}█", app.bookmark_query_draft)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Enter] Apply | [Esc] Cancel | [Type] Query",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let area = centered_rect(40, 25, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
+fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Bookmark File Path ");
+
+    let action = if app.is_bookmark_export_prompt() {
+        "Export"
+    } else {
+        "Import"
+    };
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(format!("{} Path: ", action), Style::default().fg(Color::Yellow)),
+            Span::raw(format!("{}█", app.bookmark_path_draft)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "[Enter] Run | [Esc] Cancel | [Backspace] Delete | [Type] Path",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let area = centered_rect(55, 28, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
 fn draw_status_modal(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -967,6 +1157,27 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
+    let name = app
+        .pending_bookmark_remove_id
+        .and_then(|model_id| app.bookmarks.iter().find(|model| model.id == model_id))
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| "selected bookmark".to_string());
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Remove Bookmark ");
+    let lines = vec![
+        Line::from(format!("Remove bookmark: {}", name)),
+        Line::from(""),
+        Line::from(Span::styled("Press Y to confirm, N or Esc to cancel.", Style::default().fg(Color::DarkGray))),
+    ];
+    let p = Paragraph::new(lines).block(block).alignment(Alignment::Center);
+    let area = centered_rect(50, 20, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -983,10 +1194,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => "[1] Models | [2] Image Feed | [3] Downloads | [4] Settings | [/] Search | [Space/Enter] Toggle Details",
-        MainTab::Images => "[1] Models | [2] Image Feed | [3] Downloads | [4] Settings | [d] Download | [m] Status",
-        MainTab::Downloads => "[1] Models | [2] Image Feed | [3] Downloads | [4] Settings | [j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [p] Pause/Resume | [c] Cancel",
-        MainTab::Settings => "[1] Models | [2] Image Feed | [3] Downloads | [4] Settings | [Enter] Edit | [m] Status",
+        MainTab::Models => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [/] Search | [b] Bookmark | [Space/Enter] Details",
+        MainTab::Bookmarks => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
+        MainTab::Images => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [d] Download | [m] Status",
+        MainTab::Downloads => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [p] Pause/Resume | [c] Cancel",
+        MainTab::Settings => "[1] Models | [2] Bookmarks | [3] Image Feed | [4] Downloads | [5] Settings | [Enter] Edit | [m] Status",
     };
 
     let shortcut_line = Line::from(Span::styled(shortcuts, Style::default().fg(Color::DarkGray)));
