@@ -75,11 +75,6 @@ jobs:
             target: armv7-unknown-linux-gnueabihf
             package_ext: tar.gz
             use_cross: true
-          - name: macos-x86_64
-            runner: macos-13
-            target: x86_64-apple-darwin
-            package_ext: tar.gz
-            use_cross: false
           - name: macos-aarch64
             runner: macos-latest
             target: aarch64-apple-darwin
@@ -99,6 +94,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
 
       - name: Install cross
         if: matrix.use_cross
