@@ -34,13 +34,15 @@ pub enum BookmarkPathAction {
 
 pub struct SearchFormState {
     pub query: String,
-    pub focused_field: usize, // 0: Query, 1: Type, 2: Sort, 3: BaseModel
+    pub focused_field: usize, // 0: Query, 1: Type, 2: Sort, 3: BaseModel, 4: Period
     pub selected_type: usize,
     pub types: Vec<String>,
     pub selected_sort: usize,
     pub sorts: Vec<String>,
     pub selected_base: usize,
     pub bases: Vec<String>,
+    pub selected_period: usize,
+    pub periods: Vec<String>,
 }
 
 pub struct SettingsFormState {
@@ -124,6 +126,8 @@ impl SearchFormState {
                 "ZImageTurbo".into(),
                 "ZImageBase".into(),
             ],
+            selected_period: 0,
+            periods: vec!["AllTime".into(), "Year".into(), "Month".into(), "Week".into(), "Day".into()],
         }
     }
 
@@ -131,12 +135,12 @@ impl SearchFormState {
         crate::api::client::SearchOptions {
             query: self.query.clone(),
             limit: 50,
-            page: Some(1),
+            page: None,
             tag: None,
             username: None,
             types: Some(self.types[self.selected_type].clone()),
             sort: Some(self.sorts[self.selected_sort].clone()),
-            period: None,
+            period: Some(self.periods[self.selected_period].clone()),
             rating: None,
             favorites: None,
             hidden: None,
@@ -156,7 +160,7 @@ impl SearchFormState {
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>),
     ImageDecoded(u64, StatefulProtocol),
-    ModelsSearchedChunk(Vec<Model>, bool, bool),
+    ModelsSearchedChunk(Vec<Model>, bool, bool, Option<String>),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
@@ -222,7 +226,14 @@ pub struct InterruptedDownloadSession {
 
 pub enum WorkerCommand {
     FetchImages,
-    SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>, bool, bool),
+    SearchModels(
+        crate::api::client::SearchOptions,
+        Option<u64>,
+        Option<u64>,
+        bool,
+        bool,
+        Option<String>,
+    ),
     ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
     DownloadModelForImage(u64),
@@ -246,6 +257,7 @@ pub struct App {
     pub model_search_page: u32,
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
+    pub model_search_next_page: Option<String>,
     pub bookmarks: Vec<Model>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
@@ -332,6 +344,7 @@ impl App {
             model_search_page: 1,
             model_search_has_more: true,
             model_search_loading_more: false,
+            model_search_next_page: None,
             bookmarks,
             show_model_details: false,
             model_list_state,
@@ -390,7 +403,7 @@ impl App {
 
     pub fn model_search_options(&self, page: u32) -> crate::api::client::SearchOptions {
         let mut options = self.search_form.build_options();
-        options.page = Some(if page == 0 { 1 } else { page });
+        options.page = if page > 1 { Some(page) } else { None };
         options
     }
 
@@ -402,14 +415,14 @@ impl App {
             && self.model_search_page >= 1
     }
 
-    pub fn next_model_search_options_if_needed(&mut self) -> Option<crate::api::client::SearchOptions> {
+    pub fn next_model_search_options_if_needed(&mut self) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
         if !self.can_request_more_models() {
             return None;
         }
 
         self.model_search_page = self.model_search_page.saturating_add(1);
         self.model_search_loading_more = true;
-        Some(self.model_search_options(self.model_search_page))
+        Some((self.model_search_options(self.model_search_page), self.model_search_next_page.clone()))
     }
 
     pub fn select_next(&mut self) {
@@ -454,33 +467,26 @@ impl App {
         }
     }
 
-    pub fn append_models_results(&mut self, mut new_models: Vec<Model>, has_more: bool) {
+    pub fn append_models_results(&mut self, mut new_models: Vec<Model>, has_more: bool, next_page: Option<String>) {
         if new_models.is_empty() {
             self.model_search_has_more = has_more;
             self.model_search_loading_more = false;
+            self.model_search_next_page = next_page;
             return;
         }
 
-        let mut existing_ids = HashSet::new();
-        for model in &self.models {
-            existing_ids.insert(model.id);
-        }
-
-        for model in new_models.drain(..) {
-            if existing_ids.insert(model.id) {
-                self.models.push(model);
-            }
-        }
-
+        self.models.append(&mut new_models);
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
+        self.model_search_next_page = next_page;
     }
 
-    pub fn set_models_results(&mut self, models: Vec<Model>, has_more: bool) {
+    pub fn set_models_results(&mut self, models: Vec<Model>, has_more: bool, next_page: Option<String>) {
         self.models = models;
         self.model_search_page = 1;
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
+        self.model_search_next_page = next_page;
         self.model_list_state.select(Some(0));
     }
 

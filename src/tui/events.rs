@@ -1,13 +1,43 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::fs;
+use std::fs::{self, create_dir_all, OpenOptions};
 use std::io::Stdout;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
+use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::tui::app::{App, AppMessage, AppMode, DownloadState, MainTab, WorkerCommand, DownloadHistoryStatus};
 use crate::tui::ui;
+
+fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
+    crate::config::AppConfig::config_dir().or_else(|| config.search_cache_path()).map(|dir| dir.join("fetch_debug.log"))
+}
+
+fn debug_fetch_log_to_file(path: &std::path::Path, message: &str) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+
+    if let Some(parent) = path.parent() {
+        let _ = create_dir_all(parent);
+    }
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|dur| dur.as_secs())
+            .unwrap_or_default();
+        let _ = writeln!(file, "[{}] {}", ts, message);
+    }
+}
+
+fn debug_fetch_log(config: &crate::config::AppConfig, message: &str) {
+    if let Some(path) = debug_fetch_log_path(config) {
+        debug_fetch_log_to_file(&path, message);
+    }
+}
 
 pub async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
@@ -51,7 +81,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.search_form.focused_field < 3 {
+                                    if app.search_form.focused_field < 4 {
                                         app.search_form.focused_field += 1;
                                     }
                                 }
@@ -69,6 +99,10 @@ pub async fn run_event_loop(
                                             if app.search_form.selected_base > 0 { app.search_form.selected_base -= 1; }
                                             else { app.search_form.selected_base = app.search_form.bases.len() - 1; }
                                         }
+                                        4 => {
+                                            if app.search_form.selected_period > 0 { app.search_form.selected_period -= 1; }
+                                            else { app.search_form.selected_period = app.search_form.periods.len() - 1; }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -77,6 +111,7 @@ pub async fn run_event_loop(
                                         1 => app.search_form.selected_type = (app.search_form.selected_type + 1) % app.search_form.types.len(),
                                         2 => app.search_form.selected_sort = (app.search_form.selected_sort + 1) % app.search_form.sorts.len(),
                                         3 => app.search_form.selected_base = (app.search_form.selected_base + 1) % app.search_form.bases.len(),
+                                        4 => app.search_form.selected_period = (app.search_form.selected_period + 1) % app.search_form.periods.len(),
                                         _ => {}
                                     }
                                 }
@@ -84,13 +119,23 @@ pub async fn run_event_loop(
                                     app.mode = AppMode::Browsing;
                                     let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
                                     let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
+                                    let search_options = app.search_form.build_options();
+                                    debug_fetch_log(
+                                        &app.config,
+                                        &format!(
+                                            "UI: search submit query=\"{}\" limit={} page=1 append=false force_refresh=false",
+                                            app.search_form.query,
+                                            search_options.limit
+                                        ),
+                                    );
                                     if let Some(tx) = &app.tx {
                                         let _ = tx.try_send(WorkerCommand::SearchModels(
-                                            app.search_form.build_options(),
+                                            search_options,
                                             selected_model_id,
                                             selected_version_id,
                                             false,
                                             false,
+                                            None,
                                         ));
                                         app.model_search_page = 1;
                                         app.model_search_has_more = true;
@@ -446,20 +491,33 @@ pub async fn run_event_loop(
                                 } else {
                                     app.select_next();
                                     if app.active_tab == MainTab::Models && app.can_request_more_models() {
+                                        let prefetch_threshold = 30usize;
                                         let load_more = app
                                             .model_list_state
                                             .selected()
-                                            .is_some_and(|selected| selected + 1 >= app.models.len());
+                                            .is_some_and(|selected| {
+                                                let trigger_idx = app.models.len().saturating_sub(prefetch_threshold);
+                                                selected >= trigger_idx
+                                            });
                                         if load_more {
-                                            if let Some(opts) = app.next_model_search_options_if_needed() {
-                                                if let Some(tx) = &app.tx {
-                                                    let _ = tx.try_send(WorkerCommand::SearchModels(
-                                                        opts,
-                                                        None,
-                                                        None,
-                                                        false,
-                                                        true,
-                                                    ));
+                                            if let Some((opts, next_page)) = app.next_model_search_options_if_needed() {
+                                                debug_fetch_log(
+                                                    &app.config,
+                                                    &format!(
+                                                    "UI: request more models page={} append=true query=\"{}\"",
+                                                    opts.page.unwrap_or(0),
+                                                    opts.query
+                                                ),
+                                            );
+                                            if let Some(tx) = &app.tx {
+                                                let _ = tx.try_send(WorkerCommand::SearchModels(
+                                                    opts,
+                                                    None,
+                                                    None,
+                                                    false,
+                                                    true,
+                                                    next_page,
+                                                ));
                                                     app.status =
                                                         format!("Loading more results (page {})...", app.model_search_page);
                                                 }
@@ -673,12 +731,20 @@ pub async fn run_event_loop(
                                     if let Some(tx) = &app.tx {
                                         let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
                                         let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
+                                        debug_fetch_log(
+                                            &app.config,
+                                            &format!(
+                                                "UI: refresh search query=\"{}\" force=true append=false",
+                                                app.search_form.query
+                                            ),
+                                        );
                                         let _ = tx.try_send(WorkerCommand::SearchModels(
                                             app.search_form.build_options(),
                                             selected_model_id,
                                             selected_version_id,
                                             true,
                                             false,
+                                            None,
                                         ));
                                         app.model_search_page = 1;
                                         app.model_search_has_more = true;
@@ -740,10 +806,31 @@ pub async fn run_event_loop(
                      AppMessage::ModelCoverLoadFailed(version_id) => {
                          app.model_version_image_failed.insert(version_id);
                      }
-                     AppMessage::ModelsSearchedChunk(results, append, has_more) => {
+                     AppMessage::ModelsSearchedChunk(results, append, has_more, next_page) => {
+                         let before_count = app.models.len();
+                         debug_fetch_log(
+                             &app.config,
+                             &format!(
+                                 "UI: received ModelsSearchedChunk append={} incoming={} before={} has_more={} next_page={}",
+                                 append,
+                                 results.len(),
+                                 before_count,
+                                 has_more,
+                                 next_page.is_some(),
+                             ),
+                         );
                          if append {
                              let appended_len = results.len();
-                             app.append_models_results(results, has_more);
+                             app.append_models_results(results, has_more, next_page);
+                             debug_fetch_log(
+                                 &app.config,
+                                 &format!(
+                                     "UI: append done before={} after={} has_more={}",
+                                     before_count,
+                                     app.models.len(),
+                                     app.model_search_has_more
+                                 ),
+                             );
                              app.status = format!(
                                  "Loaded {} more models (page {}, total {})",
                                  appended_len,
@@ -751,7 +838,15 @@ pub async fn run_event_loop(
                                  app.models.len()
                              );
                          } else {
-                             app.set_models_results(results, has_more);
+                             app.set_models_results(results, has_more, next_page);
+                             debug_fetch_log(
+                                 &app.config,
+                                 &format!(
+                                     "UI: set models done count={} has_more={}",
+                                     app.models.len(),
+                                     app.model_search_has_more
+                                 ),
+                             );
                              send_cover_priority(app);
                              app.status = format!("Found {} models", app.models.len());
                          }

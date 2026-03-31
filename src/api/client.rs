@@ -139,6 +139,10 @@ impl CivitaiClient {
         self.fetch(&url).await
     }
 
+    pub async fn search_models_by_url(&self, url: String) -> Result<PaginatedResponse<Model>> {
+        self.fetch(&url).await
+    }
+
     pub async fn get_images(&self, limit: u32, page: u32) -> Result<ImageResponse> {
         let url = format!("https://civitai.com/api/v1/images?limit={}&page={}", limit, page);
         self.fetch(&url).await

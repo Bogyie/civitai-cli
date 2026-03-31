@@ -22,6 +22,7 @@ pub async fn run_tui(config: AppConfig) -> Result<()> {
                 None,
                 false,
                 false,
+                None,
             ))
             .await;
         let _ = tx
