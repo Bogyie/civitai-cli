@@ -1160,6 +1160,10 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
             Span::styled(if fm.focused_field == 3 { "> Base: " } else { "  Base: " }, Style::default().fg(if fm.focused_field == 3 { Color::Yellow } else { Color::White })),
             Span::raw(format!("< {} >", fm.bases[fm.selected_base])),
         ]),
+        Line::from(vec![
+            Span::styled(if fm.focused_field == 4 { "> Period: " } else { "  Period: " }, Style::default().fg(if fm.focused_field == 4 { Color::Yellow } else { Color::White })),
+            Span::raw(format!("< {} >", fm.periods[fm.selected_period])),
+        ]),
         Line::from(""),
         Line::from(Span::styled(" [Up/Down] Select Field | [Left/Right] Cycle Options | [Enter] Search", Style::default().fg(Color::DarkGray))),
     ];
