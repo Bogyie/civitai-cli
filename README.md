@@ -11,11 +11,40 @@ Terminal-first Civitai browser and downloader for ComfyUI-focused workflows.
 - persistent caches for model search, image search, model covers, and image bytes
 - configurable local settings and cache locations
 
-## Status
+## Installation
 
 Current project version: `1.0.0`
 
 This is a TUI-heavy workflow tool built around the public Civitai API and local ComfyUI model folders.
+
+### Requirements
+
+- Rust stable
+- `cargo`
+- a terminal that supports the TUI stack used by `ratatui`
+
+Optional but recommended:
+- a configured ComfyUI directory
+- a Civitai API key
+
+### Clone
+
+```bash
+git clone https://github.com/Bogyie/civitai-cli.git
+cd civitai-cli
+```
+
+### Build
+
+```bash
+cargo build
+```
+
+Or:
+
+```bash
+make build
+```
 
 ## Screenshots
 
@@ -154,37 +183,6 @@ For downloads, the app currently sends:
 - a `token=...` query parameter on the download URL
 
 This is intentionally redundant because some download endpoints behave differently depending on how authentication is provided.
-
-## Installation
-
-### Requirements
-
-- Rust stable
-- `cargo`
-- a terminal that supports the TUI stack used by `ratatui`
-
-Optional but recommended:
-- a configured ComfyUI directory
-- a Civitai API key
-
-### Clone
-
-```bash
-git clone https://github.com/Bogyie/civitai-cli.git
-cd civitai-cli
-```
-
-### Build
-
-```bash
-cargo build
-```
-
-Or:
-
-```bash
-make build
-```
 
 ## Running
 

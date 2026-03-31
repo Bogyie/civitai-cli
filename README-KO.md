@@ -11,11 +11,40 @@ ComfyUI 중심 워크플로를 위한 터미널 기반 Civitai 브라우저 및 
 - 모델 검색, 이미지 검색, 모델 커버, 이미지 바이트에 대한 영속 캐시
 - 로컬 설정 및 캐시 경로 커스터마이징
 
-## 상태
+## 설치
 
 현재 프로젝트 버전: `1.0.0`
 
 이 프로젝트는 Civitai 공개 API와 로컬 ComfyUI 모델 폴더를 기반으로 동작하는 TUI 중심 도구입니다.
+
+### 요구 사항
+
+- Rust stable
+- `cargo`
+- `ratatui` 기반 TUI를 지원하는 터미널
+
+선택 사항이지만 권장:
+- 설정된 ComfyUI 디렉토리
+- Civitai API key
+
+### 클론
+
+```bash
+git clone https://github.com/Bogyie/civitai-cli.git
+cd civitai-cli
+```
+
+### 빌드
+
+```bash
+cargo build
+```
+
+또는:
+
+```bash
+make build
+```
 
 ## 스크린샷
 
@@ -154,37 +183,6 @@ TUI에서 다음 항목을 설정할 수 있습니다.
 - 다운로드 URL의 `token=...` query parameter
 
 이렇게 중복해서 보내는 이유는, 다운로드 엔드포인트에 따라 통과 방식이 다를 수 있기 때문입니다.
-
-## 설치
-
-### 요구 사항
-
-- Rust stable
-- `cargo`
-- `ratatui` 기반 TUI를 지원하는 터미널
-
-선택 사항이지만 권장:
-- 설정된 ComfyUI 디렉토리
-- Civitai API key
-
-### 클론
-
-```bash
-git clone https://github.com/Bogyie/civitai-cli.git
-cd civitai-cli
-```
-
-### 빌드
-
-```bash
-cargo build
-```
-
-또는:
-
-```bash
-make build
-```
 
 ## 실행
 
