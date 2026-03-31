@@ -8,15 +8,23 @@ on:
 permissions:
   contents: write
 
+env:
+  BIN_NAME: civitai-cli
+
 jobs:
-  create-release:
+  validate-release:
+    name: Validate release metadata
     runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Validate tag matches Cargo version
+        id: version
         shell: bash
         run: |
           set -euo pipefail
@@ -34,8 +42,113 @@ jobs:
             exit 1
           fi
 
+          echo "version=${CARGO_VERSION}" >> "${GITHUB_OUTPUT}"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           name: ${{ github.ref_name }}
+
+  build-release-assets:
+    name: Build ${{ matrix.name }}
+    needs: validate-release
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64-gnu
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            package_ext: tar.gz
+            use_cross: false
+          - name: linux-aarch64-gnu
+            runner: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            package_ext: tar.gz
+            use_cross: true
+          - name: linux-armv7-gnueabihf
+            runner: ubuntu-latest
+            target: armv7-unknown-linux-gnueabihf
+            package_ext: tar.gz
+            use_cross: true
+          - name: macos-x86_64
+            runner: macos-13
+            target: x86_64-apple-darwin
+            package_ext: tar.gz
+            use_cross: false
+          - name: macos-aarch64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            package_ext: tar.gz
+            use_cross: false
+          - name: windows-x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            package_ext: zip
+            use_cross: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ matrix.use_cross }}" == "true" ]]; then
+            cross build --locked --release --target "${{ matrix.target }}"
+          else
+            cargo build --locked --release --target "${{ matrix.target }}"
+          fi
+
+      - name: Package release artifact
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          TARGET="${{ matrix.target }}"
+          PACKAGE_EXT="${{ matrix.package_ext }}"
+          ARTIFACT_DIR="dist"
+          mkdir -p "${ARTIFACT_DIR}"
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            BIN_PATH="target/${TARGET}/release/${BIN_NAME}.exe"
+            STAGE_DIR="${BIN_NAME}-${VERSION}-${TARGET}"
+            cp "${BIN_PATH}" "${STAGE_DIR}.exe"
+            7z a "${ARTIFACT_DIR}/${BIN_NAME}-v${VERSION}-${TARGET}.zip" "${STAGE_DIR}.exe"
+            echo "asset_path=${ARTIFACT_DIR}/${BIN_NAME}-v${VERSION}-${TARGET}.zip" >> "${GITHUB_OUTPUT}"
+          else
+            BIN_PATH="target/${TARGET}/release/${BIN_NAME}"
+            STAGE_DIR="${BIN_NAME}-${VERSION}-${TARGET}"
+            mkdir -p "${STAGE_DIR}"
+            cp "${BIN_PATH}" "${STAGE_DIR}/"
+            cp README.md LICENSE "${STAGE_DIR}/"
+            tar -czf "${ARTIFACT_DIR}/${BIN_NAME}-v${VERSION}-${TARGET}.tar.gz" "${STAGE_DIR}"
+            echo "asset_path=${ARTIFACT_DIR}/${BIN_NAME}-v${VERSION}-${TARGET}.tar.gz" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Upload artifact to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ steps.package.outputs.asset_path }}
+
+      - name: Upload artifact to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.asset_path }}
