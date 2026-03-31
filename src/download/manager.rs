@@ -141,8 +141,11 @@ impl DownloadManager {
         &self,
         model: &Model,
         version: &ModelVersion,
+        existing_file_path: Option<PathBuf>,
         tx: Option<tokio::sync::mpsc::Sender<crate::tui::app::AppMessage>>,
         mut control: Option<mpsc::Receiver<DownloadControl>>,
+        resume_from_bytes: Option<u64>,
+        expected_total_bytes: Option<u64>,
     ) -> Result<PathBuf> {
         let file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first())
             .context("No files found across this model version")?;
@@ -150,25 +153,78 @@ impl DownloadManager {
         let url = &file.download_url;
         let original_filename = &file.name;
         let smart_filename = self.generate_smart_filename(model, version, original_filename);
-        let dest_dir = self.resolve_comfy_path(model).unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        let target_path = existing_file_path.unwrap_or_else(|| {
+            let dest_dir = self.resolve_comfy_path(model).unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            });
+            dest_dir.join(&smart_filename)
         });
-        let target_path = dest_dir.join(&smart_filename);
 
         let mut req = self.client.get(url);
         if let Some(token) = &self.config.api_key {
             req = req.bearer_auth(token);
         }
 
-        let res = req.send().await?.error_for_status()?;
-        let total_size = res.content_length().unwrap_or(0) as f64;
-        let mut stream = res.bytes_stream();
-        let mut file_obj = tokio::fs::File::create(&target_path).await?;
+        let existing_metadata = tokio::fs::metadata(&target_path).await.ok();
+        let existing_size = existing_metadata.as_ref().map(|entry| entry.len()).unwrap_or(0);
+        let resume_hint = resume_from_bytes.unwrap_or(0);
+        let mut downloaded = if resume_hint > 0 && existing_size > 0 {
+            existing_size.min(resume_hint)
+        } else {
+            0
+        };
+        let mut resumable = downloaded > 0;
 
-        let mut downloaded: f64 = 0.0;
+        if resumable {
+            req = req.header("Range", format!("bytes={}-", downloaded));
+        }
+
+        let res = req.send().await?.error_for_status()?;
+
+        let mut total_size = expected_total_bytes.unwrap_or(0);
+        if resumable {
+            if res.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                if let Some(range_total) = res
+                    .headers()
+                    .get(reqwest::header::CONTENT_RANGE)
+                    .and_then(|header| header.to_str().ok())
+                    .and_then(|raw| raw.split('/').last())
+                    .and_then(|part| part.parse::<u64>().ok())
+                {
+                    total_size = range_total;
+                } else if let Some(content_length) = res.content_length() {
+                    if content_length > 0 {
+                        total_size = downloaded + content_length;
+                    }
+                }
+            } else {
+                downloaded = 0;
+                resumable = false;
+            }
+        }
+
+        if !resumable && total_size == 0 {
+            if let Some(content_length) = res.content_length() {
+                total_size = content_length;
+            } else if let Some(expected_total_bytes) = expected_total_bytes {
+                total_size = expected_total_bytes;
+            }
+        }
+
+        let mut stream = res.bytes_stream();
+        let mut file_obj = if resumable {
+            tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&target_path)
+                .await?
+        } else {
+            tokio::fs::File::create(&target_path).await?
+        };
+
         let mut last_percent = -1.0f64;
         let mut paused = false;
-        let send_progress = |percent: f64, downloaded: f64, total_size: f64| {
+        let send_progress = |percent: f64, downloaded: u64, total_size: u64| {
             if let Some(ref chan) = tx {
                 if percent > 100.0 {
                     return;
@@ -177,8 +233,8 @@ impl DownloadManager {
                     model.id,
                     smart_filename.clone(),
                     percent,
-                    downloaded.round() as u64,
-                    total_size.round() as u64,
+                    downloaded,
+                    total_size,
                 ));
             }
         };
@@ -208,9 +264,9 @@ impl DownloadManager {
                         Some(chunk_result) => {
                             let chunk = chunk_result?;
                             file_obj.write_all(&chunk).await?;
-                            downloaded += chunk.len() as f64;
-                            if total_size > 0.0 {
-                                let percent = (downloaded / total_size) * 100.0;
+                            downloaded += chunk.len() as u64;
+                            if total_size > 0 {
+                                let percent = (downloaded as f64 / total_size as f64) * 100.0;
                                 if percent - last_percent >= 1.0 {
                                     last_percent = percent;
                                     send_progress(percent, downloaded, total_size);
@@ -226,9 +282,9 @@ impl DownloadManager {
                             if let Some(chunk_result) = chunk {
                                 let chunk = chunk_result?;
                                 file_obj.write_all(&chunk).await?;
-                                downloaded += chunk.len() as f64;
-                                if total_size > 0.0 {
-                                    let percent = (downloaded / total_size) * 100.0;
+                                downloaded += chunk.len() as u64;
+                                if total_size > 0 {
+                                    let percent = (downloaded as f64 / total_size as f64) * 100.0;
                                     if percent - last_percent >= 1.0 {
                                         last_percent = percent;
                                         send_progress(percent, downloaded, total_size);
@@ -258,8 +314,8 @@ impl DownloadManager {
                 model.id,
                 smart_filename.clone(),
                 100.0,
-                downloaded.round() as u64,
-                total_size.round() as u64,
+                downloaded,
+                total_size,
             ));
         }
 

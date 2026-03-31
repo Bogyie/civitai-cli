@@ -175,6 +175,7 @@ pub struct DownloadTracker {
 pub enum DownloadHistoryStatus {
     Completed,
     Failed(String),
+    Paused,
     Cancelled,
 }
 
@@ -192,6 +193,18 @@ pub struct DownloadHistoryEntry {
     pub created_at: std::time::SystemTime,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InterruptedDownloadSession {
+    pub model_id: u64,
+    pub version_id: u64,
+    pub filename: String,
+    pub model_name: String,
+    pub file_path: Option<PathBuf>,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub created_at: std::time::SystemTime,
+}
+
 pub enum WorkerCommand {
     FetchImages,
     SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>, bool),
@@ -202,6 +215,7 @@ pub enum WorkerCommand {
     PauseDownload(u64),      // model_id
     ResumeDownload(u64),     // model_id
     CancelDownload(u64),     // model_id
+    ResumeDownloadModel(u64, u64, Option<PathBuf>, u64, u64), // model_id, version_id, file_path, downloaded_bytes, total_bytes
     Quit,
     UpdateConfig(crate::config::AppConfig),
 }
@@ -224,6 +238,8 @@ pub struct App {
     pub pending_bookmark_remove_id: Option<u64>,
     pub bookmark_file_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
+    pub interrupted_download_file_path: Option<PathBuf>,
+    pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
     pub selected_version_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, StatefulProtocol>,
     pub model_version_image_failed: HashSet<u64>,
@@ -241,6 +257,8 @@ pub struct App {
     pub status: String,
     pub last_error: Option<String>,
     pub show_status_modal: bool,
+    pub show_exit_confirm_modal: bool,
+    pub show_resume_download_modal: bool,
     pub bookmark_path_prompt_action: Option<BookmarkPathAction>,
     pub bookmark_path_draft: String,
     pub tx: Option<mpsc::Sender<WorkerCommand>>,
@@ -258,6 +276,27 @@ impl App {
             .clone()
             .or_else(|| config.download_history_path());
         let download_history = load_download_history(download_history_file_path.as_deref());
+        let interrupted_from_history =
+            collect_paused_sessions_from_history(download_history.as_slice());
+        let interrupted_download_file_path = config
+            .interrupted_download_file_path
+            .clone()
+            .or_else(|| config.interrupted_download_path());
+        let mut interrupted_download_sessions =
+            load_interrupted_downloads(interrupted_download_file_path.as_deref());
+        let mut seen = HashSet::new();
+        for session in interrupted_download_sessions.iter() {
+            seen.insert((session.model_id, session.version_id));
+        }
+        for session in interrupted_from_history {
+            let key = (session.model_id, session.version_id);
+            if !seen.contains(&key) {
+                seen.insert(key);
+                interrupted_download_sessions.push(session);
+            }
+        }
+        let interrupted_sessions_for_state = interrupted_download_sessions.clone();
+        let show_resume_download_modal = !interrupted_download_sessions.is_empty();
         let mut bookmark_list_state = ListState::default();
         if !bookmarks.is_empty() {
             bookmark_list_state.select(Some(0));
@@ -265,7 +304,7 @@ impl App {
         let mut model_list_state = ListState::default();
         model_list_state.select(Some(0));
 
-        Self {
+        let mut app = Self {
             active_tab: MainTab::Models,
             mode: AppMode::Browsing,
             config,
@@ -293,18 +332,39 @@ impl App {
             selected_download_index: 0,
             selected_history_index: 0,
             download_history,
+            interrupted_download_file_path,
+            interrupted_download_sessions: interrupted_sessions_for_state,
+            show_resume_download_modal,
             status: "Initializing App...".to_string(),
             last_error: None,
             show_status_modal: false,
+            show_exit_confirm_modal: false,
             bookmark_path_prompt_action: None,
             bookmark_path_draft: String::new(),
             tx: None,
+        };
+
+        if !interrupted_download_sessions.is_empty() {
+            for session in interrupted_download_sessions.iter() {
+                let existing_paused = app
+                    .download_history
+                    .iter()
+                    .any(|entry| {
+                        entry.model_id == session.model_id
+                            && entry.version_id == session.version_id
+                            && matches!(entry.status, DownloadHistoryStatus::Paused)
+                    });
+                if !existing_paused {
+                    app.record_interrupted_session_to_history(session);
+                }
+            }
         }
+
+        app
     }
 
     pub fn set_worker_tx(&mut self, tx: mpsc::Sender<WorkerCommand>) {
         self.tx = Some(tx.clone());
-        let _ = tx.try_send(WorkerCommand::FetchImages);
     }
 
     pub fn select_next(&mut self) {
@@ -713,6 +773,114 @@ impl App {
         self.persist_download_history();
     }
 
+    pub fn has_active_download(&self) -> bool {
+        !self.active_downloads.is_empty()
+    }
+
+    pub fn collect_interrupt_sessions_from_active(&self) -> Vec<InterruptedDownloadSession> {
+        self.active_download_order
+            .iter()
+            .filter_map(|model_id| self.active_downloads.get(model_id).map(|tracker| (*model_id, tracker)))
+            .map(|(model_id, tracker)| InterruptedDownloadSession {
+                model_id,
+                version_id: tracker.version_id,
+                filename: tracker.filename.clone(),
+                model_name: tracker.model_name.clone(),
+                file_path: tracker.file_path.clone(),
+                downloaded_bytes: tracker.downloaded_bytes,
+                total_bytes: tracker.total_bytes,
+                created_at: std::time::SystemTime::now(),
+            })
+            .collect()
+    }
+
+    pub fn selected_download_history_entry(&self) -> Option<&DownloadHistoryEntry> {
+        let idx = self.selected_history_entry_index()?;
+        self.download_history.get(idx)
+    }
+
+    pub fn upsert_download_history(&mut self, entry: DownloadHistoryEntry) {
+        self.download_history
+            .retain(|existing| {
+                !(existing.model_id == entry.model_id
+                    && existing.version_id == entry.version_id
+                    && matches!(existing.status, DownloadHistoryStatus::Paused))
+            });
+
+        self.download_history.push(entry);
+
+        if self.download_history.len() > 200 {
+            let extra = self.download_history.len() - 200;
+            self.download_history.drain(0..extra);
+            self.clamp_selected_history_index();
+        }
+
+        self.persist_download_history();
+    }
+
+    pub fn record_interrupted_session_to_history(&mut self, session: &InterruptedDownloadSession) {
+        let progress = if session.total_bytes > 0 {
+            (session.downloaded_bytes as f64 / session.total_bytes as f64) * 100.0
+        } else {
+            0.0
+        };
+        self.upsert_download_history(DownloadHistoryEntry {
+            model_id: session.model_id,
+            version_id: session.version_id,
+            filename: session.filename.clone(),
+            model_name: session.model_name.clone(),
+            file_path: session.file_path.clone(),
+            downloaded_bytes: session.downloaded_bytes,
+            total_bytes: session.total_bytes,
+            status: DownloadHistoryStatus::Paused,
+            progress,
+            created_at: session.created_at,
+        });
+    }
+
+    pub fn cancel_resume_download_modal(&mut self) {
+        self.show_resume_download_modal = false;
+    }
+
+    pub fn clear_interrupted_download_sessions(&mut self) {
+        self.interrupted_download_sessions.clear();
+        self.show_resume_download_modal = false;
+        self.persist_interrupted_downloads();
+    }
+
+    pub fn remove_history_for_session(&mut self, model_id: u64, version_id: u64) -> usize {
+        let before = self.download_history.len();
+        self.download_history
+            .retain(|entry| !(entry.model_id == model_id && entry.version_id == version_id));
+        if before != self.download_history.len() {
+            self.persist_download_history();
+            self.clamp_selected_history_index();
+        }
+        before.saturating_sub(self.download_history.len())
+    }
+
+    pub fn persist_interrupted_downloads(&mut self) {
+        if let Some(path) = &self.interrupted_download_file_path {
+            if let Err(err) = save_interrupted_downloads_to_file(path, &self.interrupted_download_sessions) {
+                self.last_error = Some(err.to_string());
+            } else {
+                self.last_error = None;
+            }
+        }
+    }
+
+    pub fn begin_exit_confirm_modal(&mut self) {
+        self.show_exit_confirm_modal = true;
+        self.status = format!(
+            "Active downloads detected ({}). Confirm exit: [Y] Save and exit, [D] Delete and exit, [N] Cancel.",
+            self.active_downloads.len()
+        );
+    }
+
+    pub fn cancel_exit_confirm_modal(&mut self) {
+        self.show_exit_confirm_modal = false;
+    }
+
     pub fn is_bookmark_export_prompt(&self) -> bool {
         matches!(self.bookmark_path_prompt_action, Some(BookmarkPathAction::Export))
     }
@@ -859,12 +1027,97 @@ fn load_download_history(path: Option<&Path>) -> Vec<DownloadHistoryEntry> {
     history
 }
 
+fn collect_paused_sessions_from_history(
+    history: &[DownloadHistoryEntry],
+) -> Vec<InterruptedDownloadSession> {
+    let mut sessions = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in history.iter().rev() {
+        if !matches!(entry.status, DownloadHistoryStatus::Paused) {
+            continue;
+        }
+
+        if entry.downloaded_bytes == 0 {
+            continue;
+        }
+
+        if let Some(total_bytes) = if entry.total_bytes == 0 {
+            None
+        } else {
+            Some(entry.total_bytes)
+        } {
+            if entry.downloaded_bytes >= total_bytes {
+                continue;
+            }
+        }
+
+        if let Some(file_path) = &entry.file_path {
+            if !file_path.exists() {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        if seen.contains(&(entry.model_id, entry.version_id)) {
+            continue;
+        }
+        seen.insert((entry.model_id, entry.version_id));
+
+        sessions.push(InterruptedDownloadSession {
+            model_id: entry.model_id,
+            version_id: entry.version_id,
+            filename: entry.filename.clone(),
+            model_name: entry.model_name.clone(),
+            file_path: entry.file_path.clone(),
+            downloaded_bytes: entry.downloaded_bytes,
+            total_bytes: entry.total_bytes,
+            created_at: entry.created_at,
+        });
+    }
+
+    sessions.reverse();
+    sessions
+}
+
+fn load_interrupted_downloads(path: Option<&Path>) -> Vec<InterruptedDownloadSession> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    serde_json::from_str::<Vec<InterruptedDownloadSession>>(&content).unwrap_or_default()
+}
+
 fn save_download_history_to_file(path: &Path, history: &[DownloadHistoryEntry]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
 
     let json = serde_json::to_string_pretty(&history).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn save_interrupted_downloads_to_file(
+    path: &Path,
+    sessions: &[InterruptedDownloadSession],
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    if sessions.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+
+    let json = serde_json::to_string_pretty(sessions).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;
     Ok(())
 }

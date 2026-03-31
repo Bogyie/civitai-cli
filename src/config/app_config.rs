@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub bookmark_file_path: Option<PathBuf>,
     pub model_search_cache_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
+    pub interrupted_download_file_path: Option<PathBuf>,
     #[serde(default = "default_model_search_cache_ttl_hours")]
     pub model_search_cache_ttl_hours: u64,
 }
@@ -70,13 +71,19 @@ impl AppConfig {
     pub fn search_cache_path(&self) -> Option<PathBuf> {
         self.model_search_cache_path
             .clone()
-            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_search_cache.json")))
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_search_cache")))
     }
 
     pub fn download_history_path(&self) -> Option<PathBuf> {
         self.download_history_file_path
             .clone()
             .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("download_history.json")))
+    }
+
+    pub fn interrupted_download_path(&self) -> Option<PathBuf> {
+        self.interrupted_download_file_path
+            .clone()
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("interrupted_downloads.json")))
     }
 }
 
@@ -88,6 +95,7 @@ impl Default for AppConfig {
             bookmark_file_path: None,
             model_search_cache_path: None,
             download_history_file_path: None,
+            interrupted_download_file_path: None,
             model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
         }
     }

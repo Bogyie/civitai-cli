@@ -14,6 +14,20 @@ pub async fn run_tui(config: AppConfig) -> Result<()> {
     // Spawn background worker, get back channels
     let (tx, rx) = worker::spawn_worker(config).await;
     app.set_worker_tx(tx);
+    if let Some(tx) = app.tx.as_ref() {
+        let _ = tx
+            .send(app::WorkerCommand::SearchModels(
+                app.search_form.build_options(),
+                None,
+                None,
+                false,
+            ))
+            .await;
+        let _ = tx
+            .send(app::WorkerCommand::FetchImages)
+            .await;
+    }
+    app.status = "Searching default model list...".to_string();
 
     let mut terminal = ui::setup_terminal().context("setup failed")?;
     

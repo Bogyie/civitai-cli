@@ -178,6 +178,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_bookmark_confirm_modal(f, app);
     }
 
+    if app.show_exit_confirm_modal {
+        draw_exit_confirm_modal(f, app);
+    }
+
+    if app.show_resume_download_modal {
+        draw_resume_download_modal(f, app);
+    }
+
 }
 
 fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
@@ -397,6 +405,7 @@ fn draw_download_history_list(f: &mut Frame, app: &App, area: Rect) {
             DownloadHistoryStatus::Completed => "Completed".to_string(),
             DownloadHistoryStatus::Failed(reason) => format!("Failed ({})", reason),
             DownloadHistoryStatus::Cancelled => "Cancelled".to_string(),
+            DownloadHistoryStatus::Paused => "Paused".to_string(),
         };
         let size_text = if entry.total_bytes > 0 {
             format!(
@@ -535,7 +544,7 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 3 { "> Model Search Cache File: " } else { "  Model Search Cache File: " },
+            if fm.focused_field == 3 { "> Model Search Cache Folder: " } else { "  Model Search Cache Folder: " },
             Style::default().fg(if fm.focused_field == 3 { Color::Yellow } else { Color::White }),
         ),
         Span::styled(
@@ -1243,6 +1252,59 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_exit_confirm_modal(f: &mut Frame, app: &App) {
+    let active_download_count = app.active_downloads.len();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Exit Confirmation ");
+
+    let lines = vec![
+        Line::from(format!(
+            "There are {} active download(s). Exit now?",
+            active_download_count
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Confirm: [Y] Save and exit | [D] Delete and exit | [N]/[Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let p = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    let area = centered_rect(60, 24, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
+fn draw_resume_download_modal(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Resume Interrupted Downloads ");
+
+    let count = app.interrupted_download_sessions.len();
+    let lines = vec![
+        Line::from(format!(
+            "There are {} interrupted download session(s) detected.",
+            count
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Resume: [Y]  Delete files + keep history: [D]  Ignore for now: [N] / [Esc]",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    let area = centered_rect(60, 24, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -1262,7 +1324,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         MainTab::Models => "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details",
         MainTab::Bookmarks => "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
         MainTab::Images => "[d] Download | [m] Status",
-        MainTab::Downloads => "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [p] Pause/Resume | [c] Cancel",
+        MainTab::Downloads => "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel",
         MainTab::Settings => "[Enter] Edit | [m] Status",
     };
 

@@ -20,6 +20,7 @@ type SearchCache = HashMap<String, CachedSearchResult>;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct CachedSearchResult {
+    cache_key: String,
     models: Vec<Model>,
     cached_at_unix_secs: u64,
 }
@@ -30,16 +31,47 @@ enum CoverQueueCommand {
 }
 
 fn cache_key_for_options(opts: &crate::api::client::SearchOptions) -> String {
-    let sort = opts.sort.as_deref().unwrap_or("All");
-    let types = opts.types.as_deref().unwrap_or("All");
-    let base_models = opts.base_models.as_deref().unwrap_or("All");
+    let query = normalize_cache_segment(opts.query.as_str());
+    let types = opts
+        .types
+        .as_deref()
+        .map(normalize_cache_segment)
+        .unwrap_or_else(|| "all".to_string());
+    let sort = opts
+        .sort
+        .as_deref()
+        .map(normalize_cache_segment)
+        .unwrap_or_else(|| "all".to_string());
+    let base_models = opts
+        .base_models
+        .as_deref()
+        .map(normalize_cache_segment)
+        .unwrap_or_else(|| "all".to_string());
     format!(
         "q={}|t={}|sort={}|base={}",
-        opts.query.trim().to_ascii_lowercase(),
-        types.trim().to_ascii_lowercase(),
-        sort.trim().to_ascii_lowercase(),
-        base_models.trim().to_ascii_lowercase()
+        query,
+        types,
+        sort,
+        base_models
     )
+}
+
+fn normalize_cache_segment(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn normalize_search_options_for_cache(mut opts: crate::api::client::SearchOptions) -> crate::api::client::SearchOptions {
+    opts.query = opts.query.trim().to_string();
+    let normalize = |value: Option<String>| {
+        value
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty())
+    };
+
+    opts.types = normalize(opts.types);
+    opts.sort = normalize(opts.sort);
+    opts.base_models = normalize(opts.base_models);
+    opts
 }
 
 fn now_unix_secs() -> u64 {
@@ -66,11 +98,38 @@ fn load_search_cache(path: Option<&Path>, ttl_hours: u64) -> SearchCache {
     let Some(path) = path else {
         return HashMap::new();
     };
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return HashMap::new();
+
+    let cache_root = path.to_path_buf();
+    if path.exists() && !path.is_dir() {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::fs::create_dir_all(&cache_root);
+
+    let mut cache = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&cache_root) else {
+        return cache;
     };
-    let mut cache = serde_json::from_str::<SearchCache>(&content).unwrap_or_else(|_| HashMap::new());
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("bin") {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let config = bincode::config::standard();
+        let Ok((entry, _)) =
+            bincode::serde::decode_from_slice::<CachedSearchResult, _>(&bytes, config)
+        else {
+            continue;
+        };
+        if !entry.cache_key.is_empty() {
+            cache.insert(entry.cache_key.clone(), entry);
+        }
+    }
     let _ = prune_search_cache(&mut cache, ttl_hours);
+    save_search_cache(Some(&cache_root), &cache, ttl_hours);
     cache
 }
 
@@ -79,15 +138,21 @@ fn save_search_cache(path: Option<&Path>, cache: &SearchCache, ttl_hours: u64) {
         return;
     };
 
-    let mut normalized_cache = cache.to_owned();
-    let _ = prune_search_cache(&mut normalized_cache, ttl_hours);
-
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    if path.exists() && !path.is_dir() {
+        let _ = std::fs::remove_file(path);
     }
 
-    if let Ok(json) = serde_json::to_string_pretty(&normalized_cache) {
-        let _ = std::fs::write(path, json);
+    let mut normalized_cache = cache.to_owned();
+    let _ = prune_search_cache(&mut normalized_cache, ttl_hours);
+    let _ = std::fs::remove_dir_all(path);
+    let _ = std::fs::create_dir_all(path);
+
+    for entry in normalized_cache.values() {
+        let data_path = cache_entry_path(path, &entry.cache_key);
+        let config = bincode::config::standard();
+        if let Ok(bytes) = bincode::serde::encode_to_vec(entry, config) {
+            let _ = std::fs::write(data_path, bytes);
+        }
     }
 }
 
@@ -105,6 +170,53 @@ fn prune_search_cache(cache: &mut SearchCache, ttl_hours: u64) -> usize {
     });
 
     before.saturating_sub(cache.len())
+}
+
+fn cache_entry_path(cache_root: &Path, cache_key: &str) -> PathBuf {
+    let key = cache_key.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || c == '=' || c == '_' || c == '.' || c == '-' {
+            c
+        } else {
+            '_'
+        }
+    }).collect::<String>();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in cache_key.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    cache_root.join(format!("{:x}_{}.bin", hash, key.chars().take(32).collect::<String>()))
+}
+
+fn clear_cached_search_cache(cache_root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(cache_root) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("bin") {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            removed = removed.saturating_add(1);
+        }
+    }
+    removed
+}
+
+fn load_cached_search_entry(cache_root: &Path, cache_key: &str) -> Option<CachedSearchResult> {
+    let cache_path = cache_entry_path(cache_root, cache_key);
+    let bytes = std::fs::read(cache_path).ok()?;
+    let config = bincode::config::standard();
+    bincode::serde::decode_from_slice::<CachedSearchResult, _>(&bytes, config)
+        .ok()
+        .map(|(entry, _)| entry)
+}
+
+fn remove_cached_search_entry(cache_root: &Path, cache_key: &str) {
+    let cache_path = cache_entry_path(cache_root, cache_key);
+    let _ = std::fs::remove_file(cache_path);
 }
 
 fn pop_next_job(
@@ -148,10 +260,9 @@ pub async fn spawn_worker(
     let (cover_cmd_tx, mut cover_cmd_rx) = mpsc::channel::<CoverQueueCommand>(256);
     let (cover_done_tx, mut cover_done_rx) = mpsc::channel::<u64>(128);
 
-    let mut civitai = CivitaiClient::new(config.api_key.clone()).unwrap();
     let mut downloader_config = config.clone();
     let search_cache_path = model_search_cache_path(&downloader_config);
-    let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours.max(1)));
+    let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours));
     let search_cache = Arc::new(Mutex::new(load_search_cache(
         search_cache_path.as_deref(),
         *search_cache_ttl_hours.lock().await,
@@ -351,40 +462,61 @@ pub async fn spawn_worker(
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
                 WorkerCommand::FetchImages => {
-                    let _ = tx_msg
-                        .send(AppMessage::StatusUpdate("Fetching feed...".into()))
-                        .await;
-                    match civitai.get_images(50, 1).await {
-                        Ok(res) => {
-                            let _ = tx_msg
-                                .send(AppMessage::ImagesLoaded(res.items.clone()))
-                                .await;
+                    let tx_msg_clone = tx_msg.clone();
+                    let req_client = req_client.clone();
+                    let picker = picker.clone();
+                    let api_key = downloader_config.api_key.clone();
 
-                            let fetch_semaphore = Arc::new(Semaphore::new(3));
-                            let mut handles = Vec::with_capacity(res.items.len());
-                            for item in res.items {
-                                handles.push(tokio::spawn(load_feed_image(
-                                    item.id,
-                                    item.url,
-                                    req_client.clone(),
-                                    picker.clone(),
-                                    tx_msg.clone(),
-                                    fetch_semaphore.clone(),
-                                )));
+                    tokio::spawn(async move {
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate("Fetching feed...".into()))
+                            .await;
+
+                        let client = match CivitaiClient::new(api_key) {
+                            Ok(client) => client,
+                            Err(e) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Error initializing image API client: {}",
+                                        e
+                                    )))
+                                    .await;
+                                return;
                             }
-                            for handle in handles {
-                                let _ = handle.await;
+                        };
+
+                        match client.get_images(50, 1).await {
+                            Ok(res) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::ImagesLoaded(res.items.clone()))
+                                    .await;
+
+                                let fetch_semaphore = Arc::new(Semaphore::new(3));
+                                let mut handles = Vec::with_capacity(res.items.len());
+                                for item in res.items {
+                                    handles.push(tokio::spawn(load_feed_image(
+                                        item.id,
+                                        item.url,
+                                        req_client.clone(),
+                                        picker.clone(),
+                                        tx_msg_clone.clone(),
+                                        fetch_semaphore.clone(),
+                                    )));
+                                }
+                                for handle in handles {
+                                    let _ = handle.await;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Error fetching images: {}",
+                                        e
+                                    )))
+                                    .await;
                             }
                         }
-                        Err(e) => {
-                            let _ = tx_msg
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "Error fetching images: {}",
-                                    e
-                                )))
-                                .await;
-                        }
-                    }
+                    });
                 }
                 WorkerCommand::SearchModels(
                     opts,
@@ -394,85 +526,149 @@ pub async fn spawn_worker(
                 ) => {
                     let tx_msg_clone = tx_msg.clone();
                     let cover_cmd_tx = cover_cmd_tx.clone();
+                    let opts = normalize_search_options_for_cache(opts);
                     let civitai_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
                     let search_cache = search_cache.clone();
                     let search_cache_ttl_hours = search_cache_ttl_hours.clone();
                     let search_cache_path = search_cache_path.clone();
 
                     tokio::spawn(async move {
+                        let query_label = if opts.query.is_empty() {
+                            "<default>".to_string()
+                        } else {
+                            opts.query.clone()
+                        };
+
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate(format!(
+                                "Loading cache lookup for \"{}\"...",
+                                query_label
+                            )))
+                            .await;
+
                         let cache_key = cache_key_for_options(&opts);
                         let ttl_hours = *search_cache_ttl_hours.lock().await;
                         let cache_path = search_cache_path.lock().await.clone();
-                        {
+                        let mut cached = None;
+                        if !force_refresh {
                             let mut cache = search_cache.lock().await;
                             let removed = prune_search_cache(&mut cache, ttl_hours);
-                            if removed > 0 {
+                            if removed > 0 && cache_path.is_some() {
                                 save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
                             }
-                        }
 
-                        if !force_refresh {
-                            let cached = {
-                                let cache = search_cache.lock().await;
-                                if let Some(entry) = cache.get(&cache_key) {
-                                    if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
-                                        Some(entry.models.clone())
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            };
-
-                            if let Some(cached) = cached {
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::ModelsSearched(cached.clone()))
-                                    .await;
-
-                                let mut jobs = Vec::with_capacity(cached.len());
-                                let mut preferred_url = None;
-
-                                for model in &cached {
-                                    for version in &model.model_versions {
-                                        if let Some(image) = version.images.first() {
-                                            jobs.push((version.id, image.url.clone()));
-                                            if Some(model.id) == preferred_model_id
-                                                && Some(version.id) == preferred_version_id
-                                            {
-                                                preferred_url = Some(image.url.clone());
-                                            }
-                                        } else {
-                                            let _ = tx_msg_clone
-                                                .send(AppMessage::ModelCoverLoadFailed(version.id))
-                                                .await;
-                                        }
-                                    }
-                                }
-
-                                let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
-                                if let Some(version_id) = preferred_version_id {
-                                    let _ = cover_cmd_tx
-                                        .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
+                            if let Some(entry) = cache.get(&cache_key) {
+                                if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::StatusUpdate(format!(
+                                            "Using in-memory cached results for \"{}\"",
+                                            query_label
+                                        )))
                                         .await;
+                                    cached = Some(entry.models.clone());
+                                } else {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::StatusUpdate(format!(
+                                            "Cached results expired for \"{}\", refreshing...",
+                                            query_label
+                                        )))
+                                        .await;
+                                    cache.remove(&cache_key);
                                 }
-
+                            } else if let Some(cache_root) = cache_path.as_deref() {
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
-                                        "Loaded {} cached models",
-                                        cached.len()
+                                        "Checking on-disk cache for \"{}\"",
+                                        query_label
                                     )))
                                     .await;
-                                return;
+                                if let Some(entry) = load_cached_search_entry(cache_root, &cache_key) {
+                                    if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
+                                        cache.insert(cache_key.clone(), entry.clone());
+                                        cached = Some(entry.models.clone());
+                                        save_search_cache(Some(cache_root), &cache, ttl_hours);
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(format!(
+                                                "Loaded on-disk cached results for \"{}\"",
+                                                query_label
+                                            )))
+                                            .await;
+                                    } else {
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(format!(
+                                                "Cached file expired for \"{}\", refreshing",
+                                                query_label
+                                            )))
+                                            .await;
+                                        remove_cached_search_entry(cache_root, &cache_key);
+                                    }
+                                }
                             }
+                        } else {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(format!(
+                                    "Bypassing cache for \"{}\" due to manual refresh",
+                                    query_label
+                                )))
+                                .await;
+                        }
+
+                        if let Some(cached) = cached {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::ModelsSearched(cached.clone()))
+                                .await;
+
+                            let mut jobs = Vec::with_capacity(cached.len());
+                            let mut preferred_url = None;
+
+                            for model in &cached {
+                                for version in &model.model_versions {
+                                    if let Some(image) = version.images.first() {
+                                        jobs.push((version.id, image.url.clone()));
+                                        if Some(model.id) == preferred_model_id
+                                            && Some(version.id) == preferred_version_id
+                                        {
+                                            preferred_url = Some(image.url.clone());
+                                        }
+                                    } else {
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::ModelCoverLoadFailed(version.id))
+                                            .await;
+                                    }
+                                }
+                            }
+
+                            let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
+                            if let Some(version_id) = preferred_version_id {
+                                let _ = cover_cmd_tx
+                                    .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
+                                    .await;
+                            }
+
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(format!(
+                                    "Loaded {} cached models",
+                                    cached.len()
+                                )))
+                                .await;
+                            return;
                         }
 
                         if force_refresh {
                             {
                                 let mut cache = search_cache.lock().await;
                                 cache.remove(&cache_key);
+                                if let Some(cache_root) = cache_path.as_deref() {
+                                    remove_cached_search_entry(cache_root, &cache_key);
+                                }
                                 save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
                             }
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(format!(
+                                    "Cache skipped, fetching models for \"{}\"",
+                                    query_label
+                                )))
+                                .await;
                         }
 
                         let _ = tx_msg_clone
@@ -486,6 +682,13 @@ pub async fn spawn_worker(
                             Ok(res) => {
                                 let _ = tx_msg_clone
                                     .send(AppMessage::ModelsSearched(res.items.clone()))
+                                    .await;
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Fetched {} models for \"{}\"",
+                                        res.items.len(),
+                                        query_label
+                                    )))
                                     .await;
 
                                 let mut jobs = Vec::with_capacity(res.items.len());
@@ -511,19 +714,17 @@ pub async fn spawn_worker(
                                 let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                                 if let Some(version_id) = preferred_version_id {
                                     let _ = cover_cmd_tx
-                                        .send(CoverQueueCommand::Prioritize(
-                                            version_id,
-                                            preferred_url,
-                                        ))
+                                        .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
                                         .await;
                                 }
 
                                 if ttl_hours > 0 {
                                     let mut cache = search_cache.lock().await;
-                                    let cache_path = search_cache_path.lock().await.clone();
+                                    let cache_key = cache_key.clone();
                                     cache.insert(
-                                        cache_key,
+                                        cache_key.clone(),
                                         CachedSearchResult {
+                                            cache_key,
                                             models: res.items,
                                             cached_at_unix_secs: now_unix_secs(),
                                         },
@@ -544,17 +745,21 @@ pub async fn spawn_worker(
                 }
                 WorkerCommand::ClearSearchCache => {
                     let cache_path = search_cache_path.lock().await.clone();
-                    let ttl_hours = *search_cache_ttl_hours.lock().await;
-                    let cleared = {
+                    let mut cleared = {
                         let mut cache = search_cache.lock().await;
                         let count = cache.len();
                         cache.clear();
                         count
                     };
 
-                    save_search_cache(cache_path.as_deref(), &HashMap::new(), ttl_hours);
+                    if let Some(cache_root) = cache_path.as_deref() {
+                        cleared = cleared.saturating_add(clear_cached_search_cache(cache_root));
+                    }
                     let _ = tx_msg
-                        .send(AppMessage::StatusUpdate(format!("Cleared {} cached search item(s)", cleared)))
+                        .send(AppMessage::StatusUpdate(format!(
+                            "Cleared {} cached search item(s)",
+                            cleared
+                        )))
                         .await;
                 }
                 WorkerCommand::PrioritizeModelCover(version_id, image_url) => {
@@ -565,12 +770,11 @@ pub async fn spawn_worker(
                 WorkerCommand::UpdateConfig(new_cfg) => {
                     let new_key = new_cfg.api_key.clone();
                     match CivitaiClient::new(new_key) {
-                        Ok(updated_client) => {
-                            civitai = updated_client;
+                        Ok(_) => {
                             match DownloadManager::new(new_cfg.clone()) {
                                 Ok(_) => {
                                     downloader_config = new_cfg;
-                                    let ttl_hours = downloader_config.model_search_cache_ttl_hours.max(1);
+                                    let ttl_hours = downloader_config.model_search_cache_ttl_hours;
                                     {
                                         let mut ttl_hours_ref = search_cache_ttl_hours.lock().await;
                                         *ttl_hours_ref = ttl_hours;
@@ -701,14 +905,17 @@ pub async fn spawn_worker(
                                     ))
                                     .await;
 
-                                let result = dl_clone
-                                    .download_version_with_control(
-                                        &model,
-                                        version,
-                                        Some(tx_msg_clone.clone()),
-                                        Some(control_rx),
-                                    )
-                                    .await;
+                                    let result = dl_clone
+                                        .download_version_with_control(
+                                            &model,
+                                            version,
+                                            None,
+                                            Some(tx_msg_clone.clone()),
+                                            Some(control_rx),
+                                            None,
+                                            Some(estimated_size_bytes),
+                                        )
+                                        .await;
                                 match result {
                                     Ok(_) => {
                                         let _ = tx_msg_clone
@@ -746,6 +953,156 @@ pub async fn spawn_worker(
                         }
                         {
                             let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = control_map.lock().await;
+                            controls.remove(&model_id);
+                        }
+                    });
+                }
+                WorkerCommand::ResumeDownloadModel(
+                    model_id,
+                    version_id,
+                    resume_file_path,
+                    resume_downloaded_bytes,
+                    resume_total_bytes,
+                ) => {
+                    let tx_msg_clone = tx_msg.clone();
+                    let cv_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
+                    let dl_clone = DownloadManager::new(downloader_config.clone()).unwrap();
+                    let (control_tx, control_rx) = mpsc::channel(32);
+                    {
+                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                            download_controls.lock().await;
+                        controls.insert(model_id, control_tx.clone());
+                    }
+                    let control_map = download_controls.clone();
+
+                    tokio::spawn(async move {
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate(format!(
+                                "Resuming download for model {}...",
+                                model_id
+                            )))
+                            .await;
+
+                        if let Ok(model) = cv_clone.get_model(model_id).await {
+                            if let Some(version) =
+                                model.model_versions.iter().find(|v| v.id == version_id)
+                            {
+                                let primary_file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first());
+                                let filename = dl_clone.generate_smart_filename(
+                                    &model,
+                                    version,
+                                    &primary_file.map(|f| f.name.as_str()).unwrap_or_default(),
+                                );
+                                let target_path = resume_file_path.clone().unwrap_or_else(|| {
+                                    let target_dir = dl_clone
+                                        .resolve_comfy_path(&model)
+                                        .unwrap_or_else(|| {
+                                            std::env::current_dir().unwrap_or_else(|_| {
+                                                std::path::PathBuf::from(".")
+                                            })
+                                        });
+                                    target_dir.join(&filename)
+                                });
+                                let estimated_size_bytes = primary_file
+                                    .and_then(|file| {
+                                        if file.size_kb.is_finite() && file.size_kb > 0.0 {
+                                            Some((file.size_kb * 1024.0).round() as u64)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                let total_bytes = if resume_total_bytes > 0 {
+                                    resume_total_bytes
+                                } else {
+                                    estimated_size_bytes
+                                };
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::DownloadStarted(
+                                        model_id,
+                                        filename.clone(),
+                                        version_id,
+                                        model.name.clone(),
+                                        total_bytes,
+                                        Some(target_path.clone()),
+                                    ))
+                                    .await;
+                                let initial_downloaded_bytes = resume_downloaded_bytes
+                                    .min(if total_bytes > 0 { total_bytes } else { resume_downloaded_bytes });
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::DownloadProgress(
+                                        model_id,
+                                        filename.clone(),
+                                        if total_bytes > 0 {
+                                            (initial_downloaded_bytes as f64 / total_bytes as f64) * 100.0
+                                        } else {
+                                            0.0
+                                        },
+                                        initial_downloaded_bytes,
+                                        total_bytes,
+                                    ))
+                                    .await;
+
+                                let result = dl_clone
+                                    .download_version_with_control(
+                                        &model,
+                                        version,
+                                        Some(target_path.clone()),
+                                        Some(tx_msg_clone.clone()),
+                                        Some(control_rx),
+                                        if resume_downloaded_bytes > 0 {
+                                            Some(resume_downloaded_bytes)
+                                        } else {
+                                            None
+                                        },
+                                        if total_bytes > 0 {
+                                            Some(total_bytes)
+                                        } else {
+                                            None
+                                        },
+                                    )
+                                    .await;
+                                match result {
+                                    Ok(_) => {
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::DownloadCompleted(model_id))
+                                            .await;
+                                    }
+                                    Err(err) => {
+                                        if let Some(reason) = err.downcast_ref::<std::io::Error>() {
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::DownloadFailed(
+                                                    model_id,
+                                                    format!("{} ({})", reason, reason.kind()),
+                                                ))
+                                                .await;
+                                        } else if err.to_string().contains("cancelled") {
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::DownloadCancelled(model_id))
+                                                .await;
+                                        } else {
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::DownloadFailed(
+                                                    model_id,
+                                                    err.to_string(),
+                                                ))
+                                                .await;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(format!(
+                                    "Failed to retrieve Model {} metadata",
+                                    model_id
+                                )))
+                                .await;
+                        }
+
+                        {
+                            let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                                control_map.lock().await;
                             controls.remove(&model_id);
                         }
                     });

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::fs;
 use std::io::Stdout;
@@ -28,9 +28,11 @@ pub async fn run_event_loop(
         // Wait for either terminal input or worker message update
         tokio::select! {
              // Polling keypresses
-             event_res = tokio::task::spawn_blocking(|| event::poll(std::time::Duration::from_millis(50))) => {
+                 event_res = tokio::task::spawn_blocking(|| event::poll(std::time::Duration::from_millis(50))) => {
                  if let Ok(Ok(true)) = event_res {
                      if let Ok(Event::Key(key)) = event::read() {
+                        let is_ctrl_c_exit = matches!(key.code, KeyCode::Char('c'))
+                            && key.modifiers.contains(KeyModifiers::CONTROL);
                         if app.mode == AppMode::SearchForm {
                             match key.code {
                                 KeyCode::Esc => {
@@ -161,6 +163,101 @@ pub async fn run_event_loop(
                             continue;
                         }
 
+                        if app.show_resume_download_modal {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    let sessions = app.interrupted_download_sessions.clone();
+                                    for session in sessions {
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::ResumeDownloadModel(
+                                                session.model_id,
+                                                session.version_id,
+                                                session.file_path.clone(),
+                                                session.downloaded_bytes,
+                                                session.total_bytes,
+                                            ));
+                                        }
+                                    }
+                                    app.clear_interrupted_download_sessions();
+                                    app.status = "Interrupted downloads resumed.".into();
+                                }
+                                KeyCode::Char('d') | KeyCode::Char('D') => {
+                                    let sessions = app.interrupted_download_sessions.clone();
+                                    for session in sessions {
+                                        if let Some(path) = session.file_path.clone() {
+                                            match fs::remove_file(&path) {
+                                                Ok(()) => {}
+                                                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                                                Err(err) => {
+                                                    app.last_error =
+                                                        Some(format!("Failed to delete file: {}", err));
+                                                    app.status =
+                                                        format!("Failed to delete file for {}", session.filename);
+                                                }
+                                            }
+                                        }
+                                        let _ = app.remove_history_for_session(
+                                            session.model_id,
+                                            session.version_id,
+                                        );
+                                    }
+                                    app.clear_interrupted_download_sessions();
+                                    app.status = "Interrupted downloads removed.".into();
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                    app.cancel_resume_download_modal();
+                                    app.status = "Resume interrupted downloads cancelled.".into();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.show_exit_confirm_modal {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                    let sessions = app.collect_interrupt_sessions_from_active();
+                                    for session in &sessions {
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::PauseDownload(session.model_id));
+                                        }
+                                        app.record_interrupted_session_to_history(session);
+                                    }
+                                    app.interrupted_download_sessions = sessions;
+                                    app.persist_interrupted_downloads();
+                                    if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::Quit);
+                                    }
+                                    app.show_exit_confirm_modal = false;
+                                    break;
+                                }
+                                KeyCode::Char('d') | KeyCode::Char('D') => {
+                                    let sessions = app.collect_interrupt_sessions_from_active();
+                                    for session in sessions.iter() {
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::CancelDownload(session.model_id));
+                                        }
+                                        if let Some(path) = session.file_path.clone() {
+                                            let _ = fs::remove_file(&path);
+                                        }
+                                        app.remove_history_for_session(session.model_id, session.version_id);
+                                    }
+                                    app.interrupted_download_sessions.clear();
+                                    app.persist_interrupted_downloads();
+                                    if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::Quit);
+                                    }
+                                    app.show_exit_confirm_modal = false;
+                                    break;
+                                }
+                                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                                    app.cancel_exit_confirm_modal();
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if app.active_tab == MainTab::Settings && app.settings_form.editing {
                             match key.code {
                                 KeyCode::Up => {
@@ -270,11 +367,21 @@ pub async fn run_event_loop(
                             KeyCode::Char('5') => {
                                 app.active_tab = MainTab::Settings;
                             }
-                            KeyCode::Char('q') | KeyCode::Esc => {
-                                if let Some(tx) = &app.tx {
+                            KeyCode::Char('q') | KeyCode::Esc if !is_ctrl_c_exit => {
+                                if app.has_active_download() {
+                                    app.begin_exit_confirm_modal();
+                                } else if let Some(tx) = &app.tx {
                                     let _ = tx.try_send(WorkerCommand::Quit);
+                                    break;
                                 }
-                                break;
+                            }
+                            KeyCode::Char('c') if is_ctrl_c_exit => {
+                                if app.has_active_download() {
+                                    app.begin_exit_confirm_modal();
+                                } else if let Some(tx) = &app.tx {
+                                    let _ = tx.try_send(WorkerCommand::Quit);
+                                    break;
+                                }
                             }
                             KeyCode::Enter => {
                                 if app.active_tab == MainTab::Settings {
@@ -357,7 +464,7 @@ pub async fn run_event_loop(
                                 }
                             },
                             KeyCode::Char('J') => {
-                                if app.active_tab == MainTab::Downloads {
+                        if app.active_tab == MainTab::Downloads {
                                     app.select_next_history();
                                 }
                             }
@@ -471,6 +578,48 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('m') => { app.show_status_modal = true; }
+                            KeyCode::Char('r') => {
+                                if app.active_tab == MainTab::Downloads {
+                                    if let Some(entry) = app.selected_download_history_entry().cloned() {
+                                        if entry.total_bytes > 0 && entry.downloaded_bytes >= entry.total_bytes {
+                                            app.status = "Selected item already complete.".into();
+                                            continue;
+                                        }
+                                        if app.active_downloads.contains_key(&entry.model_id) {
+                                            app.status = "Download already active for selected model.".into();
+                                            continue;
+                                        }
+                                        if entry.file_path.is_none() {
+                                            app.status = "Selected history has no file path.".into();
+                                            continue;
+                                        }
+                                        let has_file = entry
+                                            .file_path
+                                            .as_deref()
+                                            .is_some_and(|path| path.exists());
+                                        if !has_file {
+                                            app.last_error = Some("Missing partial file".to_string());
+                                            app.status = "Cannot resume: partial file not found.".into();
+                                            continue;
+                                        }
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::ResumeDownloadModel(
+                                                entry.model_id,
+                                                entry.version_id,
+                                                entry.file_path.clone(),
+                                                entry.downloaded_bytes,
+                                                entry.total_bytes,
+                                            ));
+                                            app.remove_history_for_session(entry.model_id, entry.version_id);
+                                            app.status = format!("Resuming {} (v{})...", entry.model_name, entry.version_id);
+                                        }
+                                    } else {
+                                        app.status = "No download history selected".into();
+                                    }
+                                } else {
+                                    app.request_download();
+                                }
+                            }
                             KeyCode::Char(' ') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.show_model_details = !app.show_model_details;
