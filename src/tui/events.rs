@@ -472,7 +472,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.settings_form.focused_field < 5 {
+                                    if app.settings_form.focused_field < 8 {
                                         app.settings_form.focused_field += 1;
                                     }
                                 }
@@ -502,6 +502,36 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
+                                    } else if app.settings_form.focused_field == 5 {
+                                        app.config.image_cache_path = if app.settings_form.input_buffer.is_empty() {
+                                            None
+                                        } else {
+                                            Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
+                                        };
+                                    } else if app.settings_form.focused_field == 6 {
+                                        match app.settings_form.input_buffer.trim().parse::<u64>() {
+                                            Ok(value) if value > 0 => {
+                                                app.config.image_search_cache_ttl_minutes = value;
+                                            }
+                                            _ => {
+                                                app.last_error = Some("Image search cache TTL must be a positive integer".into());
+                                                app.show_status_modal = true;
+                                                app.status = "Invalid image search cache TTL value".into();
+                                                continue;
+                                            }
+                                        }
+                                    } else if app.settings_form.focused_field == 7 {
+                                        match app.settings_form.input_buffer.trim().parse::<u64>() {
+                                            Ok(value) => {
+                                                app.config.image_cache_ttl_minutes = value;
+                                            }
+                                            _ => {
+                                                app.last_error = Some("Image cache TTL must be a non-negative integer".into());
+                                                app.show_status_modal = true;
+                                                app.status = "Invalid image cache TTL value".into();
+                                                continue;
+                                            }
+                                        }
                                     } else if app.settings_form.focused_field == 2 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
@@ -510,7 +540,7 @@ pub async fn run_event_loop(
                                         };
                                         app.config.bookmark_file_path = path.clone();
                                         app.bookmark_file_path = path;
-                                    } else if app.settings_form.focused_field == 5 {
+                                    } else if app.settings_form.focused_field == 8 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -616,6 +646,22 @@ pub async fn run_event_loop(
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
+                                    } else if app.settings_form.focused_field == 5 {
+                                        app.config
+                                            .image_cache_path
+                                            .as_ref()
+                                            .map(|path| path.to_string_lossy().to_string())
+                                            .unwrap_or_default()
+                                    } else if app.settings_form.focused_field == 6 {
+                                        app.config.image_search_cache_ttl_minutes.to_string()
+                                    } else if app.settings_form.focused_field == 7 {
+                                        app.config.image_cache_ttl_minutes.to_string()
+                                    } else if app.settings_form.focused_field == 8 {
+                                        app.config
+                                            .download_history_file_path
+                                            .as_ref()
+                                            .map(|path| path.to_string_lossy().to_string())
+                                            .unwrap_or_default()
                                     } else {
                                         app.config.model_search_cache_ttl_hours.to_string()
                                     };
@@ -637,9 +683,9 @@ pub async fn run_event_loop(
                                     app.request_bookmark_remove_selected();
                                 }
                             }
-                                KeyCode::Char('j') | KeyCode::Down => {
+                            KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < 4 { app.settings_form.focused_field += 1; }
+                                    if app.settings_form.focused_field < 8 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -956,6 +1002,7 @@ pub async fn run_event_loop(
              Some(msg) = rx.recv() => {
                  match msg {
                     AppMessage::ImagesLoaded(new_images, append, next_page) => {
+                        let loaded_count = new_images.len();
                         if append {
                             let before = app.images.len();
                             app.append_image_feed_results(new_images, next_page);
@@ -974,6 +1021,15 @@ pub async fn run_event_loop(
                         }
                         if app.status.is_empty() && app.active_tab == MainTab::Images {
                             app.status = format!("Loaded {} images", app.images.len());
+                        }
+                        if loaded_count == 0 {
+                            if let Some(next_page) = app.next_image_feed_page() {
+                                request_image_feed_if_needed(app, Some(next_page));
+                            }
+                        } else if app.can_request_more_images(5) {
+                            if let Some(next_page) = app.next_image_feed_page() {
+                                request_image_feed_if_needed(app, Some(next_page));
+                            }
                         }
                     }
                     AppMessage::ImageDecoded(id, protocol) => {

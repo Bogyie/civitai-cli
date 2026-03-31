@@ -8,6 +8,14 @@ fn default_model_search_cache_ttl_hours() -> u64 {
     3
 }
 
+fn default_image_search_cache_ttl_minutes() -> u64 {
+    10
+}
+
+fn default_image_cache_ttl_minutes() -> u64 {
+    0
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub api_key: Option<String>,
@@ -15,10 +23,15 @@ pub struct AppConfig {
     pub bookmark_file_path: Option<PathBuf>,
     pub model_cover_cache_path: Option<PathBuf>,
     pub model_search_cache_path: Option<PathBuf>,
+    pub image_cache_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
     pub interrupted_download_file_path: Option<PathBuf>,
     #[serde(default = "default_model_search_cache_ttl_hours")]
     pub model_search_cache_ttl_hours: u64,
+    #[serde(default = "default_image_search_cache_ttl_minutes")]
+    pub image_search_cache_ttl_minutes: u64,
+    #[serde(default = "default_image_cache_ttl_minutes")]
+    pub image_cache_ttl_minutes: u64,
 }
 
 impl AppConfig {
@@ -81,6 +94,12 @@ impl AppConfig {
             .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_search_cache")))
     }
 
+    pub fn image_cache_path(&self) -> Option<PathBuf> {
+        self.image_cache_path
+            .clone()
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("image_cache")))
+    }
+
     pub fn download_history_path(&self) -> Option<PathBuf> {
         self.download_history_file_path
             .clone()
@@ -102,9 +121,12 @@ impl Default for AppConfig {
             bookmark_file_path: None,
             model_cover_cache_path: None,
             model_search_cache_path: None,
+            image_cache_path: None,
             download_history_file_path: None,
             interrupted_download_file_path: None,
             model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
+            image_search_cache_ttl_minutes: default_image_search_cache_ttl_minutes(),
+            image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
         }
     }
 }

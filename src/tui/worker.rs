@@ -1,5 +1,4 @@
 use anyhow::Result;
-use image::imageops::FilterType;
 use ratatui_image::picker::Picker;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ use crate::tui::app::{AppMessage, WorkerCommand};
 
 type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
 type SearchCache = HashMap<String, CachedSearchResult>;
+type ImageSearchCache = HashMap<String, CachedImageSearchResult>;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct CachedSearchResult {
@@ -28,6 +28,21 @@ struct CachedSearchResult {
     #[serde(default)]
     metadata: Option<PaginationMetadata>,
     cached_at_unix_secs: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct CachedImageSearchResult {
+    cache_key: String,
+    items: Vec<crate::api::ImageItem>,
+    #[serde(default)]
+    metadata: Option<PaginationMetadata>,
+    cached_at_unix_secs: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct CachedBinaryBlob {
+    cached_at_unix_secs: u64,
+    bytes: Vec<u8>,
 }
 
 enum CoverQueueCommand {
@@ -266,12 +281,38 @@ fn is_cache_valid(cached_at_unix_secs: u64, ttl_hours: u64) -> bool {
     now_unix_secs().saturating_sub(cached_at_unix_secs) < ttl_secs
 }
 
+fn is_cache_valid_minutes(cached_at_unix_secs: u64, ttl_minutes: u64) -> bool {
+    if ttl_minutes == 0 {
+        return false;
+    }
+
+    let ttl_secs = ttl_minutes.saturating_mul(60);
+    now_unix_secs().saturating_sub(cached_at_unix_secs) < ttl_secs
+}
+
+fn is_cache_valid_minutes_or_persistent(cached_at_unix_secs: u64, ttl_minutes: u64) -> bool {
+    if ttl_minutes == 0 {
+        return true;
+    }
+
+    let ttl_secs = ttl_minutes.saturating_mul(60);
+    now_unix_secs().saturating_sub(cached_at_unix_secs) < ttl_secs
+}
+
 fn model_search_cache_path(config: &AppConfig) -> Option<PathBuf> {
     config.search_cache_path()
 }
 
 fn model_cover_cache_root(config: &AppConfig) -> Option<PathBuf> {
     config.model_cover_cache_path()
+}
+
+fn image_search_cache_root(config: &AppConfig) -> Option<PathBuf> {
+    config.search_cache_path().map(|root| root.join("image_search"))
+}
+
+fn image_bytes_cache_root(config: &AppConfig) -> Option<PathBuf> {
+    config.image_cache_path()
 }
 
 fn debug_fetch_log_path(config: &AppConfig) -> Option<PathBuf> {
@@ -457,8 +498,7 @@ fn decode_model_cover(
     picker: &Picker,
 ) -> Option<ratatui_image::protocol::StatefulProtocol> {
     let img = image::load_from_memory(bytes).ok()?;
-    let resized = img.resize(600, 600, FilterType::Triangle);
-    Some(picker.new_resize_protocol(resized))
+    Some(picker.new_resize_protocol(img))
 }
 
 fn persist_model_cover_cache(path: &Path, bytes: &[u8]) {
@@ -492,6 +532,143 @@ fn has_more_from_metadata(metadata: Option<&PaginationMetadata>) -> bool {
 fn remove_cached_search_entry(cache_root: &Path, cache_key: &str) {
     let cache_path = cache_entry_path(cache_root, cache_key);
     let _ = std::fs::remove_file(cache_path);
+}
+
+fn load_image_search_cache(path: Option<&Path>, ttl_minutes: u64) -> ImageSearchCache {
+    let Some(path) = path else {
+        return HashMap::new();
+    };
+
+    let cache_root = path.to_path_buf();
+    if path.exists() && !path.is_dir() {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::fs::create_dir_all(&cache_root);
+
+    let mut cache = HashMap::new();
+    let Ok(entries) = std::fs::read_dir(&cache_root) else {
+        return cache;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("bin") {
+            continue;
+        }
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let config = bincode::config::standard();
+        let Ok((entry, _)) =
+            bincode::serde::decode_from_slice::<CachedImageSearchResult, _>(&bytes, config)
+        else {
+            continue;
+        };
+        if !entry.cache_key.is_empty() {
+            cache.insert(entry.cache_key.clone(), entry);
+        }
+    }
+    let _ = prune_image_search_cache(&mut cache, ttl_minutes);
+    save_image_search_cache(Some(&cache_root), &cache, ttl_minutes);
+    cache
+}
+
+fn save_image_search_cache(path: Option<&Path>, cache: &ImageSearchCache, ttl_minutes: u64) {
+    let Some(path) = path else {
+        return;
+    };
+
+    if path.exists() && !path.is_dir() {
+        let _ = std::fs::remove_file(path);
+    }
+
+    let mut normalized_cache = cache.to_owned();
+    let _ = prune_image_search_cache(&mut normalized_cache, ttl_minutes);
+    let _ = std::fs::remove_dir_all(path);
+    let _ = std::fs::create_dir_all(path);
+
+    for entry in normalized_cache.values() {
+        let data_path = cache_entry_path(path, &entry.cache_key);
+        let config = bincode::config::standard();
+        if let Ok(bytes) = bincode::serde::encode_to_vec(entry, config) {
+            let _ = std::fs::write(data_path, bytes);
+        }
+    }
+}
+
+fn prune_image_search_cache(cache: &mut ImageSearchCache, ttl_minutes: u64) -> usize {
+    if ttl_minutes == 0 {
+        let removed = cache.len();
+        cache.clear();
+        return removed;
+    }
+
+    let now = now_unix_secs();
+    let before = cache.len();
+    cache.retain(|_, entry| {
+        now.saturating_sub(entry.cached_at_unix_secs) < ttl_minutes.saturating_mul(60)
+    });
+
+    before.saturating_sub(cache.len())
+}
+
+fn load_cached_image_search_entry(
+    cache_root: &Path,
+    cache_key: &str,
+) -> Option<CachedImageSearchResult> {
+    let cache_path = cache_entry_path(cache_root, cache_key);
+    let bytes = std::fs::read(cache_path).ok()?;
+    let config = bincode::config::standard();
+    bincode::serde::decode_from_slice::<CachedImageSearchResult, _>(&bytes, config)
+        .ok()
+        .map(|(entry, _)| entry)
+}
+
+fn image_bytes_cache_path(cache_root: &Path, image_id: u64, image_url: &str) -> PathBuf {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in image_url.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let safe_name = image_url
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(24)
+        .collect::<String>();
+    cache_root.join(format!("img{image_id}_{hash:016x}_{safe_name}.bin"))
+}
+
+fn load_cached_feed_image(path: &Path, ttl_minutes: u64) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(path).ok()?;
+    let config = bincode::config::standard();
+    let Ok((entry, _)) = bincode::serde::decode_from_slice::<CachedBinaryBlob, _>(&bytes, config)
+    else {
+        let _ = std::fs::remove_file(path);
+        return None;
+    };
+
+    if !is_cache_valid_minutes_or_persistent(entry.cached_at_unix_secs, ttl_minutes)
+        || entry.bytes.is_empty()
+    {
+        let _ = std::fs::remove_file(path);
+        None
+    } else {
+        Some(entry.bytes)
+    }
+}
+
+fn persist_cached_feed_image(path: &Path, bytes: &[u8]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let entry = CachedBinaryBlob {
+        cached_at_unix_secs: now_unix_secs(),
+        bytes: bytes.to_vec(),
+    };
+    let config = bincode::config::standard();
+    if let Ok(encoded) = bincode::serde::encode_to_vec(&entry, config) {
+        let _ = std::fs::write(path, encoded);
+    }
 }
 
 fn pop_next_job(
@@ -538,14 +715,28 @@ pub async fn spawn_worker(
     let mut downloader_config = config.clone();
     let cover_worker_config = downloader_config.clone();
     let search_cache_path = model_search_cache_path(&downloader_config);
+    let image_search_cache_path = image_search_cache_root(&downloader_config);
     let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours));
+    let image_search_cache_ttl_minutes =
+        Arc::new(Mutex::new(downloader_config.image_search_cache_ttl_minutes));
+    let image_cache_ttl_minutes = Arc::new(Mutex::new(downloader_config.image_cache_ttl_minutes));
     let model_cover_cache_path = Arc::new(Mutex::new(model_cover_cache_root(&downloader_config)));
+    let image_bytes_cache_path = Arc::new(Mutex::new(image_bytes_cache_root(&downloader_config)));
     let search_cache = Arc::new(Mutex::new(if use_search_cache() {
         load_search_cache(search_cache_path.as_deref(), *search_cache_ttl_hours.lock().await)
     } else {
         HashMap::new()
     }));
+    let image_search_cache = Arc::new(Mutex::new(if use_search_cache() {
+        load_image_search_cache(
+            image_search_cache_path.as_deref(),
+            *image_search_cache_ttl_minutes.lock().await,
+        )
+    } else {
+        HashMap::new()
+    }));
     let search_cache_path = Arc::new(Mutex::new(search_cache_path));
+    let image_search_cache_path = Arc::new(Mutex::new(image_search_cache_path));
     let req_client = Client::builder().user_agent("civitai-cli").build().unwrap();
 
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -754,6 +945,11 @@ pub async fn spawn_worker(
                     let picker = picker.clone();
                     let api_key = downloader_config.api_key.clone();
                     let debug_config = downloader_config.clone();
+                    let image_search_cache = image_search_cache.clone();
+                    let image_search_cache_path = image_search_cache_path.clone();
+                    let image_bytes_cache_path = image_bytes_cache_path.clone();
+                    let image_search_cache_ttl_minutes = image_search_cache_ttl_minutes.clone();
+                    let image_cache_ttl_minutes = image_cache_ttl_minutes.clone();
 
                     tokio::spawn(async move {
                         debug_fetch_log(&debug_config, "FetchImages: started");
@@ -777,118 +973,185 @@ pub async fn spawn_worker(
                         let use_next_page = next_page_url.filter(|url| !url.trim().is_empty());
                         let is_append = use_next_page.is_some();
                         let requested_nsfw = image_opts.nsfw.clone();
-                        let target_visible_count = image_opts.limit.max(1) as usize;
-                        let mut current_url =
+                        let current_url =
                             use_next_page.unwrap_or_else(|| build_image_search_url(&image_opts));
-                        let mut all_visible_items = Vec::with_capacity(target_visible_count);
-                        let final_next_page = loop {
-                            let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(status_with_url(
-                                    if is_append {
-                                        "Fetching image feed next page"
-                                    } else {
-                                        "Fetching image feed"
-                                    },
-                                    &current_url,
-                                )))
-                                .await;
-                            debug_fetch_log(
-                                &debug_config,
-                                &format!("FetchImages: request -> {}", current_url),
-                            );
+                        let image_search_ttl_minutes = *image_search_cache_ttl_minutes.lock().await;
+                        let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate(status_with_url(
+                                if is_append {
+                                    "Fetching image feed next page"
+                                } else {
+                                    "Fetching image feed"
+                                },
+                                &current_url,
+                            )))
+                            .await;
+                        debug_fetch_log(
+                            &debug_config,
+                            &format!("FetchImages: request -> {}", current_url),
+                        );
 
-                            match client.get_images_by_url(current_url.clone()).await {
-                                Ok(res) => {
-                                    let filtered_items = filter_image_items_by_requested_nsfw(
-                                        res.items,
-                                        requested_nsfw.as_deref(),
-                                    );
-                                    let filtered_count = filtered_items.len();
-                                    let mut visible_items = filtered_items
-                                        .into_iter()
-                                        .filter(|item| item.r#type.as_deref() != Some("video"))
-                                        .collect::<Vec<_>>();
-                                    let next_page =
-                                        res.metadata.and_then(|metadata| metadata.next_page);
-                                    let skipped_videos =
-                                        filtered_count.saturating_sub(visible_items.len());
+                        let cached_response = if use_search_cache() {
+                            let cache_key = current_url.clone();
+                            let cache_root = image_search_cache_path.lock().await.clone();
+                            let mut cache = image_search_cache.lock().await;
+                            let removed =
+                                prune_image_search_cache(&mut cache, image_search_ttl_minutes);
+                            if removed > 0 && cache_root.is_some() {
+                                save_image_search_cache(
+                                    cache_root.as_deref(),
+                                    &cache,
+                                    image_search_ttl_minutes,
+                                );
+                            }
 
-                                    debug_fetch_log(
-                                        &debug_config,
-                                        &format!(
-                                            "FetchImages: response -> visible_items={}, skipped_videos={}, next_page_present={}",
-                                            visible_items.len(),
-                                            skipped_videos,
-                                            next_page.is_some()
-                                        ),
-                                    );
-
-                                    let remaining = target_visible_count
-                                        .saturating_sub(all_visible_items.len());
-                                    if remaining == 0 {
-                                        break Some(current_url);
-                                    }
-
-                                    if visible_items.len() > remaining {
-                                        visible_items.truncate(remaining);
-                                    }
-                                    all_visible_items.extend(visible_items);
-
-                                    if all_visible_items.len() >= target_visible_count {
-                                        break next_page;
-                                    }
-
-                                    match next_page {
-                                        Some(url) => {
-                                            debug_fetch_log(
-                                                &debug_config,
-                                                &format!(
-                                                    "FetchImages: top-off continuing for skipped videos -> {}",
-                                                    url
-                                                ),
-                                            );
-                                            current_url = url;
-                                        }
-                                        None => {
-                                            break None;
+                            let mut entry = cache.get(&cache_key).cloned();
+                            if entry.is_none() {
+                                if let Some(cache_root) = cache_root.as_deref() {
+                                    if let Some(on_disk_entry) =
+                                        load_cached_image_search_entry(cache_root, &cache_key)
+                                    {
+                                        if is_cache_valid_minutes(
+                                            on_disk_entry.cached_at_unix_secs,
+                                            image_search_ttl_minutes,
+                                        ) {
+                                            cache.insert(cache_key.clone(), on_disk_entry.clone());
+                                            entry = Some(on_disk_entry);
                                         }
                                     }
                                 }
-                                Err(e) => {
-                                    debug_fetch_log(
-                                        &debug_config,
-                                        &format!("FetchImages: get_images failed: {}", e),
-                                    );
+                            }
+
+                            match entry {
+                                Some(entry)
+                                    if is_cache_valid_minutes(
+                                        entry.cached_at_unix_secs,
+                                        image_search_ttl_minutes,
+                                    ) =>
+                                {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(format!(
-                                            "{}",
-                                            error_status_with_url(
-                                                "Error fetching images",
-                                                &current_url,
-                                                &e.to_string(),
-                                            )
+                                        .send(AppMessage::StatusUpdate(status_with_url(
+                                            "Loaded cached image feed",
+                                            &current_url,
                                         )))
                                         .await;
-                                    return;
+                                    Some(entry)
                                 }
+                                Some(_) => {
+                                    cache.remove(&cache_key);
+                                    if let Some(cache_root) = cache_root.as_deref() {
+                                        let _ =
+                                            std::fs::remove_file(cache_entry_path(cache_root, &cache_key));
+                                        save_image_search_cache(
+                                            Some(cache_root),
+                                            &cache,
+                                            image_search_ttl_minutes,
+                                        );
+                                    }
+                                    None
+                                }
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+
+                        let fetch_result = if let Some(entry) = cached_response {
+                            Ok(crate::api::ImageResponse {
+                                items: entry.items,
+                                metadata: entry.metadata,
+                            })
+                        } else {
+                            client.get_images_by_url(current_url.clone()).await
+                        };
+
+                        let (visible_items, final_next_page) = match fetch_result {
+                            Ok(res) => {
+                                let filtered_items = filter_image_items_by_requested_nsfw(
+                                    res.items,
+                                    requested_nsfw.as_deref(),
+                                );
+                                let metadata = res.metadata.clone();
+                                let next_page =
+                                    metadata.as_ref().and_then(|metadata| metadata.next_page.clone());
+                                let filtered_count = filtered_items.len();
+                                let visible_items = filtered_items
+                                    .clone()
+                                    .into_iter()
+                                    .filter(|item| item.r#type.as_deref() != Some("video"))
+                                    .collect::<Vec<_>>();
+                                let skipped_videos =
+                                    filtered_count.saturating_sub(visible_items.len());
+
+                                debug_fetch_log(
+                                    &debug_config,
+                                    &format!(
+                                        "FetchImages: response -> visible_items={}, skipped_videos={}, next_page_present={}",
+                                        visible_items.len(),
+                                        skipped_videos,
+                                        next_page.is_some()
+                                    ),
+                                );
+
+                                if use_search_cache() {
+                                    let cache_root = image_search_cache_path.lock().await.clone();
+                                    if cache_root.is_some() && image_search_ttl_minutes > 0 {
+                                        let mut cache = image_search_cache.lock().await;
+                                        cache.insert(
+                                            current_url.clone(),
+                                            CachedImageSearchResult {
+                                                cache_key: current_url.clone(),
+                                                items: filtered_items,
+                                                metadata,
+                                                cached_at_unix_secs: now_unix_secs(),
+                                            },
+                                        );
+                                        save_image_search_cache(
+                                            cache_root.as_deref(),
+                                            &cache,
+                                            image_search_ttl_minutes,
+                                        );
+                                    }
+                                }
+
+                                (visible_items, next_page)
+                            }
+                            Err(e) => {
+                                debug_fetch_log(
+                                    &debug_config,
+                                    &format!("FetchImages: get_images failed: {}", e),
+                                );
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "{}",
+                                        error_status_with_url(
+                                            "Error fetching images",
+                                            &current_url,
+                                            &e.to_string(),
+                                        )
+                                    )))
+                                    .await;
+                                return;
                             }
                         };
 
                         let _ = tx_msg_clone
                             .send(AppMessage::ImagesLoaded(
-                                all_visible_items.clone(),
+                                visible_items.clone(),
                                 is_append,
                                 final_next_page,
                             ))
                             .await;
 
                         let fetch_semaphore = Arc::new(Semaphore::new(3));
-                        let mut handles = Vec::with_capacity(all_visible_items.len());
-                        for item in all_visible_items {
+                        let mut handles = Vec::with_capacity(visible_items.len());
+                        for item in visible_items {
                             debug_fetch_log(
                                 &debug_config,
                                 &format!("FetchImages: enqueue image id={}", item.id),
                             );
+                            let image_bytes_cache_root = image_bytes_cache_path.lock().await.clone();
                             handles.push(tokio::spawn(load_feed_image(
                                 item.id,
                                 item.url,
@@ -897,6 +1160,9 @@ pub async fn spawn_worker(
                                 tx_msg_clone.clone(),
                                 fetch_semaphore.clone(),
                                 debug_config.clone(),
+                                image_bytes_cache_root,
+                                image_cache_ttl_minutes,
+                                use_search_cache(),
                             )));
                         }
                         for handle in handles {
@@ -1378,16 +1644,35 @@ pub async fn spawn_worker(
                                 Ok(_) => {
                                     downloader_config = new_cfg;
                                     let ttl_hours = downloader_config.model_search_cache_ttl_hours;
+                                    let image_search_ttl_minutes_value =
+                                        downloader_config.image_search_cache_ttl_minutes;
+                                    let image_cache_ttl_minutes_value =
+                                        downloader_config.image_cache_ttl_minutes;
                                     {
                                         let mut ttl_hours_ref = search_cache_ttl_hours.lock().await;
                                         *ttl_hours_ref = ttl_hours;
                                     }
+                                    {
+                                        let mut ttl_ref =
+                                            image_search_cache_ttl_minutes.lock().await;
+                                        *ttl_ref = image_search_ttl_minutes_value;
+                                    }
+                                    {
+                                        let mut ttl_ref = image_cache_ttl_minutes.lock().await;
+                                        *ttl_ref = image_cache_ttl_minutes_value;
+                                    }
 
                                     let new_cache_path = model_search_cache_path(&downloader_config);
+                                    let new_image_search_cache_path =
+                                        image_search_cache_root(&downloader_config);
                                     let new_cover_cache_path = model_cover_cache_root(&downloader_config);
+                                    let new_image_bytes_cache_path =
+                                        image_bytes_cache_root(&downloader_config);
                                     {
                                         let mut cache_path = search_cache_path.lock().await;
                                         let mut cache = search_cache.lock().await;
+                                        let mut image_cache_path = image_search_cache_path.lock().await;
+                                        let mut image_cache = image_search_cache.lock().await;
                                         if *cache_path != new_cache_path {
                                             *cache_path = new_cache_path.clone();
                                             if use_search_cache() {
@@ -1405,8 +1690,34 @@ pub async fn spawn_worker(
                                             }
                                         }
 
+                                        if *image_cache_path != new_image_search_cache_path {
+                                            *image_cache_path = new_image_search_cache_path.clone();
+                                            if use_search_cache() {
+                                                *image_cache = load_image_search_cache(
+                                                    new_image_search_cache_path.as_deref(),
+                                                    image_search_ttl_minutes_value,
+                                                );
+                                            } else {
+                                                image_cache.clear();
+                                            }
+                                        } else if use_search_cache() {
+                                            let _ = prune_image_search_cache(
+                                                &mut image_cache,
+                                                image_search_ttl_minutes_value,
+                                            );
+                                            save_image_search_cache(
+                                                image_cache_path.as_deref(),
+                                                &image_cache,
+                                                image_search_ttl_minutes_value,
+                                            );
+                                        } else {
+                                            image_cache.clear();
+                                        }
+
                                         let mut cover_cache_path = model_cover_cache_path.lock().await;
                                         *cover_cache_path = new_cover_cache_path;
+                                        let mut image_bytes_path = image_bytes_cache_path.lock().await;
+                                        *image_bytes_path = new_image_bytes_cache_path;
                                     }
 
                                     let _ = tx_msg
@@ -1899,7 +2210,28 @@ async fn load_feed_image(
     tx_msg: mpsc::Sender<AppMessage>,
     semaphore: Arc<Semaphore>,
     debug_config: AppConfig,
+    image_bytes_cache_root: Option<PathBuf>,
+    ttl_minutes: u64,
+    use_cache: bool,
 ) {
+    if use_cache {
+        if let Some(cache_root) = image_bytes_cache_root.as_ref() {
+            let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
+            if let Some(bytes) = load_cached_feed_image(&cache_path, ttl_minutes) {
+                debug_fetch_log(
+                    &debug_config,
+                    &format!("Image feed loaded from cache: id={}, url={}", image_id, image_url),
+                );
+                if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+                    let protocol = picker.new_resize_protocol(dyn_img);
+                    let _ = tx_msg.send(AppMessage::ImageDecoded(image_id, protocol)).await;
+                    return;
+                }
+                let _ = std::fs::remove_file(cache_path);
+            }
+        }
+    }
+
     let _permit = match semaphore.acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => return,
@@ -1919,8 +2251,13 @@ async fn load_feed_image(
                 &format!("Image feed fetched: id={}, bytes={}", image_id, bytes.len()),
             );
             if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                let resized = dyn_img.resize(600, 600, FilterType::Triangle);
-                let protocol = picker.new_resize_protocol(resized);
+                if use_cache {
+                    if let Some(cache_root) = image_bytes_cache_root.as_ref() {
+                        let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
+                        persist_cached_feed_image(&cache_path, &bytes);
+                    }
+                }
+                let protocol = picker.new_resize_protocol(dyn_img);
                 let _ = tx_msg
                     .send(AppMessage::ImageDecoded(image_id, protocol))
                     .await;

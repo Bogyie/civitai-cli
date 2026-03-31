@@ -323,7 +323,7 @@ pub struct ImageItem {
     pub stats: Option<ImageStats>,
     #[serde(default)]
     pub meta: Option<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "as_string_from_serde")]
     pub username: Option<String>,
 }
 

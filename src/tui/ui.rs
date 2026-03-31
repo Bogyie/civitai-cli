@@ -586,7 +586,63 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]));
 
-    let download_history_path_val = if fm.editing && fm.focused_field == 5 {
+    let image_cache_path_val = if fm.editing && fm.focused_field == 5 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config
+            .image_cache_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string())
+            .or_else(|| app.config.image_cache_path().map(|path| path.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "Not Configured".to_string())
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 5 { "> Image Cache Folder: " } else { "  Image Cache Folder: " },
+            Style::default().fg(if fm.focused_field == 5 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            image_cache_path_val,
+            if fm.focused_field == 5 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
+    let image_search_ttl_val = if fm.editing && fm.focused_field == 6 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config.image_search_cache_ttl_minutes.to_string()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 6 { "> Image Search Cache TTL (minutes): " } else { "  Image Search Cache TTL (minutes): " },
+            Style::default().fg(if fm.focused_field == 6 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            image_search_ttl_val,
+            if fm.focused_field == 6 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
+    let image_cache_ttl_val = if fm.editing && fm.focused_field == 7 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config.image_cache_ttl_minutes.to_string()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 7 { "> Image Cache TTL (minutes, 0 = persistent): " } else { "  Image Cache TTL (minutes, 0 = persistent): " },
+            Style::default().fg(if fm.focused_field == 7 { Color::Yellow } else { Color::White }),
+        ),
+        Span::styled(
+            image_cache_ttl_val,
+            if fm.focused_field == 7 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+        ),
+    ]));
+
+    let download_history_path_val = if fm.editing && fm.focused_field == 8 {
         format!("{}█", fm.input_buffer)
     } else {
         app.config
@@ -599,12 +655,12 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 5 { "> Download History File: " } else { "  Download History File: " },
-            Style::default().fg(if fm.focused_field == 5 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 8 { "> Download History File: " } else { "  Download History File: " },
+            Style::default().fg(if fm.focused_field == 8 { Color::Yellow } else { Color::White }),
         ),
         Span::styled(
             download_history_path_val,
-            if fm.focused_field == 5 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 8 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
         ),
     ]));
 
