@@ -90,7 +90,11 @@ pub async fn run_event_loop(
                                             selected_model_id,
                                             selected_version_id,
                                             false,
+                                            false,
                                         ));
+                                        app.model_search_page = 1;
+                                        app.model_search_has_more = true;
+                                        app.model_search_loading_more = false;
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
                                     }
                                 }
@@ -198,6 +202,7 @@ pub async fn run_event_loop(
                                                 Err(err) => {
                                                     app.last_error =
                                                         Some(format!("Failed to delete file: {}", err));
+                                                    app.show_status_modal = true;
                                                     app.status =
                                                         format!("Failed to delete file for {}", session.filename);
                                                 }
@@ -298,6 +303,7 @@ pub async fn run_event_loop(
                                             }
                                             _ => {
                                                 app.last_error = Some("Cache TTL must be a positive integer".into());
+                                                app.show_status_modal = true;
                                                 app.status = "Invalid cache TTL value".into();
                                                 continue;
                                             }
@@ -325,8 +331,10 @@ pub async fn run_event_loop(
                                     }
                                     if let Err(e) = app.config.save() {
                                         app.last_error = Some(format!("Failed to save config: {}", e));
+                                        app.show_status_modal = true;
                                     } else {
                                         app.last_error = None;
+                                        app.show_status_modal = false;
                                         app.status = "Settings saved to config.json".into();
                                         if let Some(tx) = &app.tx {
                                             let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
@@ -426,7 +434,7 @@ pub async fn run_event_loop(
                                     app.request_bookmark_remove_selected();
                                 }
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
+                                KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field < 4 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
@@ -437,6 +445,27 @@ pub async fn run_event_loop(
                                     }
                                 } else {
                                     app.select_next();
+                                    if app.active_tab == MainTab::Models && app.can_request_more_models() {
+                                        let load_more = app
+                                            .model_list_state
+                                            .selected()
+                                            .is_some_and(|selected| selected + 1 >= app.models.len());
+                                        if load_more {
+                                            if let Some(opts) = app.next_model_search_options_if_needed() {
+                                                if let Some(tx) = &app.tx {
+                                                    let _ = tx.try_send(WorkerCommand::SearchModels(
+                                                        opts,
+                                                        None,
+                                                        None,
+                                                        false,
+                                                        true,
+                                                    ));
+                                                    app.status =
+                                                        format!("Loading more results (page {})...", app.model_search_page);
+                                                }
+                                            }
+                                        }
+                                    }
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                     }
@@ -514,7 +543,7 @@ pub async fn run_event_loop(
                                         }
 
                                         match removed.file_path {
-                                            Some(path) => match fs::remove_file(&path) {
+                                        Some(path) => match fs::remove_file(&path) {
                                                 Ok(()) => {
                                                     app.last_error = None;
                                                     app.status = format!(
@@ -524,6 +553,7 @@ pub async fn run_event_loop(
                                                 }
                                                 Err(err) => {
                                                     app.last_error = Some(err.to_string());
+                                                    app.show_status_modal = true;
                                                     app.status = if err.kind() == ErrorKind::NotFound {
                                                         format!("No file found for {}", removed.model_name)
                                                     } else {
@@ -606,6 +636,7 @@ pub async fn run_event_loop(
                                             .is_some_and(|path| path.exists());
                                         if !has_file {
                                             app.last_error = Some("Missing partial file".to_string());
+                                            app.show_status_modal = true;
                                             app.status = "Cannot resume: partial file not found.".into();
                                             continue;
                                         }
@@ -647,7 +678,11 @@ pub async fn run_event_loop(
                                             selected_model_id,
                                             selected_version_id,
                                             true,
+                                            false,
                                         ));
+                                        app.model_search_page = 1;
+                                        app.model_search_has_more = true;
+                                        app.model_search_loading_more = false;
                                         app.status = format!(
                                             "Refreshing search cache for '{}'",
                                             app.search_form.query
@@ -705,14 +740,31 @@ pub async fn run_event_loop(
                      AppMessage::ModelCoverLoadFailed(version_id) => {
                          app.model_version_image_failed.insert(version_id);
                      }
-                     AppMessage::ModelsSearched(results) => {
-                         app.models = results;
-                         app.model_list_state.select(Some(0));
-                         send_cover_priority(app);
-                         app.status = format!("Found {} models", app.models.len());
+                     AppMessage::ModelsSearchedChunk(results, append, has_more) => {
+                         if append {
+                             let appended_len = results.len();
+                             app.append_models_results(results, has_more);
+                             app.status = format!(
+                                 "Loaded {} more models (page {}, total {})",
+                                 appended_len,
+                                 app.model_search_page,
+                                 app.models.len()
+                             );
+                         } else {
+                             app.set_models_results(results, has_more);
+                             send_cover_priority(app);
+                             app.status = format!("Found {} models", app.models.len());
+                         }
                      }
                      AppMessage::StatusUpdate(status) => {
                          app.status = status;
+                         if is_error_status(&app.status) {
+                             app.last_error = Some(app.status.clone());
+                             app.show_status_modal = true;
+                         } else {
+                             app.last_error = None;
+                             app.show_status_modal = false;
+                         }
                      }
                      AppMessage::DownloadProgress(model_id, filename, progress, downloaded_bytes, total_bytes) => {
                          if let Some(existing) = app.active_downloads.get_mut(&model_id) {
@@ -799,6 +851,7 @@ pub async fn run_event_loop(
                          app.clamp_selected_download_index();
                          app.clamp_selected_history_index();
                          app.last_error = Some(reason.clone());
+                         app.show_status_modal = true;
                          app.status = format!("Download failed: {}", reason);
                      }
                     AppMessage::DownloadCancelled(model_id) => {
@@ -825,4 +878,9 @@ pub async fn run_event_loop(
         }
     }
     Ok(())
+}
+
+fn is_error_status(value: &str) -> bool {
+    let lowered = value.to_lowercase();
+    lowered.contains("error") || lowered.contains("failed") || lowered.contains("fail")
 }

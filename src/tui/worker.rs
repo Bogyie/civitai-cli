@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex, Semaphore};
 
 use crate::api::{CivitaiClient, Model};
+use crate::api::types::PaginationMetadata;
 use crate::config::AppConfig;
 use crate::download::manager::DownloadControl;
 use crate::download::DownloadManager;
@@ -22,6 +23,8 @@ type SearchCache = HashMap<String, CachedSearchResult>;
 struct CachedSearchResult {
     cache_key: String,
     models: Vec<Model>,
+    #[serde(default)]
+    metadata: Option<PaginationMetadata>,
     cached_at_unix_secs: u64,
 }
 
@@ -37,6 +40,16 @@ fn cache_key_for_options(opts: &crate::api::client::SearchOptions) -> String {
         .as_deref()
         .map(normalize_cache_segment)
         .unwrap_or_else(|| "all".to_string());
+    let tag = opts
+        .tag
+        .as_deref()
+        .map(normalize_cache_segment)
+        .unwrap_or_else(|| "all".to_string());
+    let username = opts
+        .username
+        .as_deref()
+        .map(normalize_cache_segment)
+        .unwrap_or_else(|| "all".to_string());
     let sort = opts
         .sort
         .as_deref()
@@ -48,8 +61,10 @@ fn cache_key_for_options(opts: &crate::api::client::SearchOptions) -> String {
         .map(normalize_cache_segment)
         .unwrap_or_else(|| "all".to_string());
     format!(
-        "q={}|t={}|sort={}|base={}",
+        "q={}|tag={}|user={}|t={}|sort={}|base={}",
         query,
+        tag,
+        username,
         types,
         sort,
         base_models
@@ -69,7 +84,11 @@ fn normalize_search_options_for_cache(mut opts: crate::api::client::SearchOption
     };
 
     opts.types = normalize(opts.types);
+    opts.tag = normalize(opts.tag);
+    opts.username = normalize(opts.username);
     opts.sort = normalize(opts.sort);
+    opts.period = normalize(opts.period);
+    opts.allow_commercial_use = normalize(opts.allow_commercial_use);
     opts.base_models = normalize(opts.base_models);
     opts
 }
@@ -256,6 +275,38 @@ fn load_cached_search_entry(cache_root: &Path, cache_key: &str) -> Option<Cached
     bincode::serde::decode_from_slice::<CachedSearchResult, _>(&bytes, config)
         .ok()
         .map(|(entry, _)| entry)
+}
+
+fn parse_metadata_u64(value: Option<&str>) -> Option<u64> {
+    value.and_then(|raw| raw.trim().parse::<u64>().ok())
+}
+
+fn has_more_from_metadata(metadata: Option<&PaginationMetadata>, current_page: u32) -> bool {
+    let Some(metadata) = metadata else {
+        return false;
+    };
+
+    if metadata
+        .next_page
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+
+    if let Some(total_pages) = parse_metadata_u64(metadata.total_pages.as_deref()) {
+        return (current_page as u64) < total_pages;
+    }
+
+    let Some(total_items) = parse_metadata_u64(metadata.total_items.as_deref()) else {
+        return false;
+    };
+    let Some(page_size) = parse_metadata_u64(metadata.page_size.as_deref()).filter(|size| *size > 0) else {
+        return false;
+    };
+    let estimated_pages = (total_items + page_size - 1) / page_size;
+    (current_page as u64) < estimated_pages
 }
 
 fn remove_cached_search_entry(cache_root: &Path, cache_key: &str) {
@@ -572,6 +623,7 @@ pub async fn spawn_worker(
                     preferred_model_id,
                     preferred_version_id,
                     force_refresh,
+                    append,
                 ) => {
                     let tx_msg_clone = tx_msg.clone();
                     let cover_cmd_tx = cover_cmd_tx.clone();
@@ -598,7 +650,13 @@ pub async fn spawn_worker(
                         let cache_key = cache_key_for_options(&opts);
                         let ttl_hours = *search_cache_ttl_hours.lock().await;
                         let cache_path = search_cache_path.lock().await.clone();
-                        let mut cached = None;
+                        let page = opts.page.unwrap_or(1).max(1);
+                        let limit = opts.limit.max(1);
+                        let start_idx = (page.saturating_sub(1).saturating_mul(limit)) as usize;
+                        let end_idx = start_idx.saturating_add(limit as usize);
+                        let mut cached_slice: Option<Vec<Model>> = None;
+                        let mut cached_has_more = false;
+
                         if !force_refresh {
                             let mut cache = search_cache.lock().await;
                             let removed = prune_search_cache(&mut cache, ttl_hours);
@@ -606,15 +664,87 @@ pub async fn spawn_worker(
                                 save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
                             }
 
-                            if let Some(entry) = cache.get(&cache_key) {
-                                if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
+                            let mut entry = cache.get(&cache_key).cloned();
+                            if entry.is_none() {
+                                if let Some(cache_root) = cache_path.as_deref() {
                                     let _ = tx_msg_clone
                                         .send(AppMessage::StatusUpdate(format!(
-                                            "Using in-memory cached results for \"{}\"",
+                                            "Checking on-disk cache for \"{}\"",
                                             query_label
                                         )))
                                         .await;
-                                    cached = Some(entry.models.clone());
+                                    if let Some(on_disk_entry) = load_cached_search_entry(cache_root, &cache_key) {
+                                        if is_cache_valid(on_disk_entry.cached_at_unix_secs, ttl_hours) {
+                                            cache.insert(cache_key.clone(), on_disk_entry.clone());
+                                            save_search_cache(Some(cache_root), &cache, ttl_hours);
+                                            entry = Some(on_disk_entry);
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::StatusUpdate(format!(
+                                                    "Loaded on-disk cached results for \"{}\"",
+                                                    query_label
+                                                )))
+                                                .await;
+                                        } else {
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::StatusUpdate(format!(
+                                                    "Cached file expired for \"{}\", refreshing",
+                                                    query_label
+                                                )))
+                                                .await;
+                                            remove_cached_search_entry(cache_root, &cache_key);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let Some(entry) = entry {
+                                if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
+                                    if append {
+                                        if start_idx < entry.models.len() {
+                                            let take_end = end_idx.min(entry.models.len());
+                                            let has_more = has_more_from_metadata(
+                                                entry.metadata.as_ref(),
+                                                page,
+                                            );
+                                            cached_slice = Some(entry.models[start_idx..take_end].to_vec());
+                                            cached_has_more = take_end < entry.models.len() || has_more;
+                                            let _ = tx_msg_clone
+                                                .send(AppMessage::StatusUpdate(format!(
+                                                    "Using cached page for \"{}\"",
+                                                    query_label
+                                                )))
+                                                .await;
+                                        } else {
+                                            cached_slice = None;
+                                            cached_has_more = has_more_from_metadata(
+                                                entry.metadata.as_ref(),
+                                                page,
+                                            );
+                                        }
+                                        let cache_status = if cached_has_more {
+                                            format!(
+                                                "Reached cached page boundary for \"{}\"",
+                                                query_label
+                                            )
+                                        } else {
+                                            format!(
+                                                "Cached page not complete for \"{}\", refreshing from network",
+                                                query_label
+                                            )
+                                        };
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(cache_status))
+                                            .await;
+                                    } else {
+                                        cached_slice = Some(entry.models.clone());
+                                        cached_has_more = has_more_from_metadata(entry.metadata.as_ref(), page);
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(format!(
+                                                "Using in-memory cached results for \"{}\"",
+                                                query_label
+                                            )))
+                                            .await;
+                                    }
                                 } else {
                                     let _ = tx_msg_clone
                                         .send(AppMessage::StatusUpdate(format!(
@@ -624,34 +754,13 @@ pub async fn spawn_worker(
                                         .await;
                                     cache.remove(&cache_key);
                                 }
-                            } else if let Some(cache_root) = cache_path.as_deref() {
+                            } else {
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
-                                        "Checking on-disk cache for \"{}\"",
+                                        "No cached results for \"{}\"",
                                         query_label
                                     )))
                                     .await;
-                                if let Some(entry) = load_cached_search_entry(cache_root, &cache_key) {
-                                    if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
-                                        cache.insert(cache_key.clone(), entry.clone());
-                                        cached = Some(entry.models.clone());
-                                        save_search_cache(Some(cache_root), &cache, ttl_hours);
-                                        let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
-                                                "Loaded on-disk cached results for \"{}\"",
-                                                query_label
-                                            )))
-                                            .await;
-                                    } else {
-                                        let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
-                                                "Cached file expired for \"{}\", refreshing",
-                                                query_label
-                                            )))
-                                            .await;
-                                        remove_cached_search_entry(cache_root, &cache_key);
-                                    }
-                                }
                             }
                         } else {
                             let _ = tx_msg_clone
@@ -662,9 +771,13 @@ pub async fn spawn_worker(
                                 .await;
                         }
 
-                        if let Some(cached) = cached {
+                        if let Some(cached) = cached_slice {
                             let _ = tx_msg_clone
-                                .send(AppMessage::ModelsSearched(cached.clone()))
+                                .send(AppMessage::ModelsSearchedChunk(
+                                    cached.clone(),
+                                    append,
+                                    cached_has_more,
+                                ))
                                 .await;
 
                             let mut jobs = Vec::with_capacity(cached.len());
@@ -722,28 +835,41 @@ pub async fn spawn_worker(
 
                         let _ = tx_msg_clone
                             .send(AppMessage::StatusUpdate(format!(
-                                "Fetching models matching '{}'...",
+                                "Fetching models matching '{}' (page {})...",
                                 opts.query
+                                    ,
+                                page
                             )))
                             .await;
 
-                        match civitai_clone.search_models(opts).await {
+                        let mut query_opts = opts.clone();
+                        query_opts.page = Some(page);
+
+                        match civitai_clone.search_models(query_opts).await {
                             Ok(res) => {
+                                let has_more = has_more_from_metadata(res.metadata.as_ref(), page);
+                                let models = res.items.clone();
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::ModelsSearched(res.items.clone()))
+                                    .send(AppMessage::ModelsSearchedChunk(
+                                        models.clone(),
+                                        append,
+                                        has_more,
+                                    ))
                                     .await;
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
-                                        "Fetched {} models for \"{}\"",
-                                        res.items.len(),
+                                        "Fetched {} models for \"{}\" (page {})",
+                                        models.len(),
                                         query_label
+                                            ,
+                                        page
                                     )))
                                     .await;
 
-                                let mut jobs = Vec::with_capacity(res.items.len());
+                                let mut jobs = Vec::with_capacity(models.len());
                                 let mut preferred_url = None;
 
-                                for model in &res.items {
+                                for model in &models {
                                     for version in &model.model_versions {
                                         if let Some(image) = version.images.first() {
                                             jobs.push((version.id, image.url.clone()));
@@ -770,14 +896,25 @@ pub async fn spawn_worker(
                                 if ttl_hours > 0 {
                                     let mut cache = search_cache.lock().await;
                                     let cache_key = cache_key.clone();
-                                    cache.insert(
-                                        cache_key.clone(),
-                                        CachedSearchResult {
-                                            cache_key,
-                                            models: res.items,
-                                            cached_at_unix_secs: now_unix_secs(),
-                                        },
-                                    );
+                                    let entry = cache.entry(cache_key.clone()).or_insert(CachedSearchResult {
+                                        cache_key: cache_key.clone(),
+                                        models: Vec::new(),
+                                        metadata: None,
+                                        cached_at_unix_secs: now_unix_secs(),
+                                    });
+                                    if append {
+                                        let mut existing_ids: HashSet<u64> =
+                                            entry.models.iter().map(|model| model.id).collect();
+                                        for model in models {
+                                            if existing_ids.insert(model.id) {
+                                                entry.models.push(model);
+                                            }
+                                        }
+                                    } else {
+                                        entry.models = models;
+                                    }
+                                    entry.metadata = res.metadata;
+                                    entry.cached_at_unix_secs = now_unix_secs();
                                     save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
                                 }
                             }

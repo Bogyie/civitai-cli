@@ -131,8 +131,23 @@ impl SearchFormState {
         crate::api::client::SearchOptions {
             query: self.query.clone(),
             limit: 50,
+            page: Some(1),
+            tag: None,
+            username: None,
             types: Some(self.types[self.selected_type].clone()),
             sort: Some(self.sorts[self.selected_sort].clone()),
+            period: None,
+            rating: None,
+            favorites: None,
+            hidden: None,
+            primary_file_only: None,
+            allow_no_credit: None,
+            allow_derivatives: None,
+            allow_different_licenses: None,
+            allow_commercial_use: None,
+            nsfw: None,
+            supports_generation: None,
+            ids: None,
             base_models: Some(self.bases[self.selected_base].clone()),
         }
     }
@@ -141,7 +156,7 @@ impl SearchFormState {
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>),
     ImageDecoded(u64, StatefulProtocol),
-    ModelsSearched(Vec<Model>),
+    ModelsSearchedChunk(Vec<Model>, bool, bool),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
@@ -207,7 +222,7 @@ pub struct InterruptedDownloadSession {
 
 pub enum WorkerCommand {
     FetchImages,
-    SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>, bool),
+    SearchModels(crate::api::client::SearchOptions, Option<u64>, Option<u64>, bool, bool),
     ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
     DownloadModelForImage(u64),
@@ -228,6 +243,9 @@ pub struct App {
     pub settings_form: SettingsFormState,
     
     pub models: Vec<Model>,
+    pub model_search_page: u32,
+    pub model_search_has_more: bool,
+    pub model_search_loading_more: bool,
     pub bookmarks: Vec<Model>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
@@ -311,6 +329,9 @@ impl App {
             search_form: SearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
+            model_search_page: 1,
+            model_search_has_more: true,
+            model_search_loading_more: false,
             bookmarks,
             show_model_details: false,
             model_list_state,
@@ -367,6 +388,30 @@ impl App {
         self.tx = Some(tx.clone());
     }
 
+    pub fn model_search_options(&self, page: u32) -> crate::api::client::SearchOptions {
+        let mut options = self.search_form.build_options();
+        options.page = Some(if page == 0 { 1 } else { page });
+        options
+    }
+
+    pub fn can_request_more_models(&self) -> bool {
+        self.active_tab == MainTab::Models
+            && !self.models.is_empty()
+            && self.model_search_has_more
+            && !self.model_search_loading_more
+            && self.model_search_page >= 1
+    }
+
+    pub fn next_model_search_options_if_needed(&mut self) -> Option<crate::api::client::SearchOptions> {
+        if !self.can_request_more_models() {
+            return None;
+        }
+
+        self.model_search_page = self.model_search_page.saturating_add(1);
+        self.model_search_loading_more = true;
+        Some(self.model_search_options(self.model_search_page))
+    }
+
     pub fn select_next(&mut self) {
         if self.active_tab == MainTab::Images {
             if !self.images.is_empty() && self.selected_index < self.images.len() - 1 {
@@ -407,6 +452,36 @@ impl App {
                 self.bookmark_list_state.select(Some(current - 1));
             }
         }
+    }
+
+    pub fn append_models_results(&mut self, mut new_models: Vec<Model>, has_more: bool) {
+        if new_models.is_empty() {
+            self.model_search_has_more = has_more;
+            self.model_search_loading_more = false;
+            return;
+        }
+
+        let mut existing_ids = HashSet::new();
+        for model in &self.models {
+            existing_ids.insert(model.id);
+        }
+
+        for model in new_models.drain(..) {
+            if existing_ids.insert(model.id) {
+                self.models.push(model);
+            }
+        }
+
+        self.model_search_has_more = has_more;
+        self.model_search_loading_more = false;
+    }
+
+    pub fn set_models_results(&mut self, models: Vec<Model>, has_more: bool) {
+        self.models = models;
+        self.model_search_page = 1;
+        self.model_search_has_more = has_more;
+        self.model_search_loading_more = false;
+        self.model_list_state.select(Some(0));
     }
 
     pub fn select_next_version(&mut self) {
