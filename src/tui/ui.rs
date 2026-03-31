@@ -828,13 +828,8 @@ fn draw_model_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             .and_then(|version| version.description.as_deref())
             .filter(|desc| !desc.is_empty())
             .unwrap_or(description);
-        let plain_description = render_description_text(version_description);
-        let padded_description = plain_description
-            .lines()
-            .map(|line| format!("  {}", line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let description_text = Paragraph::new(format!("\n{}\n", padded_description))
+        let description_lines = render_description_lines(version_description);
+        let description_text = Paragraph::new(description_lines)
             .wrap(Wrap { trim: true })
             .block(Block::default().borders(Borders::ALL).title(" Description "));
         f.render_widget(description_text, desc_split[0]);
@@ -1146,7 +1141,7 @@ fn compact_bytes(size_bytes: u64) -> String {
     }
 }
 
-fn render_description_text(raw: &str) -> String {
+fn render_description_lines(raw: &str) -> Vec<Line<'static>> {
     let text = if raw.contains('<') && raw.contains('>') {
         html2text::from_read(raw.as_bytes(), 120).unwrap_or_else(|_| raw.to_string())
     } else {
@@ -1172,11 +1167,246 @@ fn render_description_text(raw: &str) -> String {
         if let Some(rest) = line.strip_prefix("> ") {
             line = format!("› {}", rest.trim_start());
         }
-        line = line.replace("**", "").replace("__", "").replace("`", "");
         normalized.push_str(&line);
         normalized.push('\n');
     }
-    normalized.trim_end().to_string()
+
+    let normalized = normalized.trim_end().to_string();
+    if normalized.is_empty() {
+        return vec![Line::from("No description available.")];
+    }
+
+    let mut lines = Vec::new();
+    for raw_line in normalized.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        if line.starts_with("### ") || line.starts_with("## ") || line.starts_with("# ") {
+            let header_level = line.chars().take_while(|ch| *ch == '#').count();
+            let title = line.trim_start_matches('#').trim_start();
+            let style = Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(if header_level == 1 {
+                    Color::Yellow
+                } else if header_level == 2 {
+                    Color::LightBlue
+                } else {
+                    Color::Cyan
+                });
+            lines.push(Line::from(Span::styled(title.to_string(), style)));
+            continue;
+        }
+
+        if line.starts_with("• ") {
+            let mut spans = vec![Span::styled("• ", Style::default().fg(Color::LightGreen))];
+            spans.extend(parse_styled_markdown(&line[3..], Style::default().fg(Color::White)));
+            lines.push(Line::from(spans));
+            continue;
+        }
+
+        if line.starts_with("› ") {
+            let mut spans = vec![Span::styled("› ", Style::default().fg(Color::DarkGray))];
+            spans.extend(parse_styled_markdown(&line[3..], Style::default().fg(Color::Gray)));
+            lines.push(Line::from(spans));
+            continue;
+        }
+
+        lines.push(Line::from(parse_styled_markdown(line, Style::default().fg(Color::White))));
+    }
+
+    if lines.is_empty() {
+        vec![Line::from("No description available.")]
+    } else {
+        lines
+    }
+}
+
+fn parse_styled_markdown(raw: &str, base_style: Style) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut i = 0usize;
+
+    while i < raw.len() {
+        let rest = &raw[i..];
+        let next = match next_markdown_token(rest) {
+            Some(v) => v,
+            None => {
+                if !rest.is_empty() {
+                    spans.push(Span::styled(rest.to_string(), base_style));
+                }
+                break;
+            }
+        };
+
+        let (token_idx, token) = next;
+        if token_idx > 0 {
+            spans.push(Span::styled(raw[i..i + token_idx].to_string(), base_style));
+            i += token_idx;
+        }
+
+        let consumed = match token {
+            "**" => {
+                let body = &raw[i + 2..];
+                if let Some(end) = body.find("**") {
+                    let styled = &body[..end];
+                    if !styled.is_empty() {
+                        spans.push(Span::styled(styled.to_string(), base_style.add_modifier(Modifier::BOLD)));
+                    }
+                    2 + end + 2
+                } else {
+                    spans.push(Span::styled("**".to_string(), base_style));
+                    2
+                }
+            }
+            "__" => {
+                let body = &raw[i + 2..];
+                if let Some(end) = body.find("__") {
+                    let styled = &body[..end];
+                    if !styled.is_empty() {
+                        spans.push(Span::styled(styled.to_string(), base_style.add_modifier(Modifier::BOLD)));
+                    }
+                    2 + end + 2
+                } else {
+                    spans.push(Span::styled("__".to_string(), base_style));
+                    2
+                }
+            }
+            "*" => {
+                let body = &raw[i + 1..];
+                if let Some(end) = body.find('*') {
+                    let styled = &body[..end];
+                    if !styled.is_empty() {
+                        spans.push(Span::styled(
+                            styled.to_string(),
+                            base_style.add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                    1 + end + 1
+                } else {
+                    spans.push(Span::styled("*".to_string(), base_style));
+                    1
+                }
+            }
+            "`" => {
+                let body = &raw[i + 1..];
+                if let Some(end) = body.find('`') {
+                    let code = &body[..end];
+                    spans.push(Span::styled(
+                        code.to_string(),
+                        Style::default().bg(Color::DarkGray).fg(Color::White),
+                    ));
+                    1 + end + 1
+                } else {
+                    spans.push(Span::styled("`".to_string(), base_style));
+                    1
+                }
+            }
+            "https://" | "http://" => {
+                let rest = &raw[i..];
+                let mut end = rest.len();
+                if let Some(space_idx) = rest.find(' ') {
+                    end = space_idx;
+                }
+                if let Some(space_idx) = rest.find('\t') {
+                    end = end.min(space_idx);
+                }
+                if let Some(space_idx) = rest.find('\n') {
+                    end = end.min(space_idx);
+                }
+
+                let raw_url = &rest[..end];
+                let trimmed = raw_url.trim_end_matches(|ch| ch == '.' || ch == ',' || ch == ')' || ch == ']' || ch == '}' || ch == '>' );
+                if !trimmed.is_empty() {
+                    spans.push(Span::styled(
+                        trimmed.to_string(),
+                        Style::default()
+                            .fg(Color::Blue)
+                            .add_modifier(Modifier::UNDERLINED),
+                    ));
+                }
+                if trimmed.len() < raw_url.len() {
+                    spans.push(Span::styled(
+                        raw_url[trimmed.len()..].to_string(),
+                        base_style,
+                    ));
+                }
+
+                end
+            }
+            "[" => {
+                let body = &raw[i + 1..];
+                if let Some(close_text) = body.find("](") {
+                    let url_start = close_text + 2;
+                    if let Some(close_url_rel) = body[url_start..].find(')') {
+                        let link_text = &body[..close_text];
+                        let link_url = &body[url_start..url_start + close_url_rel];
+                        if !link_text.is_empty() {
+                            spans.push(Span::styled(
+                                link_text.to_string(),
+                                Style::default()
+                                    .fg(Color::Blue)
+                                    .add_modifier(Modifier::UNDERLINED),
+                            ));
+                        }
+                        if !link_url.is_empty() {
+                            spans.push(Span::styled(
+                                format!(" [{}]", link_url),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                        1 + close_text + 2 + close_url_rel + 1
+                    } else {
+                        spans.push(Span::styled("[".to_string(), base_style));
+                        1
+                    }
+                } else {
+                    spans.push(Span::styled("[".to_string(), base_style));
+                    1
+                }
+            }
+            _ => 0,
+        };
+
+        i += consumed;
+    }
+
+    if spans.is_empty() {
+        vec![Span::styled(String::new(), base_style)]
+    } else {
+        spans
+    }
+}
+
+fn next_markdown_token(line: &str) -> Option<(usize, &'static str)> {
+    let mut best: Option<(usize, &'static str)> = None;
+
+    for token in ["https://", "http://", "**", "__", "*", "`", "["].iter() {
+        if let Some(pos) = line.find(token) {
+            best = match best {
+                Some((best_pos, best_token)) => {
+                    if pos < best_pos {
+                        Some((pos, *token))
+                    } else if pos == best_pos {
+                        let next = if *token == "**" || *token == "__" {
+                            *token
+                        } else if best_token == "**" || best_token == "__" {
+                            best_token
+                        } else {
+                            *token
+                        };
+                        Some((best_pos, next))
+                    } else {
+                        Some((best_pos, best_token))
+                    }
+                }
+                None => Some((pos, *token)),
+            };
+        }
+    }
+
+    best
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
