@@ -1541,7 +1541,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "Known tags: Realistic=5248 | Nude=304 | Woman=5133",
+            "Known tags: animal | architecture | armor | astronomy | car | cartoon | cat | celebrity | city | clothing | comics | costume | dog | dragon | fantasy | food | game character | landscape | latex clothing | man | modern art | outdoors | photography | photorealistic | post apocalyptic | realistic | robot | sci-fi | sports car | swimwear | transportation | nude | woman",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
