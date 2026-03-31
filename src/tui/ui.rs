@@ -55,6 +55,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         MainTab::Downloads => 3,
         MainTab::Settings => 4,
     };
+    let enable_name_rolling = !matches!(
+        app.mode,
+        AppMode::SearchForm | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt
+    );
     
     let tabs = Tabs::new(titles)
         .block(
@@ -93,6 +97,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     &app.model_list_state,
                     show_model_details,
                     &bookmarked_ids,
+                    enable_name_rolling,
                 );
                 draw_model_sidebar(f, app, split[1], selected_model.as_ref());
             } else {
@@ -103,6 +108,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     &app.model_list_state,
                     show_model_details,
                     &bookmarked_ids,
+                    enable_name_rolling,
                 );
             }
             
@@ -132,6 +138,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     &app.bookmark_list_state,
                     app.show_model_details,
                     &[],
+                    enable_name_rolling,
                 );
                 draw_model_sidebar(f, app, split[1], selected_bookmark_model.as_ref());
             } else {
@@ -142,6 +149,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     &app.bookmark_list_state,
                     app.show_model_details,
                     &[],
+                    enable_name_rolling,
                 );
             }
 
@@ -700,6 +708,7 @@ fn draw_model_list(
     list_state: &ListState,
     show_model_details: bool,
     bookmarked_ids: &[u64],
+    enable_name_rolling: bool,
 ) {
     let block = Block::default().borders(Borders::ALL).title(" Searched Models ");
 
@@ -719,7 +728,7 @@ fn draw_model_list(
 
     for model in models.iter() {
         let downloads = model.stats.as_ref().map(|s| s.download_count).unwrap_or(0);
-        let rating = model.stats.as_ref().map(|s| s.rating).unwrap_or(0.0);
+        let rating = normalized_model_rating(model.stats.as_ref());
         let down_text = if show_metadata {
             format!("D {}", compact_number(downloads))
         } else {
@@ -772,7 +781,10 @@ fn draw_model_list(
             name
         };
 
-        if is_selected && display_name.chars().count() > name_width {
+        if enable_name_rolling
+            && is_selected
+            && display_name.chars().count() > name_width
+        {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_else(|_| Duration::from_millis(0))
@@ -939,7 +951,7 @@ fn draw_model_sidebar(
 
         let stats = selected_version.and_then(|version| version.stats.as_ref());
         let down_val = compact_number(stats.map(|s| s.download_count).unwrap_or(0));
-        let rate_val = stats.map(|s| s.rating).unwrap_or(0.0);
+        let rate_val = normalized_version_rating(stats);
         let active_file = selected_version
             .and_then(|version| version.files.iter().find(|f| f.primary).or_else(|| version.files.first()));
         let format_value = active_file
@@ -1437,6 +1449,44 @@ fn compact_number(v: u64) -> String {
 
     let rounded = format!("{:>5.1}", value);
     format!("{}{}", rounded, UNITS[idx])
+}
+
+fn normalized_model_rating(stats: Option<&crate::api::ModelStats>) -> f64 {
+    let Some(stats) = stats else {
+        return 0.0;
+    };
+
+    if stats.rating.is_finite() && stats.rating > 0.0 {
+        return stats.rating;
+    }
+
+    let thumbs_up = stats.thumbs_up_count as f64;
+    let thumbs_down = stats.thumbs_down_count as f64;
+    let total = thumbs_up + thumbs_down;
+    if total > 0.0 {
+        (thumbs_up / total) * 5.0
+    } else {
+        0.0
+    }
+}
+
+fn normalized_version_rating(stats: Option<&crate::api::VersionStats>) -> f64 {
+    let Some(stats) = stats else {
+        return 0.0;
+    };
+
+    if stats.rating.is_finite() && stats.rating > 0.0 {
+        return stats.rating;
+    }
+
+    let thumbs_up = stats.thumbs_up_count as f64;
+    let thumbs_down = stats.thumbs_down_count as f64;
+    let total = thumbs_up + thumbs_down;
+    if total > 0.0 {
+        (thumbs_up / total) * 5.0
+    } else {
+        0.0
+    }
 }
 
 fn compact_file_size(size_kb: f64) -> String {

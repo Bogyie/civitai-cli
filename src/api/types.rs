@@ -20,6 +20,10 @@ pub struct ModelStats {
     #[serde(default)]
     pub download_count: u64,
     #[serde(default)]
+    pub thumbs_up_count: u64,
+    #[serde(default)]
+    pub thumbs_down_count: u64,
+    #[serde(default)]
     pub favorite_count: u64,
     #[serde(default)]
     pub comment_count: u64,
@@ -50,6 +54,10 @@ pub struct ModelVersion {
 pub struct VersionStats {
     #[serde(default)]
     pub download_count: u64,
+    #[serde(default)]
+    pub thumbs_up_count: u64,
+    #[serde(default)]
+    pub thumbs_down_count: u64,
     #[serde(default)]
     pub rating_count: u64,
     #[serde(default)]

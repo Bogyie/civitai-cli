@@ -13,6 +13,7 @@ pub struct AppConfig {
     pub api_key: Option<String>,
     pub comfyui_path: Option<PathBuf>,
     pub bookmark_file_path: Option<PathBuf>,
+    pub model_cover_cache_path: Option<PathBuf>,
     pub model_search_cache_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
     pub interrupted_download_file_path: Option<PathBuf>,
@@ -68,6 +69,12 @@ impl AppConfig {
         Self::config_dir().map(|config_dir| config_dir.join("bookmarks.json"))
     }
 
+    pub fn model_cover_cache_path(&self) -> Option<PathBuf> {
+        self.model_cover_cache_path
+            .clone()
+            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("model_cover_cache")))
+    }
+
     pub fn search_cache_path(&self) -> Option<PathBuf> {
         self.model_search_cache_path
             .clone()
@@ -93,6 +100,7 @@ impl Default for AppConfig {
             api_key: None,
             comfyui_path: None,
             bookmark_file_path: None,
+            model_cover_cache_path: None,
             model_search_cache_path: None,
             download_history_file_path: None,
             interrupted_download_file_path: None,

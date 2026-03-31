@@ -94,6 +94,10 @@ fn model_search_cache_path(config: &AppConfig) -> Option<PathBuf> {
     config.search_cache_path()
 }
 
+fn model_cover_cache_root(config: &AppConfig) -> Option<PathBuf> {
+    config.model_cover_cache_path()
+}
+
 fn load_search_cache(path: Option<&Path>, ttl_hours: u64) -> SearchCache {
     let Some(path) = path else {
         return HashMap::new();
@@ -205,6 +209,46 @@ fn clear_cached_search_cache(cache_root: &Path) -> usize {
     removed
 }
 
+fn model_cover_cache_path(cache_root: &Path, version_id: u64, image_url: &str) -> PathBuf {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in image_url.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let safe_name = image_url
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(24)
+        .collect::<String>();
+    cache_root.join(format!("v{version_id}_{hash:016x}_{safe_name}.bin"))
+}
+
+fn load_cached_model_cover(path: &Path) -> Option<Vec<u8>> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.is_empty() {
+        let _ = std::fs::remove_file(path);
+        None
+    } else {
+        Some(bytes)
+    }
+}
+
+fn decode_model_cover(
+    bytes: &[u8],
+    picker: &Picker,
+) -> Option<ratatui_image::protocol::StatefulProtocol> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let resized = img.resize(600, 600, FilterType::Triangle);
+    Some(picker.new_resize_protocol(resized))
+}
+
+fn persist_model_cover_cache(path: &Path, bytes: &[u8]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, bytes);
+}
+
 fn load_cached_search_entry(cache_root: &Path, cache_key: &str) -> Option<CachedSearchResult> {
     let cache_path = cache_entry_path(cache_root, cache_key);
     let bytes = std::fs::read(cache_path).ok()?;
@@ -263,6 +307,7 @@ pub async fn spawn_worker(
     let mut downloader_config = config.clone();
     let search_cache_path = model_search_cache_path(&downloader_config);
     let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours));
+    let model_cover_cache_path = Arc::new(Mutex::new(model_cover_cache_root(&downloader_config)));
     let search_cache = Arc::new(Mutex::new(load_search_cache(
         search_cache_path.as_deref(),
         *search_cache_ttl_hours.lock().await,
@@ -276,6 +321,7 @@ pub async fn spawn_worker(
         let tx_msg = tx_msg.clone();
         let req_client = req_client.clone();
         let picker = picker.clone();
+        let model_cover_cache_path = model_cover_cache_path.clone();
         async move {
             let mut queue: VecDeque<(u64, String)> = VecDeque::new();
             let mut queued_ids: HashSet<u64> = HashSet::new();
@@ -306,13 +352,16 @@ pub async fn spawn_worker(
                     let req_client = req_client.clone();
                     let picker = picker.clone();
                     let done_tx = cover_done_tx.clone();
+                    let model_cover_cache_path = model_cover_cache_path.clone();
 
                     let handle = tokio::spawn(async move {
+                        let cover_cache_root = model_cover_cache_path.lock().await.clone();
                         let result = load_model_cover_result(
                             version_id,
                             image_url,
                             req_client,
                             picker,
+                            cover_cache_root,
                         )
                         .await;
                         let _ = tx_msg.send(result).await;
@@ -781,6 +830,7 @@ pub async fn spawn_worker(
                                     }
 
                                     let new_cache_path = model_search_cache_path(&downloader_config);
+                                    let new_cover_cache_path = model_cover_cache_root(&downloader_config);
                                     {
                                         let mut cache_path = search_cache_path.lock().await;
                                         let mut cache = search_cache.lock().await;
@@ -791,6 +841,9 @@ pub async fn spawn_worker(
                                             let _ = prune_search_cache(&mut cache, ttl_hours);
                                             save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
                                         }
+
+                                        let mut cover_cache_path = model_cover_cache_path.lock().await;
+                                        *cover_cache_path = new_cover_cache_path;
                                     }
 
                                     let _ = tx_msg
@@ -1161,11 +1214,25 @@ async fn load_model_cover_result(
     image_url: String,
     client: Client,
     picker: Picker,
+    cover_cache_root: Option<PathBuf>,
 ) -> AppMessage {
+    if let Some(cache_root) = cover_cache_root.as_ref() {
+        let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+        if let Some(bytes) = load_cached_model_cover(&cache_path) {
+            if let Some(protocol) = decode_model_cover(&bytes, &picker) {
+                return AppMessage::ModelCoverDecoded(version_id, protocol);
+            }
+
+            let _ = std::fs::remove_file(cache_path);
+        }
+    }
+
     if let Ok(bytes) = fetch_image_bytes(&client, &image_url).await {
-        if let Ok(img) = image::load_from_memory(&bytes) {
-            let resized = img.resize(600, 600, FilterType::Triangle);
-            let protocol = picker.new_resize_protocol(resized.into());
+        if let Some(protocol) = decode_model_cover(&bytes, &picker) {
+            if let Some(cache_root) = cover_cache_root.as_ref() {
+                let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+                persist_model_cover_cache(&cache_path, &bytes);
+            }
             return AppMessage::ModelCoverDecoded(version_id, protocol);
         }
     }

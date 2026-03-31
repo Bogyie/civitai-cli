@@ -23,12 +23,19 @@ pub async fn run_event_loop(
     };
 
     loop {
+        let poll_timeout_ms = match app.mode {
+            AppMode::SearchForm | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt => 200,
+            _ => 50,
+        };
+
         terminal.draw(|f| ui::draw(f, app))?;
 
         // Wait for either terminal input or worker message update
         tokio::select! {
              // Polling keypresses
-                 event_res = tokio::task::spawn_blocking(|| event::poll(std::time::Duration::from_millis(50))) => {
+                 event_res = tokio::task::spawn_blocking(move || {
+                    event::poll(std::time::Duration::from_millis(poll_timeout_ms))
+                 }) => {
                  if let Ok(Ok(true)) = event_res {
                      if let Ok(Event::Key(key)) = event::read() {
                         let is_ctrl_c_exit = matches!(key.code, KeyCode::Char('c'))
