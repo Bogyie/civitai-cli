@@ -74,7 +74,10 @@ pub async fn run_event_loop(
         }
 
         if let Some(tx) = &app.tx {
-            match tx.try_send(WorkerCommand::FetchImages(next_page)) {
+            match tx.try_send(WorkerCommand::FetchImages(
+                app.image_search_form.build_options(),
+                next_page,
+            )) {
                 Ok(_) => {
                     app.image_feed_loading = true;
                     app.status = if app.image_feed_loaded {
@@ -90,7 +93,7 @@ pub async fn run_event_loop(
 
     loop {
         let poll_timeout_ms = match app.mode {
-            AppMode::SearchForm | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt => 200,
+            AppMode::SearchForm | AppMode::SearchImages | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt => 200,
             _ => 50,
         };
 
@@ -191,6 +194,117 @@ pub async fn run_event_loop(
                                 _ => {}
                             }
                             continue; // Skip global navigation if form is active
+                        }
+
+                        if app.mode == AppMode::SearchImages {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.mode = AppMode::Browsing;
+                                }
+                                KeyCode::Up => {
+                                    if app.image_search_form.focused_field > 0 {
+                                        app.image_search_form.focused_field -= 1;
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if app.image_search_form.focused_field < 4 {
+                                        app.image_search_form.focused_field += 1;
+                                    }
+                                }
+                                KeyCode::Left => match app.image_search_form.focused_field {
+                                    0 => {
+                                        if app.image_search_form.selected_nsfw > 0 {
+                                            app.image_search_form.selected_nsfw -= 1;
+                                        } else {
+                                            app.image_search_form.selected_nsfw =
+                                                app.image_search_form.nsfw_options.len() - 1;
+                                        }
+                                    }
+                                    1 => {
+                                        if app.image_search_form.selected_sort > 0 {
+                                            app.image_search_form.selected_sort -= 1;
+                                        } else {
+                                            app.image_search_form.selected_sort =
+                                                app.image_search_form.sort_options.len() - 1;
+                                        }
+                                    }
+                                    2 => {
+                                        if app.image_search_form.selected_period > 0 {
+                                            app.image_search_form.selected_period -= 1;
+                                        } else {
+                                            app.image_search_form.selected_period =
+                                                app.image_search_form.period_options.len() - 1;
+                                        }
+                                    }
+                                    _ => {}
+                                },
+                                KeyCode::Right => match app.image_search_form.focused_field {
+                                    0 => {
+                                        app.image_search_form.selected_nsfw =
+                                            (app.image_search_form.selected_nsfw + 1)
+                                                % app.image_search_form.nsfw_options.len();
+                                    }
+                                    1 => {
+                                        app.image_search_form.selected_sort =
+                                            (app.image_search_form.selected_sort + 1)
+                                                % app.image_search_form.sort_options.len();
+                                    }
+                                    2 => {
+                                        app.image_search_form.selected_period =
+                                            (app.image_search_form.selected_period + 1)
+                                                % app.image_search_form.period_options.len();
+                                    }
+                                    _ => {}
+                                },
+                                KeyCode::Enter => {
+                                    if !app.image_search_form.tag_text.trim().is_empty()
+                                        && app.image_search_form.build_options().tags.is_none()
+                                    {
+                                        app.last_error = Some(format!(
+                                            "Unknown image tag: {}",
+                                            app.image_search_form.tag_text.trim()
+                                        ));
+                                        app.show_status_modal = true;
+                                        app.status = "Invalid image tag".into();
+                                        continue;
+                                    }
+
+                                    app.mode = AppMode::Browsing;
+                                    app.images.clear();
+                                    app.image_cache.clear();
+                                    app.selected_index = 0;
+                                    app.image_feed_loaded = false;
+                                    app.image_feed_loading = false;
+                                    app.image_feed_next_page = None;
+                                    app.image_feed_has_more = true;
+                                    if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::FetchImages(
+                                            app.image_search_form.build_options(),
+                                            None,
+                                        ));
+                                        app.image_feed_loading = true;
+                                        app.status = "Searching image feed...".into();
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    if app.image_search_form.focused_field == 3 {
+                                        if c.is_ascii_digit() {
+                                            app.image_search_form.model_version_id.push(c);
+                                        }
+                                    } else if app.image_search_form.focused_field == 4 {
+                                        app.image_search_form.tag_text.push(c);
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    if app.image_search_form.focused_field == 3 {
+                                        app.image_search_form.model_version_id.pop();
+                                    } else if app.image_search_form.focused_field == 4 {
+                                        app.image_search_form.tag_text.pop();
+                                    }
+                                }
+                                _ => {}
+                            }
+                            continue;
                         }
 
                         if app.mode == AppMode::SearchBookmarks {
@@ -816,6 +930,9 @@ pub async fn run_event_loop(
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
                                     app.status = "Configure search options. Press Enter to submit, Esc to cancel.".into();
+                                } else if app.active_tab == MainTab::Images {
+                                    app.mode = AppMode::SearchImages;
+                                    app.status = "Configure image search options. Press Enter to submit, Esc to cancel.".into();
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.begin_bookmark_search();
                                 }
@@ -859,7 +976,7 @@ pub async fn run_event_loop(
                             app.status = format!("Loaded {} images", app.images.len());
                         }
                     }
-                     AppMessage::ImageDecoded(id, protocol) => {
+                    AppMessage::ImageDecoded(id, protocol) => {
                          app.image_cache.insert(id, protocol);
                      }
                      AppMessage::ModelCoverDecoded(version_id, protocol) => {

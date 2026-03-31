@@ -193,6 +193,51 @@ fn build_search_url(opts: &crate::api::client::SearchOptions) -> String {
     url
 }
 
+fn build_image_search_url(opts: &crate::api::client::ImageSearchOptions) -> String {
+    let mut url = format!("https://civitai.com/api/v1/images?limit={}", opts.limit);
+
+    if let Some(nsfw) = &opts.nsfw {
+        match nsfw.as_str() {
+            "All" => {}
+            "None" => url.push_str("&nsfw=false"),
+            "Soft" | "Mature" | "X" => url.push_str("&nsfw=true"),
+            other => url.push_str(&format!("&nsfw={}", other.replace(' ', "%20"))),
+        }
+    }
+    if let Some(sort) = &opts.sort {
+        url.push_str(&format!("&sort={}", sort.replace(' ', "%20")));
+    }
+    if let Some(period) = &opts.period {
+        url.push_str(&format!("&period={}", period.replace(' ', "%20")));
+    }
+    if let Some(model_version_id) = opts.model_version_id {
+        url.push_str(&format!("&modelVersionId={}", model_version_id));
+    }
+    if let Some(tags) = opts.tags {
+        url.push_str(&format!("&tags={}", tags));
+    }
+
+    url
+}
+
+fn filter_image_items_by_requested_nsfw(
+    items: Vec<crate::api::ImageItem>,
+    requested_nsfw: Option<&str>,
+) -> Vec<crate::api::ImageItem> {
+    match requested_nsfw {
+        None | Some("All") => items,
+        Some("None") => items
+            .into_iter()
+            .filter(|item| item.nsfw_level.as_deref() == Some("None") || item.nsfw == Some(false))
+            .collect(),
+        Some(level @ ("Soft" | "Mature" | "X")) => items
+            .into_iter()
+            .filter(|item| item.nsfw_level.as_deref() == Some(level))
+            .collect(),
+        Some(_) => items,
+    }
+}
+
 fn build_model_url(model_id: u64) -> String {
     format!("https://civitai.com/api/v1/models/{}", model_id)
 }
@@ -703,7 +748,7 @@ pub async fn spawn_worker(
 
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
-                WorkerCommand::FetchImages(next_page_url) => {
+                WorkerCommand::FetchImages(image_opts, next_page_url) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -731,85 +776,131 @@ pub async fn spawn_worker(
 
                         let use_next_page = next_page_url.filter(|url| !url.trim().is_empty());
                         let is_append = use_next_page.is_some();
-                        let image_feed_url = use_next_page.unwrap_or_else(|| {
-                            "https://civitai.com/api/v1/images?limit=10".to_string()
-                        });
-                        let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(status_with_url(
-                                if is_append {
-                                    "Fetching image feed next page"
-                                } else {
-                                    "Fetching image feed"
-                                },
-                                &image_feed_url,
-                            )))
-                            .await;
-                        debug_fetch_log(
-                            &debug_config,
-                            &format!("FetchImages: request -> {}", image_feed_url),
-                        );
-                        let fetch_result = if is_append {
-                            client.get_images_by_url(image_feed_url.clone()).await
-                        } else {
-                            client.get_images(10).await
-                        };
+                        let requested_nsfw = image_opts.nsfw.clone();
+                        let target_visible_count = image_opts.limit.max(1) as usize;
+                        let mut current_url =
+                            use_next_page.unwrap_or_else(|| build_image_search_url(&image_opts));
+                        let mut all_visible_items = Vec::with_capacity(target_visible_count);
+                        let final_next_page = loop {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(status_with_url(
+                                    if is_append {
+                                        "Fetching image feed next page"
+                                    } else {
+                                        "Fetching image feed"
+                                    },
+                                    &current_url,
+                                )))
+                                .await;
+                            debug_fetch_log(
+                                &debug_config,
+                                &format!("FetchImages: request -> {}", current_url),
+                            );
 
-                        match fetch_result {
-                            Ok(res) => {
-                                debug_fetch_log(
-                                    &debug_config,
-                                    &format!(
-                                        "FetchImages: response -> {} items, has_metadata={}",
-                                        res.items.len(),
-                                        res.metadata.is_some()
-                                    ),
-                                );
-                                let next_page = res.metadata.and_then(|metadata| metadata.next_page);
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::ImagesLoaded(
-                                        res.items.clone(),
-                                        is_append,
-                                        next_page,
-                                    ))
-                                    .await;
+                            match client.get_images_by_url(current_url.clone()).await {
+                                Ok(res) => {
+                                    let filtered_items = filter_image_items_by_requested_nsfw(
+                                        res.items,
+                                        requested_nsfw.as_deref(),
+                                    );
+                                    let filtered_count = filtered_items.len();
+                                    let mut visible_items = filtered_items
+                                        .into_iter()
+                                        .filter(|item| item.r#type.as_deref() != Some("video"))
+                                        .collect::<Vec<_>>();
+                                    let next_page =
+                                        res.metadata.and_then(|metadata| metadata.next_page);
+                                    let skipped_videos =
+                                        filtered_count.saturating_sub(visible_items.len());
 
-                                let fetch_semaphore = Arc::new(Semaphore::new(3));
-                                let mut handles = Vec::with_capacity(res.items.len());
-                                for item in res.items {
                                     debug_fetch_log(
                                         &debug_config,
-                                        &format!("FetchImages: enqueue image id={}", item.id),
+                                        &format!(
+                                            "FetchImages: response -> visible_items={}, skipped_videos={}, next_page_present={}",
+                                            visible_items.len(),
+                                            skipped_videos,
+                                            next_page.is_some()
+                                        ),
                                     );
-                                    handles.push(tokio::spawn(load_feed_image(
-                                        item.id,
-                                        item.url,
-                                        req_client.clone(),
-                                        picker.clone(),
-                                        tx_msg_clone.clone(),
-                                        fetch_semaphore.clone(),
-                                        debug_config.clone(),
-                                    )));
+
+                                    let remaining = target_visible_count
+                                        .saturating_sub(all_visible_items.len());
+                                    if remaining == 0 {
+                                        break Some(current_url);
+                                    }
+
+                                    if visible_items.len() > remaining {
+                                        visible_items.truncate(remaining);
+                                    }
+                                    all_visible_items.extend(visible_items);
+
+                                    if all_visible_items.len() >= target_visible_count {
+                                        break next_page;
+                                    }
+
+                                    match next_page {
+                                        Some(url) => {
+                                            debug_fetch_log(
+                                                &debug_config,
+                                                &format!(
+                                                    "FetchImages: top-off continuing for skipped videos -> {}",
+                                                    url
+                                                ),
+                                            );
+                                            current_url = url;
+                                        }
+                                        None => {
+                                            break None;
+                                        }
+                                    }
                                 }
-                                for handle in handles {
-                                    let _ = handle.await;
+                                Err(e) => {
+                                    debug_fetch_log(
+                                        &debug_config,
+                                        &format!("FetchImages: get_images failed: {}", e),
+                                    );
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::StatusUpdate(format!(
+                                            "{}",
+                                            error_status_with_url(
+                                                "Error fetching images",
+                                                &current_url,
+                                                &e.to_string(),
+                                            )
+                                        )))
+                                        .await;
+                                    return;
                                 }
                             }
-                            Err(e) => {
-                                debug_fetch_log(
-                                    &debug_config,
-                                    &format!("FetchImages: get_images failed: {}", e),
-                                );
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "{}",
-                                        error_status_with_url(
-                                            "Error fetching images",
-                                            &image_feed_url,
-                                            &e.to_string(),
-                                        )
-                                    )))
-                                    .await;
-                            }
+                        };
+
+                        let _ = tx_msg_clone
+                            .send(AppMessage::ImagesLoaded(
+                                all_visible_items.clone(),
+                                is_append,
+                                final_next_page,
+                            ))
+                            .await;
+
+                        let fetch_semaphore = Arc::new(Semaphore::new(3));
+                        let mut handles = Vec::with_capacity(all_visible_items.len());
+                        for item in all_visible_items {
+                            debug_fetch_log(
+                                &debug_config,
+                                &format!("FetchImages: enqueue image id={}", item.id),
+                            );
+                            handles.push(tokio::spawn(load_feed_image(
+                                item.id,
+                                item.url,
+                                req_client.clone(),
+                                picker.clone(),
+                                tx_msg_clone.clone(),
+                                fetch_semaphore.clone(),
+                                debug_config.clone(),
+                            )));
+                        }
+                        for handle in handles {
+                            let _ = handle.await;
                         }
                     });
                 }

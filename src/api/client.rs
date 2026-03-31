@@ -26,6 +26,16 @@ pub struct SearchOptions {
     pub base_models: Option<String>,
 }
 
+#[derive(Clone, Default, Debug)]
+pub struct ImageSearchOptions {
+    pub limit: u32,
+    pub nsfw: Option<String>,
+    pub sort: Option<String>,
+    pub period: Option<String>,
+    pub model_version_id: Option<u64>,
+    pub tags: Option<u64>,
+}
+
 pub struct CivitaiClient {
     client: Client,
     api_key: Option<String>,
@@ -134,11 +144,6 @@ impl CivitaiClient {
     }
 
     pub async fn search_models_by_url(&self, url: String) -> Result<PaginatedResponse<Model>> {
-        self.fetch(&url).await
-    }
-
-    pub async fn get_images(&self, limit: u32) -> Result<ImageResponse> {
-        let url = format!("https://civitai.com/api/v1/images?limit={}", limit);
         self.fetch(&url).await
     }
 

@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
     let enable_name_rolling = !matches!(
         app.mode,
-        AppMode::SearchForm | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt
+        AppMode::SearchForm | AppMode::SearchImages | AppMode::SearchBookmarks | AppMode::BookmarkPathPrompt
     );
     
     let tabs = Tabs::new(titles)
@@ -161,12 +161,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
         MainTab::Images => {
+            let image_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(0)])
+                .split(chunks[1]);
             let main_chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(chunks[1]);
+                .split(image_chunks[1]);
+            draw_image_search_summary(f, app, image_chunks[0]);
             draw_image_panel(f, app, main_chunks[0]);
             draw_image_sidebar(f, app, main_chunks[1]);
+            if app.mode == AppMode::SearchImages {
+                draw_image_search_popup(f, app);
+            }
         }
         MainTab::Downloads => {
             draw_downloads_tab(f, app, chunks[1]);
@@ -629,7 +637,7 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
         let image_widget = StatefulImage::new();
         f.render_stateful_widget(image_widget, inner_area, protocol);
     } else {
-        let text = format!("Decoding image {}/{}...", app.selected_index + 1, app.images.len());
+        let text = format!("Decoding media {}/{}...", app.selected_index + 1, app.images.len());
         f.render_widget(Paragraph::new(text), inner_area);
     }
 }
@@ -638,21 +646,115 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Metadata ");
 
     if let Some(img) = app.images.get(app.selected_index) {
+        let dimensions = match (img.width, img.height) {
+            (Some(width), Some(height)) => format!("{} x {}", width, height),
+            _ => "<none>".to_string(),
+        };
+        let model_version_ids = if img.model_version_ids.is_empty() {
+            "<none>".to_string()
+        } else {
+            img.model_version_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut lines = vec![
             Line::from(vec![Span::styled("ID: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(img.id.to_string())]),
-            Line::from(vec![Span::styled("Hash: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(&img.hash)]),
+            Line::from(vec![
+                Span::styled("Link: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("https://civitai.com/images/{}", img.id)),
+            ]),
+            Line::from(vec![
+                Span::styled("URL: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.url.as_str()),
+            ]),
+            Line::from(vec![
+                Span::styled("Hash: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.hash.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.r#type.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("Dimensions: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(dimensions),
+            ]),
+            Line::from(vec![
+                Span::styled("NSFW: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(
+                    img.nsfw
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<none>".to_string()),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("NSFW Level: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.nsfw_level.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("Browsing Level: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.browsing_level.to_string()),
+            ]),
+            Line::from(vec![
+                Span::styled("Created At: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.created_at.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("Post ID: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(
+                    img.post_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "<none>".to_string()),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("Username: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.username.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("Base Model: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.base_model.as_deref().unwrap_or("<none>")),
+            ]),
+            Line::from(vec![
+                Span::styled("ModelVersionIds: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(model_version_ids),
+            ]),
         ];
 
+        if let Some(stats) = &img.stats {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Stats:",
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+            )));
+            lines.push(Line::from(format!(
+                "cry={} laugh={} like={} dislike={} heart={} comment={}",
+                stats.cry_count,
+                stats.laugh_count,
+                stats.like_count,
+                stats.dislike_count,
+                stats.heart_count,
+                stats.comment_count,
+            )));
+        }
+
         if let Some(meta) = &img.meta {
-            if let Some(prompt) = meta.get("prompt").and_then(|v| v.as_str()) {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled("Prompt:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow))));
-                lines.push(Line::from(prompt));
-            }
-            if let Some(negative) = meta.get("negativePrompt").and_then(|v| v.as_str()) {
-                lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled("Negative Prompt:", Style::default().add_modifier(Modifier::BOLD).fg(Color::Red))));
-                lines.push(Line::from(negative));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Meta:",
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow),
+            )));
+            match serde_json::to_string_pretty(meta) {
+                Ok(pretty) => {
+                    for line in pretty.lines() {
+                        lines.push(Line::from(line.to_string()));
+                    }
+                }
+                Err(_) => {
+                    lines.push(Line::from("<failed to render meta json>"));
+                }
             }
         }
         f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: true }), area);
@@ -692,6 +794,52 @@ fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
         "🔍 Bookmarks Query: \"{}\" | Total: {}",
         query,
         app.visible_bookmarks().len()
+    );
+
+    let para = Paragraph::new(summary)
+        .alignment(Alignment::Left)
+        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .wrap(Wrap { trim: true });
+    f.render_widget(para, area);
+}
+
+fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
+    let tag_text = if app.image_search_form.tag_text.trim().is_empty() {
+        "<all>"
+    } else {
+        app.image_search_form.tag_text.trim()
+    };
+    let model_version_id = if app.image_search_form.model_version_id.trim().is_empty() {
+        "<all>"
+    } else {
+        app.image_search_form.model_version_id.trim()
+    };
+    let tag_id = app
+        .image_search_form
+        .build_options()
+        .tags
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "<none>".to_string());
+    let summary = format!(
+        " Image Search | NSFW: {} | Sort: {} | Period: {} | ModelVersionId: {} | Tag: {} ({}) ",
+        app.image_search_form
+            .nsfw_options
+            .get(app.image_search_form.selected_nsfw)
+            .cloned()
+            .unwrap_or_else(|| "All".into()),
+        app.image_search_form
+            .sort_options
+            .get(app.image_search_form.selected_sort)
+            .cloned()
+            .unwrap_or_else(|| "Newest".into()),
+        app.image_search_form
+            .period_options
+            .get(app.image_search_form.selected_period)
+            .cloned()
+            .unwrap_or_else(|| "AllTime".into()),
+        model_version_id,
+        tag_text,
+        tag_id,
     );
 
     let para = Paragraph::new(summary)
@@ -1226,6 +1374,58 @@ fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_image_search_popup(f: &mut Frame, app: &App) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Image Search ");
+
+    let form = &app.image_search_form;
+    let field_style = |focused: bool| {
+        if focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        }
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" NSFW: ", field_style(form.focused_field == 0)),
+            Span::raw(form.nsfw_options[form.selected_nsfw].clone()),
+        ]),
+        Line::from(vec![
+            Span::styled(" Sort: ", field_style(form.focused_field == 1)),
+            Span::raw(form.sort_options[form.selected_sort].clone()),
+        ]),
+        Line::from(vec![
+            Span::styled(" Period: ", field_style(form.focused_field == 2)),
+            Span::raw(form.period_options[form.selected_period].clone()),
+        ]),
+        Line::from(vec![
+            Span::styled(" ModelVersionId: ", field_style(form.focused_field == 3)),
+            Span::raw(format!("{}{}", form.model_version_id, if form.focused_field == 3 { "█" } else { "" })),
+        ]),
+        Line::from(vec![
+            Span::styled(" Tag: ", field_style(form.focused_field == 4)),
+            Span::raw(format!("{}{}", form.tag_text, if form.focused_field == 4 { "█" } else { "" })),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Known tags: Realistic=5248 | Nude=304 | Woman=5133",
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            "[Up/Down] Field | [Left/Right] Cycle | [Type] Input | [Enter] Apply | [Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+    let area = centered_rect(60, 42, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(p, area);
+}
+
 fn draw_status_modal(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1342,7 +1542,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let shortcuts = match app.active_tab {
         MainTab::Models => "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details",
         MainTab::Bookmarks => "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
-        MainTab::Images => "[d] Download | [m] Status",
+        MainTab::Images => "[/] Search | [d] Download | [m] Status",
         MainTab::Downloads => "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel",
         MainTab::Settings => "[Enter] Edit | [m] Status",
     };

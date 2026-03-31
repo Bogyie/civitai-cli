@@ -297,7 +297,10 @@ pub struct PaginationMetadata {
 pub struct ImageItem {
     pub id: u64,
     pub url: String,
-    pub hash: String,
+    #[serde(default, deserialize_with = "as_string_from_serde")]
+    pub hash: Option<String>,
+    #[serde(default, deserialize_with = "as_string_from_serde")]
+    pub r#type: Option<String>,
     #[serde(default)]
     pub width: Option<u32>,
     #[serde(default)]
@@ -306,10 +309,14 @@ pub struct ImageItem {
     pub nsfw: Option<bool>,
     #[serde(default)]
     pub nsfw_level: Option<String>,
+    #[serde(default, deserialize_with = "as_u64_from_serde")]
+    pub browsing_level: u64,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
     pub post_id: Option<u64>,
+    #[serde(default, deserialize_with = "as_string_from_serde")]
+    pub base_model: Option<String>,
     #[serde(default)]
     pub model_version_ids: Vec<u64>,
     #[serde(default)]

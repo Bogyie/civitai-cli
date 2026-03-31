@@ -22,6 +22,7 @@ pub enum MainTab {
 pub enum AppMode {
     Browsing,
     SearchForm,
+    SearchImages,
     SearchBookmarks,
     BookmarkPathPrompt,
 }
@@ -51,12 +52,69 @@ pub struct SettingsFormState {
     pub input_buffer: String,
 }
 
+pub struct ImageSearchFormState {
+    pub focused_field: usize, // 0: NSFW, 1: Sort, 2: Period, 3: ModelVersionId, 4: Tag
+    pub selected_nsfw: usize,
+    pub nsfw_options: Vec<String>,
+    pub selected_sort: usize,
+    pub sort_options: Vec<String>,
+    pub selected_period: usize,
+    pub period_options: Vec<String>,
+    pub model_version_id: String,
+    pub tag_text: String,
+}
+
 impl SettingsFormState {
     pub fn new() -> Self {
         Self {
             editing: false,
             focused_field: 0,
             input_buffer: String::new(),
+        }
+    }
+}
+
+impl ImageSearchFormState {
+    pub fn new() -> Self {
+        Self {
+            focused_field: 0,
+            selected_nsfw: 0,
+            nsfw_options: vec![
+                "All".into(),
+                "None".into(),
+                "Soft".into(),
+                "Mature".into(),
+                "X".into(),
+            ],
+            selected_sort: 0,
+            sort_options: vec![
+                "Most Collected".into(),
+                "Most Reactions".into(),
+                "Most Comments".into(),
+                "Newest".into(),
+                "Oldest".into(),
+            ],
+            selected_period: 0,
+            period_options: vec![
+                "AllTime".into(),
+                "Year".into(),
+                "Month".into(),
+                "Week".into(),
+                "Day".into(),
+            ],
+            model_version_id: String::new(),
+            tag_text: String::new(),
+        }
+    }
+
+    pub fn build_options(&self) -> crate::api::client::ImageSearchOptions {
+        crate::api::client::ImageSearchOptions {
+            limit: 10,
+            nsfw: Some(self.nsfw_options[self.selected_nsfw].clone()),
+            sort: Some(self.sort_options[self.selected_sort].clone()),
+            period: Some(self.period_options[self.selected_period].clone()),
+            model_version_id: self.model_version_id.trim().parse::<u64>().ok(),
+            tags: image_tag_to_id(self.tag_text.trim()),
         }
     }
 }
@@ -156,6 +214,17 @@ impl SearchFormState {
     }
 }
 
+fn image_tag_to_id(value: &str) -> Option<u64> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" => None,
+        "realistic" => Some(5248),
+        "nude" => Some(304),
+        "woman" => Some(5133),
+        _ => normalized.parse::<u64>().ok(),
+    }
+}
+
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<String>),
     ImageDecoded(u64, StatefulProtocol),
@@ -224,7 +293,7 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages(Option<String>),
+    FetchImages(crate::api::client::ImageSearchOptions, Option<String>),
     SearchModels(
         crate::api::client::SearchOptions,
         Option<u64>,
@@ -250,6 +319,7 @@ pub struct App {
     pub mode: AppMode,
     pub config: crate::config::AppConfig,
     pub search_form: SearchFormState,
+    pub image_search_form: ImageSearchFormState,
     pub settings_form: SettingsFormState,
     
     pub models: Vec<Model>,
@@ -341,6 +411,7 @@ impl App {
             mode: AppMode::Browsing,
             config,
             search_form: SearchFormState::new(),
+            image_search_form: ImageSearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
             model_search_has_more: true,
