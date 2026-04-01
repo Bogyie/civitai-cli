@@ -1,7 +1,4 @@
-#[path = "../src/sdk/mod.rs"]
-mod search_sdk;
-
-use search_sdk::{
+use civitai_cli::sdk::{
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
     ImageSearchSortBy, ImageSearchState, ModelDownloadAuth, ModelSearchSortBy,
