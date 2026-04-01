@@ -10,15 +10,15 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use crate::api::types::PaginationMetadata;
 use crate::api::CivitaiClient;
 use crate::config::AppConfig;
 use civitai_cli::sdk::{
     ApiImageSearchOptions, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
-    DownloadOptions, DownloadSpec, ModelDownloadAuth, ModelSearchState, SdkClientBuilder,
-    SearchModelHit as Model,
+    DownloadOptions, DownloadSpec, ImageSearchState, ModelDownloadAuth, ModelSearchState,
+    SdkClientBuilder, SearchImageHit as ImageItem, SearchModelHit as Model,
 };
 use crate::tui::app::{AppMessage, WorkerCommand};
+use crate::tui::image::image_media_url;
 use crate::tui::model::{
     ParsedModelFile, build_download_file_name, model_name, model_versions,
     resolve_download_target_dir,
@@ -40,9 +40,7 @@ struct CachedSearchResult {
 #[derive(Serialize, Deserialize, Clone)]
 struct CachedImageSearchResult {
     cache_key: String,
-    items: Vec<crate::api::ImageItem>,
-    #[serde(default)]
-    metadata: Option<PaginationMetadata>,
+    items: Vec<ImageItem>,
     cached_at_unix_secs: u64,
 }
 
@@ -125,49 +123,24 @@ fn build_search_url(opts: &ModelSearchState) -> String {
         .unwrap_or_else(|_| "https://civitai.com/search/models".to_string())
 }
 
-fn build_image_search_url(opts: &crate::api::client::ImageSearchOptions) -> String {
-    let mut url = format!("https://civitai.com/api/v1/images?limit={}", opts.limit);
-
-    if let Some(nsfw) = &opts.nsfw {
-        match nsfw.as_str() {
-            "All" => {}
-            "None" => url.push_str("&nsfw=false"),
-            "Soft" | "Mature" | "X" => url.push_str("&nsfw=true"),
-            other => url.push_str(&format!("&nsfw={}", other.replace(' ', "%20"))),
-        }
-    }
-    if let Some(sort) = &opts.sort {
-        url.push_str(&format!("&sort={}", sort.replace(' ', "%20")));
-    }
-    if let Some(period) = &opts.period {
-        url.push_str(&format!("&period={}", period.replace(' ', "%20")));
-    }
-    if let Some(model_version_id) = opts.model_version_id {
-        url.push_str(&format!("&modelVersionId={}", model_version_id));
-    }
-    if let Some(tags) = opts.tags {
-        url.push_str(&format!("&tags={}", tags));
-    }
-
-    url
+fn normalize_image_search_options_for_cache(mut opts: ImageSearchState) -> ImageSearchState {
+    opts.query = opts
+        .query
+        .take()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty());
+    opts.created_at = opts
+        .created_at
+        .take()
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty());
+    opts
 }
 
-fn filter_image_items_by_requested_nsfw(
-    items: Vec<crate::api::ImageItem>,
-    requested_nsfw: Option<&str>,
-) -> Vec<crate::api::ImageItem> {
-    match requested_nsfw {
-        None | Some("All") => items,
-        Some("None") => items
-            .into_iter()
-            .filter(|item| item.nsfw_level.as_deref() == Some("None") || item.nsfw == Some(false))
-            .collect(),
-        Some(level @ ("Soft" | "Mature" | "X")) => items
-            .into_iter()
-            .filter(|item| item.nsfw_level.as_deref() == Some(level))
-            .collect(),
-        Some(_) => items,
-    }
+fn build_image_search_url(opts: &ImageSearchState) -> String {
+    opts.to_web_url("https://civitai.com/search/images")
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| "https://civitai.com/search/images".to_string())
 }
 
 fn build_model_url(model: &Model, version_id: u64) -> String {
@@ -1145,38 +1118,34 @@ pub async fn spawn_worker(
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
-                    let api_key = downloader_config.api_key.clone();
                     let debug_config = downloader_config.clone();
                     let image_search_cache = image_search_cache.clone();
                     let image_search_cache_path = image_search_cache_path.clone();
                     let image_bytes_cache_path = image_bytes_cache_path.clone();
                     let image_search_cache_ttl_minutes = image_search_cache_ttl_minutes.clone();
                     let image_cache_ttl_minutes = image_cache_ttl_minutes.clone();
+                    let opts = normalize_image_search_options_for_cache(image_opts);
+                    let sdk_clone = {
+                        let builder = if let Some(api_key) = downloader_config.api_key.clone() {
+                            SdkClientBuilder::new().api_key(api_key)
+                        } else {
+                            SdkClientBuilder::new()
+                        };
+                        builder.build_web().unwrap()
+                    };
 
                     tokio::spawn(async move {
                         debug_fetch_log(&debug_config, "FetchImages: started");
-                        let client = match CivitaiClient::new(api_key) {
-                            Ok(client) => client,
-                            Err(e) => {
-                                debug_fetch_log(
-                                    &debug_config,
-                                    &format!("FetchImages: image API client init failed: {}", e),
-                                );
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "Error initializing image API client: {}",
-                                        e
-                                    )))
-                                    .await;
-                                return;
-                            }
-                        };
-
-                        let use_next_page = next_page_url.filter(|url| !url.trim().is_empty());
+                        let use_next_page = next_page_url;
                         let is_append = use_next_page.is_some();
-                        let requested_nsfw = image_opts.nsfw.clone();
-                        let current_url =
-                            use_next_page.unwrap_or_else(|| build_image_search_url(&image_opts));
+                        let request_state = if let Some(page) = use_next_page {
+                            let mut next = opts.clone();
+                            next.page = Some(page);
+                            next
+                        } else {
+                            opts.clone()
+                        };
+                        let current_url = build_image_search_url(&request_state);
                         let image_search_ttl_minutes = *image_search_cache_ttl_minutes.lock().await;
                         let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
                         let _ = tx_msg_clone
@@ -1261,32 +1230,30 @@ pub async fn spawn_worker(
                         };
 
                         let fetch_result = if let Some(entry) = cached_response {
-                            Ok(crate::api::ImageResponse {
-                                items: entry.items,
-                                metadata: entry.metadata,
-                            })
+                            Ok((entry.items, request_state.page))
                         } else {
-                            client.get_images_by_url(current_url.clone()).await
+                            sdk_clone
+                                .search_images(&request_state)
+                                .await
+                                .map(|response| {
+                                    let next_page = match (response.page, response.total_pages) {
+                                        (Some(page), Some(total_pages)) if page < total_pages => {
+                                            Some(page + 1)
+                                        }
+                                        _ => None,
+                                    };
+                                    (response.hits, next_page)
+                                })
                         };
 
                         let (visible_items, final_next_page) = match fetch_result {
-                            Ok(res) => {
-                                let filtered_items = filter_image_items_by_requested_nsfw(
-                                    res.items,
-                                    requested_nsfw.as_deref(),
-                                );
-                                let metadata = res.metadata.clone();
-                                let next_page = metadata
-                                    .as_ref()
-                                    .and_then(|metadata| metadata.next_page.clone());
-                                let filtered_count = filtered_items.len();
-                                let visible_items = filtered_items
+                            Ok((items, next_page)) => {
+                                let visible_items = items
                                     .clone()
                                     .into_iter()
                                     .filter(|item| item.r#type.as_deref() != Some("video"))
                                     .collect::<Vec<_>>();
-                                let skipped_videos =
-                                    filtered_count.saturating_sub(visible_items.len());
+                                let skipped_videos = items.len().saturating_sub(visible_items.len());
 
                                 debug_fetch_log(
                                     &debug_config,
@@ -1306,8 +1273,7 @@ pub async fn spawn_worker(
                                             current_url.clone(),
                                             CachedImageSearchResult {
                                                 cache_key: current_url.clone(),
-                                                items: filtered_items,
-                                                metadata,
+                                                items: items.clone(),
                                                 cached_at_unix_secs: now_unix_secs(),
                                             },
                                         );
@@ -1357,18 +1323,20 @@ pub async fn spawn_worker(
                             );
                             let image_bytes_cache_root =
                                 image_bytes_cache_path.lock().await.clone();
-                            handles.push(tokio::spawn(load_feed_image(
-                                item.id,
-                                item.url,
-                                req_client.clone(),
-                                picker.clone(),
-                                tx_msg_clone.clone(),
-                                fetch_semaphore.clone(),
-                                debug_config.clone(),
-                                image_bytes_cache_root,
-                                image_cache_ttl_minutes,
-                                use_search_cache(),
-                            )));
+                            if let Some(image_url) = image_media_url(&item) {
+                                handles.push(tokio::spawn(load_feed_image(
+                                    item.id,
+                                    image_url,
+                                    req_client.clone(),
+                                    picker.clone(),
+                                    tx_msg_clone.clone(),
+                                    fetch_semaphore.clone(),
+                                    debug_config.clone(),
+                                    image_bytes_cache_root,
+                                    image_cache_ttl_minutes,
+                                    use_search_cache(),
+                                )));
+                            }
                         }
                         for handle in handles {
                             let _ = handle.await;
@@ -1965,21 +1933,67 @@ pub async fn spawn_worker(
                         }
                     }
                 }
-                WorkerCommand::DownloadModelForImage(image_id) => {
+                WorkerCommand::DownloadImage(image_hit) => {
                     let tx_msg_clone = tx_msg.clone();
+                    let download_client = {
+                        let builder = if let Some(api_key) = downloader_config.api_key.clone() {
+                            SdkClientBuilder::new().api_key(api_key)
+                        } else {
+                            SdkClientBuilder::new()
+                        };
+                        builder.build_download().unwrap()
+                    };
                     tokio::spawn(async move {
+                        let Some(spec) = download_client.build_media_download_spec(&image_hit) else {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(format!(
+                                    "No downloadable media found for image {}",
+                                    image_hit.id
+                                )))
+                                .await;
+                            return;
+                        };
+
+                        let downloads_root = std::env::current_dir()
+                            .unwrap_or_else(|_| PathBuf::from("."))
+                            .join("downloads")
+                            .join("images");
+                        let _ = tokio::fs::create_dir_all(&downloads_root).await;
+                        let file_name = spec.suggested_file_name();
+                        let options = DownloadOptions {
+                            destination: DownloadDestination::File(downloads_root.join(&file_name)),
+                            create_parent_dirs: true,
+                            ..DownloadOptions::default()
+                        };
                         let _ = tx_msg_clone
                             .send(AppMessage::StatusUpdate(format!(
-                                "Inspecting image {} for linked model...",
-                                image_id
+                                "Downloading image {}...",
+                                image_hit.id
                             )))
                             .await;
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(
-                                "Download finished (Placeholder)!".into(),
-                            ))
-                            .await;
+
+                        match download_client
+                            .download(&spec, &options, None, None)
+                            .await
+                        {
+                            Ok(result) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Downloaded image {} to {}",
+                                        image_hit.id,
+                                        result.path.display()
+                                    )))
+                                    .await;
+                            }
+                            Err(err) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Failed to download image {}: {}",
+                                        image_hit.id, err
+                                    )))
+                                    .await;
+                            }
+                        }
                     });
                 }
                 WorkerCommand::DownloadModel(model_hit, version_id, file_index) => {

@@ -2,6 +2,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 fn as_string_from_serde<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -264,6 +265,7 @@ pub struct FileMetadata {
     pub fp: Option<String>,   // e.g., "fp16", "fp32"
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginatedResponse<T> {
@@ -271,6 +273,7 @@ pub struct PaginatedResponse<T> {
     pub metadata: Option<PaginationMetadata>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginationMetadata {
@@ -292,6 +295,7 @@ pub struct PaginationMetadata {
     pub total: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageItem {
@@ -327,6 +331,7 @@ pub struct ImageItem {
     pub username: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageStats {
@@ -345,4 +350,5 @@ pub struct ImageStats {
 }
 
 // Ensure alias since images endpoint has a specific response shape
+#[allow(dead_code)]
 pub type ImageResponse = PaginatedResponse<ImageItem>;

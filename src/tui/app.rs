@@ -1,6 +1,7 @@
-use crate::api::ImageItem;
 use civitai_cli::sdk::{
-    ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType, SearchModelHit as Model,
+    ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageSearchState,
+    ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType, SearchImageHit as ImageItem,
+    SearchModelHit as Model,
 };
 use crate::tui::model::{
     default_base_model, model_metrics, model_name, model_versions, preview_image_url,
@@ -105,16 +106,34 @@ pub struct SettingsFormState {
     pub input_buffer: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ImageSearchFormSection {
+    Query,
+    Sort,
+    Period,
+    MediaType,
+    BaseModel,
+    AspectRatio,
+}
+
+#[derive(Clone)]
 pub struct ImageSearchFormState {
-    pub focused_field: usize, // 0: NSFW, 1: Sort, 2: Period, 3: ModelVersionId, 4: Tag
-    pub selected_nsfw: usize,
-    pub nsfw_options: Vec<String>,
+    pub query: String,
+    pub mode: SearchFormMode,
+    pub focused_section: ImageSearchFormSection,
+    pub sort_options: Vec<ImageSearchSortBy>,
     pub selected_sort: usize,
-    pub sort_options: Vec<String>,
+    pub periods: Vec<SearchPeriod>,
     pub selected_period: usize,
-    pub period_options: Vec<String>,
-    pub model_version_id: String,
-    pub tag_text: String,
+    pub media_type_options: Vec<ImageMediaType>,
+    pub media_type_cursor: usize,
+    pub selected_media_types: BTreeSet<String>,
+    pub base_options: Vec<ImageBaseModel>,
+    pub base_cursor: usize,
+    pub selected_base_models: BTreeSet<String>,
+    pub aspect_ratio_options: Vec<ImageAspectRatio>,
+    pub aspect_ratio_cursor: usize,
+    pub selected_aspect_ratios: BTreeSet<String>,
 }
 
 impl SettingsFormState {
@@ -130,44 +149,70 @@ impl SettingsFormState {
 impl ImageSearchFormState {
     pub fn new() -> Self {
         Self {
-            focused_field: 0,
-            selected_nsfw: 0,
-            nsfw_options: vec![
-                "All".into(),
-                "None".into(),
-                "Soft".into(),
-                "Mature".into(),
-                "X".into(),
-            ],
+            query: String::new(),
+            mode: SearchFormMode::Quick,
+            focused_section: ImageSearchFormSection::Query,
+            sort_options: ImageSearchSortBy::all(),
             selected_sort: 0,
-            sort_options: vec![
-                "Most Collected".into(),
-                "Most Reactions".into(),
-                "Most Comments".into(),
-                "Newest".into(),
-                "Oldest".into(),
-            ],
+            periods: SearchPeriod::all(),
             selected_period: 0,
-            period_options: vec![
-                "AllTime".into(),
-                "Year".into(),
-                "Month".into(),
-                "Week".into(),
-                "Day".into(),
-            ],
-            model_version_id: String::new(),
-            tag_text: String::new(),
+            media_type_options: ImageMediaType::all(),
+            media_type_cursor: 0,
+            selected_media_types: {
+                let mut set = BTreeSet::new();
+                set.insert(ImageMediaType::Image.as_query_value().to_string());
+                set
+            },
+            base_options: ImageBaseModel::all(),
+            base_cursor: 0,
+            selected_base_models: BTreeSet::new(),
+            aspect_ratio_options: ImageAspectRatio::all(),
+            aspect_ratio_cursor: 0,
+            selected_aspect_ratios: BTreeSet::new(),
         }
     }
 
-    pub fn build_options(&self) -> crate::api::client::ImageSearchOptions {
-        crate::api::client::ImageSearchOptions {
-            limit: 10,
-            nsfw: Some(self.nsfw_options[self.selected_nsfw].clone()),
-            sort: Some(self.sort_options[self.selected_sort].clone()),
-            period: Some(self.period_options[self.selected_period].clone()),
-            model_version_id: self.model_version_id.trim().parse::<u64>().ok(),
-            tags: image_tag_to_id(self.tag_text.trim()),
+    pub fn build_options(&self) -> ImageSearchState {
+        ImageSearchState {
+            query: (!self.query.trim().is_empty()).then(|| self.query.trim().to_string()),
+            sort_by: self
+                .sort_options
+                .get(self.selected_sort)
+                .cloned()
+                .unwrap_or_default(),
+            media_types: self
+                .selected_media_types
+                .iter()
+                .map(|value| ImageMediaType::from_query_value(value))
+                .collect(),
+            base_models: self
+                .selected_base_models
+                .iter()
+                .map(|value| ImageBaseModel::from_query_value(value))
+                .collect(),
+            aspect_ratios: self
+                .selected_aspect_ratios
+                .iter()
+                .map(|value| ImageAspectRatio::from_query_value(value))
+                .collect(),
+            created_at: self
+                .periods
+                .get(self.selected_period)
+                .and_then(|period| period_to_created_at(period.label())),
+            limit: Some(50),
+            ..Default::default()
+        }
+    }
+
+    pub fn begin_quick_search(&mut self) {
+        self.mode = SearchFormMode::Quick;
+        self.focused_section = ImageSearchFormSection::Query;
+    }
+
+    pub fn begin_builder(&mut self) {
+        self.mode = SearchFormMode::Builder;
+        if self.focused_section == ImageSearchFormSection::Query {
+            self.focused_section = ImageSearchFormSection::Sort;
         }
     }
 }
@@ -227,49 +272,8 @@ impl SearchFormState {
     }
 }
 
-fn image_tag_to_id(value: &str) -> Option<u64> {
-    let normalized = value.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "" => None,
-        "animal" => Some(111768),
-        "architecture" => Some(414),
-        "armor" => Some(5169),
-        "astronomy" => Some(111767),
-        "car" => Some(111805),
-        "cartoon" => Some(5186),
-        "cat" => Some(5132),
-        "celebrity" => Some(5188),
-        "city" => Some(55),
-        "clothing" => Some(5193),
-        "comics" => Some(2397),
-        "costume" => Some(2435),
-        "dog" => Some(2539),
-        "dragon" => Some(5499),
-        "fantasy" => Some(5207),
-        "food" => Some(3915),
-        "game character" => Some(5211),
-        "landscape" => Some(8363),
-        "latex clothing" => Some(111935),
-        "man" => Some(5232),
-        "modern art" => Some(617),
-        "outdoors" => Some(111763),
-        "photography" => Some(5241),
-        "photorealistic" => Some(172),
-        "post apocalyptic" => Some(213),
-        "realistic" => Some(5248),
-        "robot" => Some(6594),
-        "sci-fi" => Some(3060),
-        "sports car" => Some(111833),
-        "swimwear" => Some(111943),
-        "transportation" => Some(111757),
-        "nude" => Some(304),
-        "woman" => Some(5133),
-        _ => normalized.parse::<u64>().ok(),
-    }
-}
-
 pub enum AppMessage {
-    ImagesLoaded(Vec<ImageItem>, bool, Option<String>),
+    ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
     ImageDecoded(u64, StatefulProtocol),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
@@ -337,7 +341,7 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages(crate::api::client::ImageSearchOptions, Option<String>),
+    FetchImages(ImageSearchState, Option<u32>),
     SearchModels(
         ModelSearchState,
         Option<u64>,
@@ -349,7 +353,7 @@ pub enum WorkerCommand {
     ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
     PrefetchModelCovers(Vec<(u64, Option<String>)>),
-    DownloadModelForImage(u64),
+    DownloadImage(ImageItem),
     DownloadModel(Model, u64, usize), // selected model hit, version_id, file_index
     PauseDownload(u64),      // model_id
     ResumeDownload(u64),     // model_id
@@ -401,8 +405,10 @@ pub struct App {
     pub image_cache: HashMap<u64, StatefulProtocol>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
-    pub image_feed_next_page: Option<String>,
+    pub image_feed_next_page: Option<u32>,
     pub image_feed_has_more: bool,
+    pub image_detail_expanded: bool,
+    pub image_advanced_visible: bool,
 
     pub active_downloads: HashMap<u64, DownloadTracker>,
     pub active_download_order: Vec<u64>,
@@ -509,6 +515,8 @@ impl App {
             image_feed_loading: false,
             image_feed_next_page: None,
             image_feed_has_more: true,
+            image_detail_expanded: false,
+            image_advanced_visible: false,
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,
@@ -562,7 +570,7 @@ impl App {
             && self.selected_index + threshold >= self.images.len()
     }
 
-    pub fn next_image_feed_page(&self) -> Option<String> {
+    pub fn next_image_feed_page(&self) -> Option<u32> {
         self.image_feed_next_page.clone()
     }
 
@@ -575,8 +583,9 @@ impl App {
                 .iter()
                 .filter(|image| {
                     let username = image
-                        .username
-                        .as_deref()
+                        .user
+                        .as_ref()
+                        .and_then(|user| user.username.as_deref())
                         .unwrap_or_default()
                         .to_ascii_lowercase();
                     let base_model = image
@@ -588,7 +597,7 @@ impl App {
                         || username.contains(&query)
                         || base_model.contains(&query)
                         || image
-                            .meta
+                            .metadata
                             .as_ref()
                             .map(|meta| meta.to_string().to_ascii_lowercase().contains(&query))
                             .unwrap_or(false)
@@ -645,7 +654,7 @@ impl App {
     pub fn set_image_feed_results(
         &mut self,
         mut images: Vec<ImageItem>,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         self.image_feed_next_page = next_page;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
@@ -662,7 +671,7 @@ impl App {
     pub fn append_image_feed_results(
         &mut self,
         mut images: Vec<ImageItem>,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         if !self.images.is_empty() && !images.is_empty() {
             let known_ids: HashSet<u64> = self.images.iter().map(|item| item.id).collect();
@@ -920,8 +929,8 @@ impl App {
         if self.active_tab == MainTab::Images {
             if let Some(img) = self.images.get(self.selected_index) {
                 if let Some(tx) = &self.tx {
-                    let _ = tx.try_send(WorkerCommand::DownloadModelForImage(img.id));
-                    self.status = format!("Initiated download search for image {}...", img.id);
+                    let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
+                    self.status = format!("Downloading image {}...", img.id);
                 }
             }
         } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {

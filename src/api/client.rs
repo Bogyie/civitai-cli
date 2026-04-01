@@ -3,6 +3,7 @@ use reqwest::{Client, IntoUrl};
 
 use super::types::{ImageResponse, Model, ModelVersion};
 
+#[allow(dead_code)]
 #[derive(Clone, Default, Debug)]
 pub struct ImageSearchOptions {
     pub limit: u32,
@@ -38,6 +39,7 @@ impl CivitaiClient {
         self.fetch(&url).await
     }
 
+    #[allow(dead_code)]
     pub async fn get_images_by_url(&self, url: String) -> Result<ImageResponse> {
         self.fetch(&url).await
     }

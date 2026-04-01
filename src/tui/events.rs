@@ -4,13 +4,15 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs::{self, OpenOptions, create_dir_all};
 use std::io::Stdout;
 use std::io::{ErrorKind, Write};
+use std::process::{Command, Stdio};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::tui::app::{
-    App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, MainTab, SearchFormMode,
-    SearchFormSection, WorkerCommand,
+    App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection,
+    MainTab, SearchFormMode, SearchFormSection, WorkerCommand,
 };
+use crate::tui::image::comfy_workflow_json;
 use crate::tui::ui;
 
 fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
@@ -44,6 +46,28 @@ fn debug_fetch_log(config: &crate::config::AppConfig, message: &str) {
     }
 }
 
+fn copy_to_clipboard(value: &str) -> Result<()> {
+    let mut child = Command::new("pbcopy")
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(value.as_bytes())?;
+    }
+    let _ = child.wait()?;
+    Ok(())
+}
+
+fn save_text_artifact(prefix: &str, extension: &str, value: &str) -> Result<PathBuf> {
+    let dir = std::env::current_dir()?.join("downloads").join("artifacts");
+    create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+    let path = dir.join(format!("{prefix}-{ts}.{extension}"));
+    fs::write(&path, value)?;
+    Ok(path)
+}
+
 pub async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -67,7 +91,7 @@ pub async fn run_event_loop(
         }
     };
 
-    let request_image_feed_if_needed = |app: &mut App, next_page: Option<String>| {
+    let request_image_feed_if_needed = |app: &mut App, next_page: Option<u32>| {
         match &next_page {
             None => {
                 if app.image_feed_loaded {
@@ -449,73 +473,111 @@ pub async fn run_event_loop(
                                     app.mode = AppMode::Browsing;
                                 }
                                 KeyCode::Up => {
-                                    if app.image_search_form.focused_field > 0 {
-                                        app.image_search_form.focused_field -= 1;
+                                    if app.image_search_form.mode == SearchFormMode::Builder {
+                                        app.image_search_form.focused_section =
+                                            match app.image_search_form.focused_section {
+                                                ImageSearchFormSection::Query => ImageSearchFormSection::AspectRatio,
+                                                ImageSearchFormSection::Sort => ImageSearchFormSection::Query,
+                                                ImageSearchFormSection::Period => ImageSearchFormSection::Sort,
+                                                ImageSearchFormSection::MediaType => ImageSearchFormSection::Period,
+                                                ImageSearchFormSection::BaseModel => ImageSearchFormSection::MediaType,
+                                                ImageSearchFormSection::AspectRatio => ImageSearchFormSection::BaseModel,
+                                            };
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.image_search_form.focused_field < 4 {
-                                        app.image_search_form.focused_field += 1;
+                                    if app.image_search_form.mode == SearchFormMode::Builder {
+                                        app.image_search_form.focused_section =
+                                            match app.image_search_form.focused_section {
+                                                ImageSearchFormSection::Query => ImageSearchFormSection::Sort,
+                                                ImageSearchFormSection::Sort => ImageSearchFormSection::Period,
+                                                ImageSearchFormSection::Period => ImageSearchFormSection::MediaType,
+                                                ImageSearchFormSection::MediaType => ImageSearchFormSection::BaseModel,
+                                                ImageSearchFormSection::BaseModel => ImageSearchFormSection::AspectRatio,
+                                                ImageSearchFormSection::AspectRatio => ImageSearchFormSection::Query,
+                                            };
                                     }
                                 }
-                                KeyCode::Left => match app.image_search_form.focused_field {
-                                    0 => {
-                                        if app.image_search_form.selected_nsfw > 0 {
-                                            app.image_search_form.selected_nsfw -= 1;
-                                        } else {
-                                            app.image_search_form.selected_nsfw =
-                                                app.image_search_form.nsfw_options.len() - 1;
+                                KeyCode::Left => {
+                                    if app.image_search_form.mode == SearchFormMode::Builder {
+                                        match app.image_search_form.focused_section {
+                                            ImageSearchFormSection::Sort => {
+                                                if app.image_search_form.selected_sort > 0 {
+                                                    app.image_search_form.selected_sort -= 1;
+                                                } else {
+                                                    app.image_search_form.selected_sort =
+                                                        app.image_search_form.sort_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            ImageSearchFormSection::Period => {
+                                                if app.image_search_form.selected_period > 0 {
+                                                    app.image_search_form.selected_period -= 1;
+                                                } else {
+                                                    app.image_search_form.selected_period =
+                                                        app.image_search_form.periods.len().saturating_sub(1);
+                                                }
+                                            }
+                                            ImageSearchFormSection::MediaType => {
+                                                if app.image_search_form.media_type_cursor > 0 {
+                                                    app.image_search_form.media_type_cursor -= 1;
+                                                } else {
+                                                    app.image_search_form.media_type_cursor =
+                                                        app.image_search_form.media_type_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            ImageSearchFormSection::BaseModel => {
+                                                if app.image_search_form.base_cursor > 0 {
+                                                    app.image_search_form.base_cursor -= 1;
+                                                } else {
+                                                    app.image_search_form.base_cursor =
+                                                        app.image_search_form.base_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            ImageSearchFormSection::AspectRatio => {
+                                                if app.image_search_form.aspect_ratio_cursor > 0 {
+                                                    app.image_search_form.aspect_ratio_cursor -= 1;
+                                                } else {
+                                                    app.image_search_form.aspect_ratio_cursor =
+                                                        app.image_search_form.aspect_ratio_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
-                                    1 => {
-                                        if app.image_search_form.selected_sort > 0 {
-                                            app.image_search_form.selected_sort -= 1;
-                                        } else {
-                                            app.image_search_form.selected_sort =
-                                                app.image_search_form.sort_options.len() - 1;
+                                }
+                                KeyCode::Right => {
+                                    if app.image_search_form.mode == SearchFormMode::Builder {
+                                        match app.image_search_form.focused_section {
+                                            ImageSearchFormSection::Sort => {
+                                                app.image_search_form.selected_sort =
+                                                    (app.image_search_form.selected_sort + 1)
+                                                        % app.image_search_form.sort_options.len();
+                                            }
+                                            ImageSearchFormSection::Period => {
+                                                app.image_search_form.selected_period =
+                                                    (app.image_search_form.selected_period + 1)
+                                                        % app.image_search_form.periods.len();
+                                            }
+                                            ImageSearchFormSection::MediaType => {
+                                                app.image_search_form.media_type_cursor =
+                                                    (app.image_search_form.media_type_cursor + 1)
+                                                        % app.image_search_form.media_type_options.len();
+                                            }
+                                            ImageSearchFormSection::BaseModel => {
+                                                app.image_search_form.base_cursor =
+                                                    (app.image_search_form.base_cursor + 1)
+                                                        % app.image_search_form.base_options.len();
+                                            }
+                                            ImageSearchFormSection::AspectRatio => {
+                                                app.image_search_form.aspect_ratio_cursor =
+                                                    (app.image_search_form.aspect_ratio_cursor + 1)
+                                                        % app.image_search_form.aspect_ratio_options.len();
+                                            }
+                                            _ => {}
                                         }
                                     }
-                                    2 => {
-                                        if app.image_search_form.selected_period > 0 {
-                                            app.image_search_form.selected_period -= 1;
-                                        } else {
-                                            app.image_search_form.selected_period =
-                                                app.image_search_form.period_options.len() - 1;
-                                        }
-                                    }
-                                    _ => {}
-                                },
-                                KeyCode::Right => match app.image_search_form.focused_field {
-                                    0 => {
-                                        app.image_search_form.selected_nsfw =
-                                            (app.image_search_form.selected_nsfw + 1)
-                                                % app.image_search_form.nsfw_options.len();
-                                    }
-                                    1 => {
-                                        app.image_search_form.selected_sort =
-                                            (app.image_search_form.selected_sort + 1)
-                                                % app.image_search_form.sort_options.len();
-                                    }
-                                    2 => {
-                                        app.image_search_form.selected_period =
-                                            (app.image_search_form.selected_period + 1)
-                                                % app.image_search_form.period_options.len();
-                                    }
-                                    _ => {}
-                                },
+                                }
                                 KeyCode::Enter => {
-                                    if !app.image_search_form.tag_text.trim().is_empty()
-                                        && app.image_search_form.build_options().tags.is_none()
-                                    {
-                                        app.last_error = Some(format!(
-                                            "Unknown image tag: {}",
-                                            app.image_search_form.tag_text.trim()
-                                        ));
-                                        app.show_status_modal = true;
-                                        app.status = "Invalid image tag".into();
-                                        continue;
-                                    }
-
                                     app.mode = AppMode::Browsing;
                                     app.images.clear();
                                     app.image_cache.clear();
@@ -533,20 +595,63 @@ pub async fn run_event_loop(
                                         app.status = "Searching image feed...".into();
                                     }
                                 }
-                                KeyCode::Char(c) => {
-                                    if app.image_search_form.focused_field == 3 {
-                                        if c.is_ascii_digit() {
-                                            app.image_search_form.model_version_id.push(c);
+                                KeyCode::Char('f') => {
+                                    app.image_search_form.begin_builder();
+                                }
+                                KeyCode::Char(' ') => {
+                                    if app.image_search_form.mode == SearchFormMode::Builder {
+                                        match app.image_search_form.focused_section {
+                                            ImageSearchFormSection::MediaType => {
+                                                if let Some(item) = app
+                                                    .image_search_form
+                                                    .media_type_options
+                                                    .get(app.image_search_form.media_type_cursor)
+                                                    .cloned()
+                                                {
+                                                    let key = item.as_query_value().to_string();
+                                                    if !app.image_search_form.selected_media_types.insert(key.clone()) {
+                                                        app.image_search_form.selected_media_types.remove(&key);
+                                                    }
+                                                }
+                                            }
+                                            ImageSearchFormSection::BaseModel => {
+                                                if let Some(item) = app
+                                                    .image_search_form
+                                                    .base_options
+                                                    .get(app.image_search_form.base_cursor)
+                                                    .cloned()
+                                                {
+                                                    let key = item.as_query_value().to_string();
+                                                    if !app.image_search_form.selected_base_models.insert(key.clone()) {
+                                                        app.image_search_form.selected_base_models.remove(&key);
+                                                    }
+                                                }
+                                            }
+                                            ImageSearchFormSection::AspectRatio => {
+                                                if let Some(item) = app
+                                                    .image_search_form
+                                                    .aspect_ratio_options
+                                                    .get(app.image_search_form.aspect_ratio_cursor)
+                                                    .cloned()
+                                                {
+                                                    let key = item.as_query_value().to_string();
+                                                    if !app.image_search_form.selected_aspect_ratios.insert(key.clone()) {
+                                                        app.image_search_form.selected_aspect_ratios.remove(&key);
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
                                         }
-                                    } else if app.image_search_form.focused_field == 4 {
-                                        app.image_search_form.tag_text.push(c);
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    if app.image_search_form.focused_section == ImageSearchFormSection::Query {
+                                        app.image_search_form.query.push(c);
                                     }
                                 }
                                 KeyCode::Backspace => {
-                                    if app.image_search_form.focused_field == 3 {
-                                        app.image_search_form.model_version_id.pop();
-                                    } else if app.image_search_form.focused_field == 4 {
-                                        app.image_search_form.tag_text.pop();
+                                    if app.image_search_form.focused_section == ImageSearchFormSection::Query {
+                                        app.image_search_form.query.pop();
                                     }
                                 }
                                 _ => {}
@@ -1163,7 +1268,82 @@ pub async fn run_event_loop(
                                     }
                                 }
                             }
-                            KeyCode::Char('m') => { app.show_status_modal = true; }
+                            KeyCode::Char('m') => {
+                                if app.active_tab == MainTab::Images {
+                                    app.image_detail_expanded = !app.image_detail_expanded;
+                                    app.status = if app.image_detail_expanded {
+                                        "Expanded image prompt/details".into()
+                                    } else {
+                                        "Collapsed image prompt/details".into()
+                                    };
+                                } else {
+                                    app.show_status_modal = true;
+                                }
+                            }
+                            KeyCode::Char('a') => {
+                                if app.active_tab == MainTab::Images {
+                                    app.image_advanced_visible = !app.image_advanced_visible;
+                                    app.status = if app.image_advanced_visible {
+                                        "Advanced image metadata enabled".into()
+                                    } else {
+                                        "Advanced image metadata hidden".into()
+                                    };
+                                }
+                            }
+                            KeyCode::Char('o') => {
+                                if app.active_tab == MainTab::Images
+                                    && let Some(image) = app.selected_image_in_active_view()
+                                {
+                                    match copy_to_clipboard(&image.image_page_url()) {
+                                        Ok(()) => {
+                                            app.status = format!("Copied image page URL for {}", image.id);
+                                        }
+                                        Err(err) => {
+                                            app.last_error = Some(err.to_string());
+                                            app.show_status_modal = true;
+                                            app.status = "Failed to copy image page URL".into();
+                                        }
+                                    }
+                                }
+                            }
+                            KeyCode::Char('w') => {
+                                if app.active_tab == MainTab::Images
+                                    && let Some(image) = app.selected_image_in_active_view()
+                                {
+                                    if let Some(json) = comfy_workflow_json(image) {
+                                        match copy_to_clipboard(&json) {
+                                            Ok(()) => app.status = format!("Copied Comfy workflow for image {}", image.id),
+                                            Err(err) => {
+                                                app.last_error = Some(err.to_string());
+                                                app.show_status_modal = true;
+                                                app.status = "Failed to copy workflow".into();
+                                            }
+                                        }
+                                    } else {
+                                        app.status = "No Comfy workflow metadata for current image".into();
+                                    }
+                                }
+                            }
+                            KeyCode::Char('W') => {
+                                if app.active_tab == MainTab::Images
+                                    && let Some(image) = app.selected_image_in_active_view()
+                                {
+                                    if let Some(json) = comfy_workflow_json(image) {
+                                        match save_text_artifact("comfy-workflow", "json", &json) {
+                                            Ok(path) => {
+                                                app.status = format!("Saved workflow to {}", path.display());
+                                            }
+                                            Err(err) => {
+                                                app.last_error = Some(err.to_string());
+                                                app.show_status_modal = true;
+                                                app.status = "Failed to save workflow".into();
+                                            }
+                                        }
+                                    } else {
+                                        app.status = "No Comfy workflow metadata for current image".into();
+                                    }
+                                }
+                            }
                             KeyCode::Char('v') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.show_model_details = !app.show_model_details;
@@ -1248,7 +1428,8 @@ pub async fn run_event_loop(
                                     app.status = "Quick search. Type query, Enter apply, Esc cancel.".into();
                                 } else if app.active_tab == MainTab::Images {
                                     app.mode = AppMode::SearchImages;
-                                    app.status = "Configure image search options. Press Enter to submit, Esc to cancel.".into();
+                                    app.image_search_form.begin_quick_search();
+                                    app.status = "Quick image search. Type query, Enter apply, Esc cancel.".into();
                                 } else if app.active_tab == MainTab::ImageBookmarks {
                                     app.begin_image_bookmark_search();
                                 } else if app.active_tab == MainTab::Bookmarks {
@@ -1261,6 +1442,10 @@ pub async fn run_event_loop(
                                     app.mode = AppMode::SearchForm;
                                     app.search_form.begin_builder();
                                     app.status = "Search builder. Tab section, arrows move, Space toggle, Enter apply.".into();
+                                } else if app.active_tab == MainTab::Images {
+                                    app.mode = AppMode::SearchImages;
+                                    app.image_search_form.begin_builder();
+                                    app.status = "Image filters. Arrows move, Space toggle, Enter apply.".into();
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.begin_bookmark_search();
                                     app.bookmark_search_form_draft.begin_builder();
@@ -1272,6 +1457,10 @@ pub async fn run_event_loop(
                                     app.select_list_first();
                                     send_cover_priority(app);
                                     send_cover_prefetch(app);
+                                } else if app.active_tab == MainTab::Images {
+                                    app.selected_index = 0;
+                                } else if app.active_tab == MainTab::ImageBookmarks {
+                                    app.selected_image_bookmark_index = 0;
                                 }
                             }
                             KeyCode::Char('G') => {
@@ -1279,6 +1468,15 @@ pub async fn run_event_loop(
                                     app.select_list_last();
                                     send_cover_priority(app);
                                     send_cover_prefetch(app);
+                                } else if app.active_tab == MainTab::Images {
+                                    if !app.images.is_empty() {
+                                        app.selected_index = app.images.len().saturating_sub(1);
+                                    }
+                                } else if app.active_tab == MainTab::ImageBookmarks {
+                                    let visible = app.visible_image_bookmarks();
+                                    if !visible.is_empty() {
+                                        app.selected_image_bookmark_index = visible.len().saturating_sub(1);
+                                    }
                                 }
                             }
                             KeyCode::Char('?') => {
