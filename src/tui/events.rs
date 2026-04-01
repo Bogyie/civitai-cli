@@ -1,7 +1,5 @@
 use anyhow::Result;
-use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
-};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs::{self, create_dir_all};
 use std::io::Stdout;
@@ -15,7 +13,6 @@ use crate::tui::app::{
     MainTab, SearchFormMode, SearchFormSection, WorkerCommand,
 };
 use crate::tui::image::comfy_workflow_json;
-use crate::tui::model::{model_versions, preview_image_info};
 use crate::tui::runtime::{
     current_image_render_request, current_model_cover_render_request, debug_fetch_log,
     render_request_key,
@@ -23,9 +20,7 @@ use crate::tui::runtime::{
 use crate::tui::ui;
 
 fn copy_to_clipboard(value: &str) -> Result<()> {
-    let mut child = Command::new("pbcopy")
-        .stdin(Stdio::piped())
-        .spawn()?;
+    let mut child = Command::new("pbcopy").stdin(Stdio::piped()).spawn()?;
     if let Some(stdin) = child.stdin.as_mut() {
         stdin.write_all(value.as_bytes())?;
     }
@@ -86,7 +81,9 @@ pub async fn run_event_loop(
     };
 
     let send_cover_priority = |app: &mut App| {
-        if let Some((_, version_id, cover_url, source_dims)) = app.selected_model_version_with_cover_url() {
+        if let Some((_, version_id, cover_url, source_dims)) =
+            app.selected_model_version_with_cover_url()
+        {
             let request = current_model_cover_render_request();
             let request_key = render_request_key(request, app.config.media_quality);
             if app.has_cached_model_cover_request(version_id, &request_key) {
@@ -125,12 +122,11 @@ pub async fn run_event_loop(
             } else {
                 app.model_version_image_cache.remove(&version_id);
                 app.model_version_image_request_keys.remove(&version_id);
-                let cover_url = app
-                    .selected_model_version_with_cover_url()
-                    .and_then(|(_, _, cover_url, _)| cover_url);
-                let source_dims = app
-                    .selected_model_version_with_cover_url()
-                    .and_then(|(_, _, _, source_dims)| source_dims);
+                let selected_cover = app.selected_model_version_with_cover_url();
+                let cover_url = selected_cover
+                    .as_ref()
+                    .and_then(|(_, _, cover_url, _)| cover_url.clone());
+                let source_dims = selected_cover.and_then(|(_, _, _, source_dims)| source_dims);
                 let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(
                     version_id,
                     cover_url,
@@ -158,31 +154,18 @@ pub async fn run_event_loop(
         if !app.show_image_model_detail_modal {
             return;
         }
-        let Some(model) = app.image_model_detail_model.clone() else {
+        let Some((version_id, cover_url, source_dims)) = app.image_model_detail_selected_cover()
+        else {
             return;
         };
-        let versions = model_versions(&model);
-        if versions.is_empty() {
-            return;
-        }
-        let selected_index = app
-            .selected_version_index
-            .get(&model.id)
-            .copied()
-            .unwrap_or(0)
-            .min(versions.len().saturating_sub(1));
-        let version = &versions[selected_index];
         let request = current_model_cover_render_request();
         let request_key = render_request_key(request, app.config.media_quality);
-        if app.has_cached_model_cover_request(version.id, &request_key) {
+        if app.has_cached_model_cover_request(version_id, &request_key) {
             return;
         }
-        let preview = preview_image_info(&model, selected_index);
-        let cover_url = preview.as_ref().map(|image| image.url.clone());
-        let source_dims = preview.and_then(|image| image.width.zip(image.height));
         if let Some(tx) = &app.tx {
             let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(
-                version.id,
+                version_id,
                 cover_url,
                 source_dims,
                 request,
@@ -194,46 +177,8 @@ pub async fn run_event_loop(
         if !app.show_image_model_detail_modal {
             return;
         }
-        let Some(model) = app.image_model_detail_model.clone() else {
-            return;
-        };
-        let versions = model_versions(&model);
-        if versions.is_empty() {
-            return;
-        }
-        let selected_index = app
-            .selected_version_index
-            .get(&model.id)
-            .copied()
-            .unwrap_or(0)
-            .min(versions.len().saturating_sub(1));
         let request = current_model_cover_render_request();
-        let request_key = render_request_key(request, app.config.media_quality);
-        let mut jobs = Vec::new();
-
-        for offset in 1..=2 {
-            for neighbor_index in [
-                selected_index.checked_sub(offset),
-                (selected_index + offset < versions.len()).then_some(selected_index + offset),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                let version = &versions[neighbor_index];
-                if app.has_cached_model_cover_request(version.id, &request_key)
-                    || app.model_version_image_failed.contains(&version.id)
-                {
-                    continue;
-                }
-                let preview = preview_image_info(&model, neighbor_index);
-                jobs.push((
-                    version.id,
-                    preview.as_ref().map(|image| image.url.clone()),
-                    preview.and_then(|image| image.width.zip(image.height)),
-                ));
-            }
-        }
-
+        let jobs = app.image_model_detail_neighbor_cover_urls(2);
         if jobs.is_empty() {
             return;
         }

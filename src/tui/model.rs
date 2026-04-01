@@ -164,15 +164,6 @@ pub fn selected_version(hit: &SearchModelHit, index: usize) -> Option<ParsedMode
     versions.get(safe_index).cloned()
 }
 
-pub fn preview_image_info(hit: &SearchModelHit, version_index: usize) -> Option<ParsedModelImage> {
-    let version = selected_version(hit, version_index)?;
-    version
-        .images
-        .first()
-        .cloned()
-        .filter(|image| !image.url.trim().is_empty())
-}
-
 pub fn default_base_model(hit: &SearchModelHit) -> Option<String> {
     selected_version(hit, 0)
         .and_then(|version| version.base_model)
@@ -185,7 +176,10 @@ pub fn default_base_model(hit: &SearchModelHit) -> Option<String> {
 
 pub fn build_model_url(hit: &SearchModelHit, version_id: Option<u64>) -> String {
     match version_id {
-        Some(version_id) => format!("https://civitai.com/models/{}?modelVersionId={version_id}", hit.id),
+        Some(version_id) => format!(
+            "https://civitai.com/models/{}?modelVersionId={version_id}",
+            hit.id
+        ),
         None => hit.model_page_url(),
     }
 }
@@ -219,10 +213,7 @@ pub fn build_download_file_name(
     version: &ParsedModelVersion,
     file: &ParsedModelFile,
 ) -> String {
-    let original = file
-        .name
-        .trim()
-        .to_string();
+    let original = file.name.trim().to_string();
     if original.is_empty() {
         return hit.default_download_file_name();
     }
@@ -246,7 +237,10 @@ pub fn build_download_file_name(
 }
 
 fn push_or_merge_version(versions: &mut Vec<ParsedModelVersion>, incoming: ParsedModelVersion) {
-    if let Some(existing) = versions.iter_mut().find(|version| version.id == incoming.id) {
+    if let Some(existing) = versions
+        .iter_mut()
+        .find(|version| version.id == incoming.id)
+    {
         if existing.name.is_empty() && !incoming.name.is_empty() {
             existing.name = incoming.name;
         }
@@ -346,10 +340,12 @@ fn parse_files(value: Option<&Value>) -> Vec<ParsedModelFile> {
     value
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .map(|item| ParsedModelFile {
                     id: value_u64(item.get("id")),
-                    name: value_string(item.get("name")).unwrap_or_else(|| "Unnamed file".to_string()),
+                    name: value_string(item.get("name"))
+                        .unwrap_or_else(|| "Unnamed file".to_string()),
                     file_type: value_string(item.get("type")),
                     size_kb: value_f64(item.get("sizeKB")),
                     format: item
@@ -399,15 +395,18 @@ fn parse_images(value: Option<&Value>) -> Vec<ParsedModelImage> {
     value
         .and_then(Value::as_array)
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(|item| {
                     let url = normalize_model_image_url(&value_string(item.get("url"))?)?;
                     Some(ParsedModelImage {
                         id: value_u64(item.get("id")),
                         model_version_id: value_u64(item.get("modelVersionId")),
                         url,
-                        width: value_u64(item.get("width")).and_then(|value| u32::try_from(value).ok()),
-                        height: value_u64(item.get("height")).and_then(|value| u32::try_from(value).ok()),
+                        width: value_u64(item.get("width"))
+                            .and_then(|value| u32::try_from(value).ok()),
+                        height: value_u64(item.get("height"))
+                            .and_then(|value| u32::try_from(value).ok()),
                         nsfw: value_string(item.get("nsfw")),
                         meta: item.get("meta").cloned(),
                     })
@@ -420,15 +419,18 @@ fn parse_images(value: Option<&Value>) -> Vec<ParsedModelImage> {
 fn parse_images_from_array(value: Option<&Vec<Value>>) -> Vec<ParsedModelImage> {
     value
         .map(|items| {
-            items.iter()
+            items
+                .iter()
                 .filter_map(|item| {
                     let url = normalize_model_image_url(&value_string(item.get("url"))?)?;
                     Some(ParsedModelImage {
                         id: value_u64(item.get("id")),
                         model_version_id: value_u64(item.get("modelVersionId")),
                         url,
-                        width: value_u64(item.get("width")).and_then(|value| u32::try_from(value).ok()),
-                        height: value_u64(item.get("height")).and_then(|value| u32::try_from(value).ok()),
+                        width: value_u64(item.get("width"))
+                            .and_then(|value| u32::try_from(value).ok()),
+                        height: value_u64(item.get("height"))
+                            .and_then(|value| u32::try_from(value).ok()),
                         nsfw: value_string(item.get("nsfw")),
                         meta: item.get("meta").cloned(),
                     })

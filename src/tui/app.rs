@@ -7,27 +7,27 @@ use self::filters::{
     bookmark_matches_base_model, bookmark_matches_period, bookmark_matches_query,
     bookmark_matches_type, has_displayable_model_version, sort_bookmarks,
 };
+pub use self::forms::{
+    ImageSearchFormSection, ImageSearchFormState, MediaRenderRequest, SearchFormMode,
+    SearchFormSection, SearchFormState, SearchPeriod, SettingsFormState,
+};
 use self::storage::{
     collect_paused_sessions_from_history, load_bookmarks, load_download_history,
     load_image_bookmarks, load_image_tag_catalog, load_interrupted_downloads,
     save_bookmarks_to_file, save_download_history_to_file, save_image_bookmarks_to_file,
     save_image_tag_catalog_to_file, save_interrupted_downloads_to_file,
 };
-pub use self::forms::{
-    ImageSearchFormSection, ImageSearchFormState, MediaRenderRequest, SearchFormMode,
-    SearchFormSection, SearchFormState, SearchPeriod, SettingsFormState,
-};
 pub use self::types::{
     AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
     DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab, WorkerCommand,
 };
+use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
+use crate::tui::model::{
+    ParsedModelMetrics, ParsedModelVersion, default_base_model, model_metrics, model_name,
+    model_versions,
+};
 use civitai_cli::sdk::{
     ModelSearchSortBy, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
-};
-use crate::tui::image::{image_tags, image_used_model_entries, image_used_models, ParsedUsedModel};
-use crate::tui::model::{
-    default_base_model, model_metrics, model_name, model_versions, ParsedModelImage,
-    ParsedModelMetrics, ParsedModelVersion,
 };
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
@@ -362,11 +362,7 @@ impl App {
         }
     }
 
-    pub fn set_image_feed_results(
-        &mut self,
-        mut images: Vec<ImageItem>,
-        next_page: Option<u32>,
-    ) {
+    pub fn set_image_feed_results(&mut self, mut images: Vec<ImageItem>, next_page: Option<u32>) {
         let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
         self.image_cache.retain(|id, _| new_ids.contains(id));
         self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
@@ -441,8 +437,7 @@ impl App {
         }
 
         if changed {
-            self.image_tag_catalog
-                .sort_by_key(|tag| tag.to_lowercase());
+            self.image_tag_catalog.sort_by_key(|tag| tag.to_lowercase());
             self.persist_image_tag_catalog();
         }
     }
@@ -488,7 +483,10 @@ impl App {
             if suggestions.len() >= limit {
                 break;
             }
-            if !suggestions.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
+            if !suggestions
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(tag))
+            {
                 suggestions.push(tag.clone());
             }
         }
@@ -679,7 +677,11 @@ impl App {
         }
 
         new_models.sort_by_key(|model| !has_displayable_model_version(model));
-        let mut seen_ids = self.models.iter().map(|model| model.id).collect::<HashSet<_>>();
+        let mut seen_ids = self
+            .models
+            .iter()
+            .map(|model| model.id)
+            .collect::<HashSet<_>>();
         for model in new_models {
             if seen_ids.insert(model.id) {
                 self.models.push(model);
@@ -1028,7 +1030,9 @@ impl App {
         if let Some(version) = self.selected_parsed_version(model, version_index) {
             Some((model.id, version.id))
         } else {
-            model.primary_model_version_id().map(|version_id| (model.id, version_id))
+            model
+                .primary_model_version_id()
+                .map(|version_id| (model.id, version_id))
         }
     }
 
@@ -1041,13 +1045,12 @@ impl App {
         if self.model_version_image_failed.contains(&version.id) {
             return None;
         }
-        let preview = self.preview_image_info(model, version_index);
+        let preview = version.images.first();
         Some((
             model.id,
             version.id,
-            preview.as_ref().map(|image| image.url.clone()),
-            preview
-                .and_then(|image| Some((image.width?, image.height?))),
+            preview.map(|image| image.url.clone()),
+            preview.and_then(|image| image.width.zip(image.height)),
         ))
     }
 
@@ -1076,21 +1079,82 @@ impl App {
                     && !self.model_version_image_failed.contains(&version.id)
             })
             .filter(|(idx, _)| *idx != center && *idx >= start && *idx <= end)
-            .map(|(idx, version)| {
-                let preview = self.preview_image_info(model, idx);
+            .map(|(_, version)| {
+                let preview = version.images.first();
                 (
                     version.id,
-                    version.images.first().map(|image| image.url.clone()).or_else(|| {
-                        preview.as_ref().map(|image| image.url.clone())
-                    }),
-                    version
-                        .images
-                        .first()
-                        .and_then(|image| Some((image.width?, image.height?)))
-                        .or_else(|| {
-                            preview
-                                .and_then(|image| Some((image.width?, image.height?)))
-                        }),
+                    preview.map(|image| image.url.clone()),
+                    preview.and_then(|image| image.width.zip(image.height)),
+                )
+            })
+            .collect()
+    }
+
+    pub fn image_model_detail_selected_cover(
+        &self,
+    ) -> Option<(u64, Option<String>, Option<(u32, u32)>)> {
+        let model = self.image_model_detail_model.as_ref()?;
+        let versions = self.parsed_model_versions(model);
+        if versions.is_empty() {
+            return None;
+        }
+
+        let selected_index = self
+            .selected_version_index
+            .get(&model.id)
+            .copied()
+            .unwrap_or(0)
+            .min(versions.len().saturating_sub(1));
+        let version = versions.get(selected_index)?;
+        if self.model_version_image_failed.contains(&version.id) {
+            return None;
+        }
+
+        let preview = version.images.first();
+        Some((
+            version.id,
+            preview.map(|image| image.url.clone()),
+            preview.and_then(|image| image.width.zip(image.height)),
+        ))
+    }
+
+    pub fn image_model_detail_neighbor_cover_urls(
+        &self,
+        radius: usize,
+    ) -> Vec<(u64, Option<String>, Option<(u32, u32)>)> {
+        let Some(model) = self.image_model_detail_model.as_ref() else {
+            return Vec::new();
+        };
+        let versions = self.parsed_model_versions(model);
+        if versions.is_empty() {
+            return Vec::new();
+        }
+
+        let selected_index = self
+            .selected_version_index
+            .get(&model.id)
+            .copied()
+            .unwrap_or(0)
+            .min(versions.len().saturating_sub(1));
+
+        let requestable_range = selected_index.saturating_sub(radius)
+            ..=((selected_index + radius).min(versions.len().saturating_sub(1)));
+
+        versions
+            .iter()
+            .enumerate()
+            .filter(|(idx, version)| {
+                *idx != selected_index
+                    && requestable_range.contains(idx)
+                    && !self.model_version_image_cache.contains_key(&version.id)
+                    && !self.model_version_image_failed.contains(&version.id)
+            })
+            .map(|(_, version)| {
+                let preview = version.images.first();
+                (
+                    version.id,
+                    preview.map(|image| image.url.clone()),
+                    preview.and_then(|image| image.width.zip(image.height)),
                 )
             })
             .collect()
@@ -1619,18 +1683,6 @@ impl App {
             return None;
         }
         versions.get(index.min(versions.len().saturating_sub(1)))
-    }
-
-    pub fn preview_image_info(
-        &self,
-        model: &Model,
-        version_index: usize,
-    ) -> Option<ParsedModelImage> {
-        self.selected_parsed_version(model, version_index)?
-            .images
-            .first()
-            .cloned()
-            .filter(|image| !image.url.trim().is_empty())
     }
 
     fn rebuild_parsed_model_cache(&mut self) {
