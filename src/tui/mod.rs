@@ -2,6 +2,7 @@ pub mod app;
 pub mod events;
 pub mod image;
 pub mod model;
+mod runtime;
 pub mod ui;
 pub mod worker;
 

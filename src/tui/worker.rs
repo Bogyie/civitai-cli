@@ -5,8 +5,6 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{OpenOptions, create_dir_all};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -26,6 +24,7 @@ use crate::tui::model::{
     ParsedModelFile, build_download_file_name, model_name, model_versions,
     resolve_download_target_dir,
 };
+use crate::tui::runtime::{debug_fetch_log, render_request_key};
 
 type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
 type SearchCache = HashMap<String, CachedSearchResult>;
@@ -222,13 +221,6 @@ fn rewrite_cover_url_for_display(
         &build_cover_media_options(request, source_dims, preference),
     )
         .or_else(|| Some(raw_url.to_string()))
-}
-
-fn render_request_key(
-    request: MediaRenderRequest,
-    preference: MediaQualityPreference,
-) -> String {
-    format!("{}:{}x{}", preference.label(), request.width, request.height)
 }
 
 fn cache_key_for_options(opts: &ModelSearchState) -> String {
@@ -503,45 +495,6 @@ fn image_bytes_cache_root(config: &AppConfig) -> Option<PathBuf> {
 
 fn image_detail_cache_root(config: &AppConfig) -> Option<PathBuf> {
     config.image_cache_path().map(|root| root.join("details"))
-}
-
-fn debug_fetch_log_path(config: &AppConfig) -> Option<PathBuf> {
-    AppConfig::config_dir()
-        .or_else(|| config.search_cache_path())
-        .map(|dir| dir.join("fetch_debug.log"))
-}
-
-fn debug_fetch_log_to_file(log_path: Option<&Path>, message: &str) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-
-    let path = match log_path {
-        Some(path) => path,
-        None => return,
-    };
-
-    if let Some(parent) = path.parent() {
-        let _ = create_dir_all(parent);
-    }
-
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .map(|dur| dur.as_secs())
-            .unwrap_or_default();
-        let _ = writeln!(file, "[{}] {}", ts, message);
-    }
-}
-
-fn debug_fetch_log(config: &AppConfig, message: &str) {
-    let path = match debug_fetch_log_path(config) {
-        Some(path) => path,
-        None => return,
-    };
-
-    debug_fetch_log_to_file(Some(path.as_path()), message);
 }
 
 fn use_search_cache() -> bool {

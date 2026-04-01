@@ -1,54 +1,26 @@
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
-    terminal,
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::fs::{self, OpenOptions, create_dir_all};
+use std::fs::{self, create_dir_all};
 use std::io::Stdout;
 use std::io::{ErrorKind, Write};
-use std::process::{Command, Stdio};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use tokio::sync::mpsc;
 
 use crate::tui::app::{
     App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection,
-    MainTab, MediaRenderRequest, SearchFormMode, SearchFormSection, WorkerCommand,
+    MainTab, SearchFormMode, SearchFormSection, WorkerCommand,
 };
 use crate::tui::image::comfy_workflow_json;
 use crate::tui::model::{model_versions, preview_image_info};
+use crate::tui::runtime::{
+    current_image_render_request, current_model_cover_render_request, debug_fetch_log,
+    render_request_key,
+};
 use crate::tui::ui;
-
-fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
-    crate::config::AppConfig::config_dir()
-        .or_else(|| config.search_cache_path())
-        .map(|dir| dir.join("fetch_debug.log"))
-}
-
-fn debug_fetch_log_to_file(path: &std::path::Path, message: &str) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-
-    if let Some(parent) = path.parent() {
-        let _ = create_dir_all(parent);
-    }
-
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()
-            .map(|dur| dur.as_secs())
-            .unwrap_or_default();
-        let _ = writeln!(file, "[{}] {}", ts, message);
-    }
-}
-
-fn debug_fetch_log(config: &crate::config::AppConfig, message: &str) {
-    if let Some(path) = debug_fetch_log_path(config) {
-        debug_fetch_log_to_file(&path, message);
-    }
-}
 
 fn copy_to_clipboard(value: &str) -> Result<()> {
     let mut child = Command::new("pbcopy")
@@ -70,37 +42,6 @@ fn save_text_artifact(prefix: &str, extension: &str, value: &str) -> Result<Path
     let path = dir.join(format!("{prefix}-{ts}.{extension}"));
     fs::write(&path, value)?;
     Ok(path)
-}
-
-fn current_terminal_size() -> (u16, u16) {
-    terminal::size().unwrap_or((120, 40))
-}
-
-fn current_image_render_request() -> MediaRenderRequest {
-    let (cols, rows) = current_terminal_size();
-    let panel_width = ((cols as f32) * 0.46).round().max(24.0) as u32;
-    let panel_height = ((rows as f32) * 0.72).round().max(12.0) as u32;
-    MediaRenderRequest {
-        width: panel_width.saturating_mul(14),
-        height: panel_height.saturating_mul(28),
-    }
-}
-
-fn current_model_cover_render_request() -> MediaRenderRequest {
-    let (cols, rows) = current_terminal_size();
-    let panel_width = ((cols as f32) * 0.38).round().max(18.0) as u32;
-    let panel_height = ((rows as f32) * 0.38).round().max(10.0) as u32;
-    MediaRenderRequest {
-        width: panel_width.saturating_mul(12),
-        height: panel_height.saturating_mul(24),
-    }
-}
-
-fn render_request_key(
-    request: MediaRenderRequest,
-    quality: crate::config::MediaQualityPreference,
-) -> String {
-    format!("{}:{}x{}", quality.label(), request.width, request.height)
 }
 
 pub async fn run_event_loop(
