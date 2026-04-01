@@ -237,9 +237,7 @@ string_enum_with_custom!(ImageBaseModel {
 });
 
 fn custom_image_sort_to_meili(value: &str) -> Option<String> {
-    value
-        .strip_prefix("images_v6:")
-        .map(|sort| sort.replace(':', ":"))
+    value.strip_prefix("images_v6:").map(str::to_string)
 }
 
 impl ImageMediaType {

@@ -1231,15 +1231,15 @@ impl App {
         if self.is_image_bookmarked(image.id) {
             self.image_bookmarks.retain(|item| item.id != image.id);
             self.status = format!("Removed image bookmark: {}", image.id);
-            if self.active_tab == MainTab::ImageBookmarks {
-                self.clamp_image_bookmark_selection();
-            }
         } else {
             self.image_bookmarks.push(image.clone());
             self.status = format!("Added image bookmark: {}", image.id);
         }
         self.deduplicate_image_bookmarks();
         self.refresh_visible_image_bookmarks_cache();
+        if self.active_tab == MainTab::ImageBookmarks {
+            self.clamp_image_bookmark_selection();
+        }
         self.persist_image_bookmarks();
     }
 
@@ -1278,9 +1278,6 @@ impl App {
         if self.is_model_bookmarked(model.id) {
             self.bookmarks.retain(|item| item.id != model.id);
             self.status = format!("Removed bookmark: {}", model_name(model));
-            if self.active_tab == MainTab::Bookmarks {
-                self.clamp_bookmark_selection();
-            }
         } else {
             self.bookmarks.push(model.clone());
             self.status = format!("Added bookmark: {}", model_name(model));
@@ -1288,6 +1285,9 @@ impl App {
         self.deduplicate_bookmarks();
         self.rebuild_parsed_model_cache();
         self.refresh_visible_bookmarks_cache();
+        if self.active_tab == MainTab::Bookmarks {
+            self.clamp_bookmark_selection();
+        }
         self.persist_bookmarks();
     }
 
@@ -1769,5 +1769,47 @@ mod tests {
 
         assert_eq!(app.visible_image_bookmarks().len(), 1);
         assert_eq!(app.visible_image_bookmarks()[0].id, 10);
+    }
+
+    #[test]
+    fn bookmark_selection_clamps_after_filtered_removal() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Bookmarks;
+        app.bookmarks = vec![
+            model(json!({ "id": 1, "name": "Flux Portrait" })),
+            model(json!({ "id": 2, "name": "Flux Landscape" })),
+        ];
+        app.refresh_visible_bookmarks_cache();
+        app.bookmark_search_form.query = "flux".to_string();
+        app.refresh_visible_bookmarks_cache();
+        app.bookmark_list_state.select(Some(1));
+
+        let selected = app.bookmarks[1].clone();
+        app.toggle_bookmark_for_selected_model(&selected);
+
+        assert_eq!(app.visible_bookmarks().len(), 1);
+        assert_eq!(app.bookmark_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn image_bookmark_selection_clamps_after_filtered_removal() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::ImageBookmarks;
+        app.image_bookmarks = vec![
+            image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
+            image(json!({ "id": 20, "baseModel": "Flux.1 D" })),
+        ];
+        app.refresh_visible_image_bookmarks_cache();
+        app.image_bookmark_query = "flux".to_string();
+        app.refresh_visible_image_bookmarks_cache();
+        app.selected_image_bookmark_index = 1;
+        app.image_bookmark_list_state.select(Some(1));
+
+        let selected = app.image_bookmarks[1].clone();
+        app.toggle_bookmark_for_selected_image(&selected);
+
+        assert_eq!(app.visible_image_bookmarks().len(), 1);
+        assert_eq!(app.selected_image_bookmark_index, 0);
+        assert_eq!(app.image_bookmark_list_state.selected(), Some(0));
     }
 }
