@@ -229,6 +229,73 @@ fn is_known_image_key(key: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaUrlOptions {
+    /// `original=true` returns the original asset; for videos this keeps the source mp4.
+    pub original: Option<bool>,
+    /// Video-specific variant selection. In live tests this gates transcoded mp4 delivery.
+    pub transcode: Option<bool>,
+    /// Resize target width for transformed variants.
+    pub width: Option<u32>,
+    /// Resize target height for transformed variants.
+    pub height: Option<u32>,
+    /// Quality hint used by transformed image/video variants.
+    pub quality: Option<u8>,
+    /// Prefers optimized delivery formats such as webp/transcoded mp4 when supported.
+    pub optimized: Option<bool>,
+    /// Disables animation in image-derived variants when the backend supports it.
+    pub anim: Option<bool>,
+}
+
+impl MediaUrlOptions {
+    pub fn original() -> Self {
+        Self {
+            original: Some(true),
+            ..Self::default()
+        }
+    }
+
+    pub fn default_variant() -> Self {
+        Self {
+            original: Some(false),
+            ..Self::default()
+        }
+    }
+
+    pub fn to_path_segment(&self) -> String {
+        let mut parts = Vec::new();
+
+        if let Some(original) = self.original {
+            parts.push(format!("original={original}"));
+        }
+        if let Some(transcode) = self.transcode {
+            parts.push(format!("transcode={transcode}"));
+        }
+        if let Some(width) = self.width {
+            parts.push(format!("width={width}"));
+        }
+        if let Some(height) = self.height {
+            parts.push(format!("height={height}"));
+        }
+        if let Some(quality) = self.quality {
+            parts.push(format!("quality={quality}"));
+        }
+        if let Some(optimized) = self.optimized {
+            parts.push(format!("optimized={optimized}"));
+        }
+        if let Some(anim) = self.anim {
+            parts.push(format!("anim={anim}"));
+        }
+
+        // Default to the original asset so existing callers keep their prior behavior.
+        if parts.is_empty() {
+            "original=true".to_string()
+        } else {
+            parts.join(",")
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchImageHit {
@@ -290,9 +357,10 @@ impl SearchImageHit {
     }
 
     pub fn original_media_url(&self) -> Option<String> {
-        self.media_url_with_base_and_namespace(
+        self.media_url_with_options_and_base_and_namespace(
             CIVITAI_MEDIA_DELIVERY_URL,
             CIVITAI_MEDIA_DELIVERY_NAMESPACE,
+            &MediaUrlOptions::original(),
         )
     }
 
@@ -306,13 +374,50 @@ impl SearchImageHit {
     }
 
     pub fn media_url_with_namespace(&self, namespace: &str) -> Option<String> {
-        self.media_url_with_base_and_namespace(CIVITAI_MEDIA_DELIVERY_URL, namespace)
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
     }
 
     pub fn media_url_with_base_and_namespace(
         &self,
         base_url: &str,
         namespace: &str,
+    ) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            base_url,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url_with_options(&self, options: &MediaUrlOptions) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            CIVITAI_MEDIA_DELIVERY_NAMESPACE,
+            options,
+        )
+    }
+
+    pub fn media_url_with_options_and_namespace(
+        &self,
+        namespace: &str,
+        options: &MediaUrlOptions,
+    ) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            namespace,
+            options,
+        )
+    }
+
+    pub fn media_url_with_options_and_base_and_namespace(
+        &self,
+        base_url: &str,
+        namespace: &str,
+        options: &MediaUrlOptions,
     ) -> Option<String> {
         let token = self.media_token()?;
         let base_url = base_url.trim_end_matches('/');
@@ -321,7 +426,11 @@ impl SearchImageHit {
             return None;
         }
 
-        Some(format!("{base_url}/{namespace}/{token}/original=true"))
+        // Civitai media variants are encoded as a comma-separated path segment.
+        Some(format!(
+            "{base_url}/{namespace}/{token}/{}",
+            options.to_path_segment()
+        ))
     }
 }
 

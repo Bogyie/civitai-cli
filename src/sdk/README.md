@@ -271,17 +271,36 @@ if let Some(spec) = download.build_model_download_spec(
 - 모델 페이지 URL: `https://civitai.com/models/<id>`
 - 모델 다운로드 URL: `https://civitai.com/api/download/models/<modelVersionId>`
 - 원본 media URL: `https://image.civitai.com/<namespace>/<token>/original=true`
+- 변형 media URL: `https://image.civitai.com/<namespace>/<token>/width=450,quality=90,optimized=true`
+- 비디오 transcode URL: `https://image.civitai.com/<namespace>/<token>/transcode=true,quality=90,optimized=true/<filename>.mp4`
 
 관련 메서드:
 
 - `SearchImageHit::image_page_url()`
 - `SearchImageHit::original_media_url()`
+- `SearchImageHit::media_url_with_options(&MediaUrlOptions)`
 - `SearchModelHit::model_page_url()`
 - `SearchModelHit::model_download_url()`
 - `DownloadClient::image_page_url(hit)`
 - `DownloadClient::original_media_url(hit)`
+- `DownloadClient::media_url(hit, &MediaUrlOptions)`
 - `DownloadClient::model_page_url(hit)`
 - `DownloadClient::model_download_url(hit)`
+
+지원되는 media 옵션:
+
+- `original`
+- `transcode`
+- `width`
+- `height`
+- `quality`
+- `optimized`
+- `anim`
+
+참고:
+
+- 이미지에서는 주로 `width`, `height`, `quality`, `optimized`, `anim` 조합이 유용합니다.
+- 비디오에서는 `transcode`가 추가로 의미가 있고, `original=true`는 원본 mp4를 가리키는 경향이 있습니다.
 
 client helper를 쓰면 base URL, namespace, download endpoint를 config로 주입한 값이 반영됩니다.
 

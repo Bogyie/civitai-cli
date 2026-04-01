@@ -32,7 +32,9 @@ pub use download::{
     DownloadResult, DownloadSpec,
 };
 #[allow(unused_imports)]
-pub use image_search::{ImageHitUser, ImageSearchState, SearchImageHit, SearchImageResponse};
+pub use image_search::{
+    ImageHitUser, ImageSearchState, MediaUrlOptions, SearchImageHit, SearchImageResponse,
+};
 #[allow(unused_imports)]
 pub use image_search_types::{
     ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageTechnique, ImageTool,

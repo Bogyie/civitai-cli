@@ -20,7 +20,7 @@ use super::download::{
     DownloadResult, DownloadSpec, authorization_header_value, content_disposition_file_name,
     content_range_total, emit_event, ensure_parent_dir,
 };
-use super::image_search::{ImageSearchState, SearchImageHit, SearchImageResponse};
+use super::image_search::{ImageSearchState, MediaUrlOptions, SearchImageHit, SearchImageResponse};
 use super::model_search::{
     ModelDownloadAuth, ModelSearchState, SearchModelHit, SearchModelResponse,
     build_model_download_url_with_token_and_base,
@@ -431,9 +431,18 @@ impl DownloadClient {
     }
 
     pub fn original_media_url(&self, hit: &SearchImageHit) -> Option<String> {
-        hit.media_url_with_base_and_namespace(
+        hit.media_url_with_options_and_base_and_namespace(
             &self.config.media_delivery_url,
             &self.config.media_delivery_namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url(&self, hit: &SearchImageHit, options: &MediaUrlOptions) -> Option<String> {
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            &self.config.media_delivery_namespace,
+            options,
         )
     }
 
@@ -442,7 +451,24 @@ impl DownloadClient {
         hit: &SearchImageHit,
         namespace: &str,
     ) -> Option<String> {
-        hit.media_url_with_base_and_namespace(&self.config.media_delivery_url, namespace)
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url_with_namespace_and_options(
+        &self,
+        hit: &SearchImageHit,
+        namespace: &str,
+        options: &MediaUrlOptions,
+    ) -> Option<String> {
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            namespace,
+            options,
+        )
     }
 
     pub fn model_page_url(&self, hit: &SearchModelHit) -> String {
