@@ -793,9 +793,9 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(
             if fm.focused_field == 6 {
-                "> Image Search Cache TTL (minutes): "
+                "> Image Search Cache TTL (minutes, Newest bypasses cache): "
             } else {
-                "  Image Search Cache TTL (minutes): "
+                "  Image Search Cache TTL (minutes, Newest bypasses cache): "
             },
             Style::default().fg(if fm.focused_field == 6 {
                 Color::Yellow
@@ -816,15 +816,15 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     let image_cache_ttl_val = if fm.editing && fm.focused_field == 7 {
         format!("{}█", fm.input_buffer)
     } else {
-        app.config.image_cache_ttl_minutes.to_string()
+        app.config.image_detail_cache_ttl_minutes.to_string()
     };
 
     lines.push(Line::from(vec![
         Span::styled(
             if fm.focused_field == 7 {
-                "> Image Cache TTL (minutes, 0 = persistent): "
+                "> Image Detail Cache TTL (minutes): "
             } else {
-                "  Image Cache TTL (minutes, 0 = persistent): "
+                "  Image Detail Cache TTL (minutes): "
             },
             Style::default().fg(if fm.focused_field == 7 {
                 Color::Yellow
@@ -842,7 +842,36 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]));
 
-    let download_history_path_val = if fm.editing && fm.focused_field == 8 {
+    let image_binary_cache_ttl_val = if fm.editing && fm.focused_field == 8 {
+        format!("{}█", fm.input_buffer)
+    } else {
+        app.config.image_cache_ttl_minutes.to_string()
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 8 {
+                "> Image Binary Cache TTL (minutes, 0 = persistent): "
+            } else {
+                "  Image Binary Cache TTL (minutes, 0 = persistent): "
+            },
+            Style::default().fg(if fm.focused_field == 8 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
+        ),
+        Span::styled(
+            image_binary_cache_ttl_val,
+            if fm.focused_field == 8 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
+        ),
+    ]));
+
+    let download_history_path_val = if fm.editing && fm.focused_field == 9 {
         format!("{}█", fm.input_buffer)
     } else {
         app.config
@@ -859,12 +888,12 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 8 {
+            if fm.focused_field == 9 {
                 "> Download History File: "
             } else {
                 "  Download History File: "
             },
-            Style::default().fg(if fm.focused_field == 8 {
+            Style::default().fg(if fm.focused_field == 9 {
                 Color::Yellow
             } else {
                 Color::White
@@ -872,7 +901,7 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(
             download_history_path_val,
-            if fm.focused_field == 8 && fm.editing {
+            if fm.focused_field == 9 && fm.editing {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::Cyan)
@@ -1264,10 +1293,16 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let tags = if app.image_search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.image_search_form.tag_query.trim().to_string()
+    };
     let summary = format!(
-        "🖼 Query: \"{}\" | Type: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
+        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
         query,
         media_types,
+        tags,
         app.image_search_form
             .sort_options
             .get(app.image_search_form.selected_sort)
@@ -1729,6 +1764,7 @@ fn draw_model_sidebar(
             ])
             .split(image_center_outer[1]);
         let inner_img_area = image_center_inner[1];
+        f.render_widget(Clear, inner_img_area);
 
         let has_any_cached_image = versions
             .iter()
@@ -2216,12 +2252,13 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             Line::from(""),
             Line::from(Span::styled(
                 format!(
-                    " Current: sort={} | types={} | bases={} | ratios={} | period={} ",
+                    " Current: sort={} | types={} | tags={} | bases={} | ratios={} | period={} ",
                     form.sort_options
                         .get(form.selected_sort)
                         .map(|sort| sort.label().to_string())
                         .unwrap_or_else(|| "Relevance".to_string()),
                     form.selected_media_types.len(),
+                    if form.tag_query.trim().is_empty() { 0 } else { form.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
                     form.selected_base_models.len(),
                     form.selected_aspect_ratios.len(),
                     form.periods
@@ -2250,23 +2287,17 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         .title(" Image Filters ");
     f.render_widget(&block, area);
     let inner = block.inner(area);
+    let section_constraints = build_image_modal_constraints(form.focused_section, inner.height);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(5),
-            Constraint::Length(7),
-            Constraint::Length(14),
-            Constraint::Min(6),
-            Constraint::Length(2),
-        ])
+        .constraints(section_constraints)
         .split(inner);
 
     let query_focused = form.focused_section == ImageSearchFormSection::Query;
     let sort_focused = form.focused_section == ImageSearchFormSection::Sort;
     let period_focused = form.focused_section == ImageSearchFormSection::Period;
     let type_focused = form.focused_section == ImageSearchFormSection::MediaType;
+    let tag_focused = form.focused_section == ImageSearchFormSection::Tag;
     let base_focused = form.focused_section == ImageSearchFormSection::BaseModel;
     let ratio_focused = form.focused_section == ImageSearchFormSection::AspectRatio;
 
@@ -2419,6 +2450,23 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         sections[3],
     );
 
+    let tag_box = Paragraph::new(build_text_filter_box_lines(
+        "Tag",
+        tag_focused,
+        !form.tag_query.trim().is_empty(),
+        &form.tag_query,
+        "Comma-separated tags",
+        sections[4].width.saturating_sub(4) as usize,
+        sections[4].height.saturating_sub(3) as usize,
+    ))
+    .block(styled_search_block(
+        " Tags ",
+        tag_focused,
+        !form.tag_query.trim().is_empty(),
+    ))
+    .wrap(Wrap { trim: true });
+    f.render_widget(tag_box, sections[4]);
+
     f.render_widget(
         Paragraph::new(build_image_filter_box_lines(
             "Base Model",
@@ -2431,8 +2479,8 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 .cloned()
                 .collect::<Vec<_>>(),
             false,
-            sections[4].width.saturating_sub(4) as usize,
-            sections[4].height.saturating_sub(3) as usize,
+            sections[5].width.saturating_sub(4) as usize,
+            sections[5].height.saturating_sub(3) as usize,
         ))
         .block(styled_search_block(
             " Base Model ",
@@ -2440,7 +2488,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             !form.selected_base_models.is_empty(),
         ))
         .wrap(Wrap { trim: true }),
-        sections[4],
+        sections[5],
     );
 
     f.render_widget(
@@ -2455,8 +2503,8 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 .cloned()
                 .collect::<Vec<_>>(),
             false,
-            sections[5].width.saturating_sub(4) as usize,
-            sections[5].height.saturating_sub(3) as usize,
+            sections[6].width.saturating_sub(4) as usize,
+            sections[6].height.saturating_sub(3) as usize,
         ))
         .block(styled_search_block(
             " Aspect Ratio ",
@@ -2464,15 +2512,15 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             !form.selected_aspect_ratios.is_empty(),
         ))
         .wrap(Wrap { trim: true }),
-        sections[5],
+        sections[6],
     );
 
     f.render_widget(
         Paragraph::new(
-            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Enter] Apply | [Esc] Cancel ",
+            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ",
         )
         .wrap(Wrap { trim: true }),
-        sections[6],
+        sections[7],
     );
 }
 
@@ -2820,6 +2868,90 @@ fn build_horizontal_item_window(items: &[(String, bool)], max_width: usize) -> V
         .iter()
         .map(|(text, selected, _)| (text.clone(), *selected))
         .collect()
+}
+
+fn build_image_modal_constraints(
+    focused: ImageSearchFormSection,
+    total_height: u16,
+) -> Vec<Constraint> {
+    let help_height = 2u16;
+    let collapsed = [3u16, 3, 3, 3, 3, 3, 3];
+    let focused_index = match focused {
+        ImageSearchFormSection::Query => 0,
+        ImageSearchFormSection::Sort => 1,
+        ImageSearchFormSection::Period => 2,
+        ImageSearchFormSection::MediaType => 3,
+        ImageSearchFormSection::Tag => 4,
+        ImageSearchFormSection::BaseModel => 5,
+        ImageSearchFormSection::AspectRatio => 6,
+    };
+    let collapsed_total = collapsed.iter().sum::<u16>() + help_height;
+    let extra = total_height.saturating_sub(collapsed_total);
+
+    let mut constraints = Vec::with_capacity(8);
+    for (idx, base) in collapsed.into_iter().enumerate() {
+        let height = if idx == focused_index {
+            base.saturating_add(extra)
+        } else {
+            base
+        };
+        constraints.push(Constraint::Length(height));
+    }
+    constraints.push(Constraint::Length(help_height));
+    constraints
+}
+
+fn build_text_filter_box_lines(
+    label: &str,
+    focused: bool,
+    configured: bool,
+    value: &str,
+    placeholder: &str,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let display_value = if value.trim().is_empty() {
+        placeholder.to_string()
+    } else {
+        value.to_string()
+    };
+    let current_style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else if configured {
+        Style::default().fg(Color::Yellow)
+    } else {
+        inactive_box_style(false)
+    };
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} {}{}",
+            if focused { ">" } else { " " },
+            label,
+            if focused { ":" } else { "" }
+        ),
+        current_style,
+    )));
+    let rendered_value = if focused {
+        format!("{display_value}█")
+    } else {
+        display_value.clone()
+    };
+    lines.extend(style_lines(
+        wrap_text_lines(
+            &rendered_value,
+            width.max(1),
+            height.saturating_sub(1).max(1),
+        ),
+        if focused {
+            Style::default().fg(Color::White)
+        } else if configured {
+            Style::default().fg(Color::Yellow)
+        } else {
+            inactive_box_style(false)
+        },
+    ));
+    lines
 }
 
 fn build_image_filter_box_lines(

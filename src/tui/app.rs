@@ -112,6 +112,7 @@ pub enum ImageSearchFormSection {
     Sort,
     Period,
     MediaType,
+    Tag,
     BaseModel,
     AspectRatio,
 }
@@ -128,6 +129,7 @@ pub struct ImageSearchFormState {
     pub media_type_options: Vec<ImageMediaType>,
     pub media_type_cursor: usize,
     pub selected_media_types: BTreeSet<String>,
+    pub tag_query: String,
     pub base_options: Vec<ImageBaseModel>,
     pub base_cursor: usize,
     pub selected_base_models: BTreeSet<String>,
@@ -163,6 +165,7 @@ impl ImageSearchFormState {
                 set.insert(ImageMediaType::Image.as_query_value().to_string());
                 set
             },
+            tag_query: String::new(),
             base_options: ImageBaseModel::all(),
             base_cursor: 0,
             selected_base_models: BTreeSet::new(),
@@ -184,6 +187,13 @@ impl ImageSearchFormState {
                 .selected_media_types
                 .iter()
                 .map(|value| ImageMediaType::from_query_value(value))
+                .collect(),
+            tags: self
+                .tag_query
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
                 .collect(),
             base_models: self
                 .selected_base_models
@@ -276,8 +286,8 @@ pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
     ImageDecoded(u64, StatefulProtocol, Vec<u8>),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
-    ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
-    ModelCoversDecoded(u64, Vec<StatefulProtocol>), // version_id, protocols
+    ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>), // version_id, protocol, bytes
+    ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>), // version_id, protocols+bytes
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
     DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>), // model_id, filename, version_id, model_name, total_bytes, file_path
@@ -344,6 +354,7 @@ pub enum WorkerCommand {
     FetchImages(ImageSearchState, Option<u32>),
     LoadImage(ImageItem),
     RebuildImageProtocol(u64, Vec<u8>),
+    RebuildModelCover(u64, Vec<u8>),
     SearchModels(
         ModelSearchState,
         Option<u64>,
@@ -399,6 +410,7 @@ pub struct App {
     pub selected_version_index: HashMap<u64, usize>,
     pub selected_file_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, Vec<StatefulProtocol>>,
+    pub model_version_image_bytes_cache: HashMap<u64, Vec<Vec<u8>>>,
     pub model_version_image_failed: HashSet<u64>,
 
     pub images: Vec<ImageItem>,
@@ -509,6 +521,7 @@ impl App {
             selected_version_index: HashMap::new(),
             selected_file_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
+            model_version_image_bytes_cache: HashMap::new(),
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
             selected_index: 0,
@@ -863,6 +876,17 @@ impl App {
         has_more: bool,
         next_page: Option<u32>,
     ) {
+        let known_version_ids = models
+            .iter()
+            .flat_map(model_versions)
+            .map(|version| version.id)
+            .collect::<HashSet<_>>();
+        self.model_version_image_cache
+            .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_bytes_cache
+            .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_failed
+            .retain(|version_id| known_version_ids.contains(version_id));
         self.models = models;
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;

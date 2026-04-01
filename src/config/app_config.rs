@@ -9,7 +9,11 @@ fn default_model_search_cache_ttl_hours() -> u64 {
 }
 
 fn default_image_search_cache_ttl_minutes() -> u64 {
-    10
+    15
+}
+
+fn default_image_detail_cache_ttl_minutes() -> u64 {
+    60
 }
 
 fn default_image_cache_ttl_minutes() -> u64 {
@@ -31,6 +35,8 @@ pub struct AppConfig {
     pub model_search_cache_ttl_hours: u64,
     #[serde(default = "default_image_search_cache_ttl_minutes")]
     pub image_search_cache_ttl_minutes: u64,
+    #[serde(default = "default_image_detail_cache_ttl_minutes")]
+    pub image_detail_cache_ttl_minutes: u64,
     #[serde(default = "default_image_cache_ttl_minutes")]
     pub image_cache_ttl_minutes: u64,
 }
@@ -133,6 +139,7 @@ impl Default for AppConfig {
             interrupted_download_file_path: None,
             model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
             image_search_cache_ttl_minutes: default_image_search_cache_ttl_minutes(),
+            image_detail_cache_ttl_minutes: default_image_detail_cache_ttl_minutes(),
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
         }
     }

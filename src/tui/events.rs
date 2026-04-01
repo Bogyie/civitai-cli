@@ -110,6 +110,30 @@ pub async fn run_event_loop(
         }
     };
 
+    let reload_selected_model_cover = |app: &mut App| {
+        if !matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+            return;
+        }
+        let Some((_, version_id)) = app.selected_model_version() else {
+            return;
+        };
+        if let Some(tx) = &app.tx {
+            if let Some(bytes) = app
+                .model_version_image_bytes_cache
+                .get(&version_id)
+                .and_then(|entries| entries.first())
+                .cloned()
+            {
+                let _ = tx.try_send(WorkerCommand::RebuildModelCover(version_id, bytes));
+            } else {
+                let cover_url = app
+                    .selected_model_version_with_cover_url()
+                    .and_then(|(_, _, cover_url)| cover_url);
+                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(version_id, cover_url));
+            }
+        }
+    };
+
     let send_cover_prefetch = |app: &mut App| {
         let neighbors = app.selected_model_neighbor_cover_urls(2);
         if neighbors.is_empty() {
@@ -185,6 +209,7 @@ pub async fn run_event_loop(
                             match key.code {
                                 KeyCode::Esc => {
                                     app.mode = AppMode::Browsing;
+                                    reload_selected_model_cover(app);
                                 }
                                 KeyCode::Enter => {
                                     app.mode = AppMode::Browsing;
@@ -347,6 +372,7 @@ pub async fn run_event_loop(
                             match key.code {
                                 KeyCode::Esc => {
                                     app.cancel_bookmark_search();
+                                    reload_selected_model_cover(app);
                                 }
                                 KeyCode::Enter => {
                                     app.apply_bookmark_query();
@@ -510,7 +536,8 @@ pub async fn run_event_loop(
                                                 ImageSearchFormSection::Sort => ImageSearchFormSection::Query,
                                                 ImageSearchFormSection::Period => ImageSearchFormSection::Sort,
                                                 ImageSearchFormSection::MediaType => ImageSearchFormSection::Period,
-                                                ImageSearchFormSection::BaseModel => ImageSearchFormSection::MediaType,
+                                                ImageSearchFormSection::Tag => ImageSearchFormSection::MediaType,
+                                                ImageSearchFormSection::BaseModel => ImageSearchFormSection::Tag,
                                                 ImageSearchFormSection::AspectRatio => ImageSearchFormSection::BaseModel,
                                             };
                                     }
@@ -522,7 +549,8 @@ pub async fn run_event_loop(
                                                 ImageSearchFormSection::Query => ImageSearchFormSection::Sort,
                                                 ImageSearchFormSection::Sort => ImageSearchFormSection::Period,
                                                 ImageSearchFormSection::Period => ImageSearchFormSection::MediaType,
-                                                ImageSearchFormSection::MediaType => ImageSearchFormSection::BaseModel,
+                                                ImageSearchFormSection::MediaType => ImageSearchFormSection::Tag,
+                                                ImageSearchFormSection::Tag => ImageSearchFormSection::BaseModel,
                                                 ImageSearchFormSection::BaseModel => ImageSearchFormSection::AspectRatio,
                                                 ImageSearchFormSection::AspectRatio => ImageSearchFormSection::Query,
                                             };
@@ -571,6 +599,7 @@ pub async fn run_event_loop(
                                                         app.image_search_form.aspect_ratio_options.len().saturating_sub(1);
                                                 }
                                             }
+                                            ImageSearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -603,6 +632,7 @@ pub async fn run_event_loop(
                                                     (app.image_search_form.aspect_ratio_cursor + 1)
                                                         % app.image_search_form.aspect_ratio_options.len();
                                             }
+                                            ImageSearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -678,11 +708,15 @@ pub async fn run_event_loop(
                                 KeyCode::Char(c) => {
                                     if app.image_search_form.focused_section == ImageSearchFormSection::Query {
                                         app.image_search_form.query.push(c);
+                                    } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
+                                        app.image_search_form.tag_query.push(c);
                                     }
                                 }
                                 KeyCode::Backspace => {
                                     if app.image_search_form.focused_section == ImageSearchFormSection::Query {
                                         app.image_search_form.query.pop();
+                                    } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
+                                        app.image_search_form.tag_query.pop();
                                     }
                                 }
                                 _ => {}
@@ -855,7 +889,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.settings_form.focused_field < 8 {
+                                    if app.settings_form.focused_field < 9 {
                                         app.settings_form.focused_field += 1;
                                     }
                                 }
@@ -905,6 +939,18 @@ pub async fn run_event_loop(
                                         }
                                     } else if app.settings_form.focused_field == 7 {
                                         match app.settings_form.input_buffer.trim().parse::<u64>() {
+                                            Ok(value) if value > 0 => {
+                                                app.config.image_detail_cache_ttl_minutes = value;
+                                            }
+                                            _ => {
+                                                app.last_error = Some("Image detail cache TTL must be a positive integer".into());
+                                                app.show_status_modal = true;
+                                                app.status = "Invalid image detail cache TTL value".into();
+                                                continue;
+                                            }
+                                        }
+                                    } else if app.settings_form.focused_field == 8 {
+                                        match app.settings_form.input_buffer.trim().parse::<u64>() {
                                             Ok(value) => {
                                                 app.config.image_cache_ttl_minutes = value;
                                             }
@@ -923,7 +969,7 @@ pub async fn run_event_loop(
                                         };
                                         app.config.bookmark_file_path = path.clone();
                                         app.bookmark_file_path = path;
-                                    } else if app.settings_form.focused_field == 8 {
+                                    } else if app.settings_form.focused_field == 9 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -1069,8 +1115,10 @@ pub async fn run_event_loop(
                                     } else if app.settings_form.focused_field == 6 {
                                         app.config.image_search_cache_ttl_minutes.to_string()
                                     } else if app.settings_form.focused_field == 7 {
-                                        app.config.image_cache_ttl_minutes.to_string()
+                                        app.config.image_detail_cache_ttl_minutes.to_string()
                                     } else if app.settings_form.focused_field == 8 {
+                                        app.config.image_cache_ttl_minutes.to_string()
+                                    } else if app.settings_form.focused_field == 9 {
                                         app.config
                                             .download_history_file_path
                                             .as_ref()
@@ -1096,7 +1144,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < 8 { app.settings_form.focused_field += 1; }
+                                    if app.settings_form.focused_field < 9 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -1577,12 +1625,15 @@ pub async fn run_event_loop(
                          app.image_cache.insert(id, protocol);
                          app.image_bytes_cache.insert(id, bytes);
                      }
-                     AppMessage::ModelCoverDecoded(version_id, protocol) => {
-                         app.model_version_image_cache.entry(version_id).or_insert_with(|| vec![protocol]);
+                     AppMessage::ModelCoverDecoded(version_id, protocol, bytes) => {
+                         app.model_version_image_cache.insert(version_id, vec![protocol]);
+                         app.model_version_image_bytes_cache.insert(version_id, vec![bytes]);
                          app.model_version_image_failed.remove(&version_id);
                      }
                      AppMessage::ModelCoversDecoded(version_id, protocols) => {
+                         let (protocols, bytes): (Vec<_>, Vec<_>) = protocols.into_iter().unzip();
                          app.model_version_image_cache.insert(version_id, protocols);
+                         app.model_version_image_bytes_cache.insert(version_id, bytes);
                          app.model_version_image_failed.remove(&version_id);
                      }
                      AppMessage::ModelCoverLoadFailed(version_id) => {
