@@ -13,8 +13,8 @@ use crate::tui::{
 };
 
 use super::{
-    draw_model_sidebar,
     helpers::{centered_rect, help_text_style},
+    models::draw_model_sidebar,
 };
 
 pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
