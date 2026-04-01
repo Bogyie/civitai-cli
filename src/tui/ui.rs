@@ -2027,6 +2027,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         tag_is_configured,
         &fm.tag_query,
         "Comma-separated tags",
+        None,
         sections[4].width.saturating_sub(4) as usize,
         sections[4].height.saturating_sub(3) as usize,
     ))
@@ -2237,6 +2238,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             )
         })
         .collect::<Vec<_>>();
+    let tag_suggestions = app.image_tag_suggestions(sections[4].height.saturating_sub(4) as usize);
 
     let query_box = Paragraph::new(vec![Line::from(vec![
         Span::styled(
@@ -2324,6 +2326,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         !form.tag_query.trim().is_empty(),
         &form.tag_query,
         "Comma-separated tags",
+        Some(tag_suggestions.as_slice()),
         sections[4].width.saturating_sub(4) as usize,
         sections[4].height.saturating_sub(3) as usize,
     ))
@@ -2811,6 +2814,7 @@ fn build_text_filter_box_lines(
     configured: bool,
     value: &str,
     placeholder: &str,
+    suggestions: Option<&[String]>,
     width: usize,
     height: usize,
 ) -> Vec<Line<'static>> {
@@ -2841,12 +2845,14 @@ fn build_text_filter_box_lines(
     } else {
         display_value.clone()
     };
+
+    let suggestion_lines = suggestions
+        .filter(|items| focused && !items.is_empty())
+        .map(|items| items.len().min(height.saturating_sub(3)))
+        .unwrap_or(0);
+    let value_height = height.saturating_sub(1 + suggestion_lines).max(1);
     lines.extend(style_lines(
-        wrap_text_lines(
-            &rendered_value,
-            width.max(1),
-            height.saturating_sub(1).max(1),
-        ),
+        wrap_text_lines(&rendered_value, width.max(1), value_height),
         if !configured && !focused {
             help_text_style()
         } else if focused {
@@ -2857,7 +2863,45 @@ fn build_text_filter_box_lines(
             inactive_box_style(false)
         },
     ));
+
+    if let Some(items) = suggestions.filter(|items| focused && !items.is_empty()) {
+        let hint = if value.trim().is_empty() {
+            "Right: insert suggestion"
+        } else {
+            "Right: complete first match"
+        };
+        lines.push(Line::from(Span::styled(hint, help_text_style())));
+        lines.extend(build_autocomplete_lines(
+            items,
+            width.max(1),
+            suggestion_lines.max(1),
+        ));
+    }
     lines
+}
+
+fn build_autocomplete_lines(
+    suggestions: &[String],
+    max_width: usize,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    if suggestions.is_empty() || max_width == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+
+    let items = suggestions
+        .iter()
+        .enumerate()
+        .map(|(idx, tag)| {
+            let prefix = if idx == 0 { "> " } else { "  " };
+            format!("{prefix}{tag}")
+        })
+        .collect::<Vec<_>>();
+
+    style_lines(
+        wrap_text_lines(&items.join(", "), max_width, max_lines),
+        Style::default().fg(Color::Yellow),
+    )
 }
 
 fn build_image_filter_box_lines(

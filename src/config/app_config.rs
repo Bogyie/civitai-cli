@@ -94,6 +94,10 @@ impl AppConfig {
         Self::config_dir().map(|config_dir| config_dir.join("image_bookmarks.json"))
     }
 
+    pub fn image_tag_catalog_path(&self) -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("image_tags.json"))
+    }
+
     pub fn model_cover_cache_path(&self) -> Option<PathBuf> {
         self.model_cover_cache_path
             .clone()

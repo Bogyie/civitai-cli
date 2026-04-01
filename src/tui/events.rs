@@ -649,7 +649,12 @@ pub async fn run_event_loop(
                                                     (app.image_search_form.aspect_ratio_cursor + 1)
                                                         % app.image_search_form.aspect_ratio_options.len();
                                             }
-                                            ImageSearchFormSection::Tag => {}
+                                            ImageSearchFormSection::Tag => {
+                                                if app.accept_image_tag_suggestion() {
+                                                    app.status =
+                                                        "Accepted image tag suggestion.".into();
+                                                }
+                                            }
                                             _ => {}
                                         }
                                     }
@@ -1608,6 +1613,7 @@ pub async fn run_event_loop(
              Some(msg) = rx.recv() => {
                  match msg {
                     AppMessage::ImagesLoaded(new_images, append, next_page) => {
+                        app.merge_image_tag_catalog_from_hits(&new_images);
                         let loaded_count = new_images.len();
                         if append {
                             let before = app.images.len();

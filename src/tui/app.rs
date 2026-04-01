@@ -7,6 +7,7 @@ use crate::tui::model::{
     default_base_model, model_metrics, model_name, model_versions, preview_image_url,
     selected_version,
 };
+use crate::tui::image::image_tags;
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
@@ -402,6 +403,7 @@ pub struct App {
     pub model_search_next_page: Option<u32>,
     pub bookmarks: Vec<Model>,
     pub image_bookmarks: Vec<ImageItem>,
+    pub image_tag_catalog: Vec<String>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
     pub bookmark_list_state: ListState,
@@ -463,6 +465,7 @@ impl App {
             .clone()
             .or_else(crate::config::AppConfig::image_bookmark_path);
         let image_bookmarks = load_image_bookmarks(image_bookmark_file_path.as_deref());
+        let image_tag_catalog = load_image_tag_catalog(config.image_tag_catalog_path().as_deref());
         let download_history_file_path = config
             .download_history_file_path
             .clone()
@@ -515,6 +518,7 @@ impl App {
             model_search_next_page: None,
             bookmarks,
             image_bookmarks,
+            image_tag_catalog,
             show_model_details: false,
             model_list_state,
             bookmark_list_state,
@@ -715,6 +719,112 @@ impl App {
         if !self.images.is_empty() && self.selected_index >= self.images.len() {
             self.selected_index = self.images.len() - 1;
         }
+    }
+
+    pub fn merge_image_tag_catalog_from_hits(&mut self, images: &[ImageItem]) {
+        let mut existing = self
+            .image_tag_catalog
+            .iter()
+            .map(|tag| tag.to_lowercase())
+            .collect::<HashSet<_>>();
+        let mut changed = false;
+
+        for tag in images
+            .iter()
+            .flat_map(image_tags)
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+        {
+            if existing.insert(tag.to_lowercase()) {
+                self.image_tag_catalog.push(tag);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.image_tag_catalog
+                .sort_by_key(|tag| tag.to_lowercase());
+            self.persist_image_tag_catalog();
+        }
+    }
+
+    pub fn image_tag_suggestions(&self, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let query = self.image_search_form.tag_query.as_str();
+        let prefix = query
+            .rsplit(',')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_lowercase();
+        let selected = query
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        let mut suggestions = self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| prefix.is_empty() || tag.to_lowercase().starts_with(&prefix))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if suggestions.len() >= limit || prefix.is_empty() {
+            return suggestions;
+        }
+
+        for tag in self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| tag.to_lowercase().contains(&prefix))
+        {
+            if suggestions.len() >= limit {
+                break;
+            }
+            if !suggestions.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
+                suggestions.push(tag.clone());
+            }
+        }
+
+        suggestions
+    }
+
+    pub fn accept_image_tag_suggestion(&mut self) -> bool {
+        let Some(suggestion) = self.image_tag_suggestions(1).into_iter().next() else {
+            return false;
+        };
+
+        let mut tags = self
+            .image_search_form
+            .tag_query
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+
+        if self.image_search_form.tag_query.trim().is_empty()
+            || self.image_search_form.tag_query.trim_end().ends_with(',')
+        {
+            tags.push(suggestion);
+        } else if let Some(last) = tags.last_mut() {
+            *last = suggestion;
+        } else {
+            tags.push(suggestion);
+        }
+
+        let mut seen = HashSet::new();
+        tags.retain(|tag| seen.insert(tag.to_lowercase()));
+        self.image_search_form.tag_query = tags.join(", ");
+        true
     }
 
     pub fn next_model_search_options_if_needed(
@@ -1633,6 +1743,18 @@ impl App {
         }
     }
 
+    pub fn persist_image_tag_catalog(&mut self) {
+        let Some(path) = self.config.image_tag_catalog_path() else {
+            return;
+        };
+
+        if let Err(err) = save_image_tag_catalog_to_file(path.as_path(), &self.image_tag_catalog) {
+            self.last_error = Some(err.to_string());
+        } else {
+            self.last_error = None;
+        }
+    }
+
     pub fn persist_download_history(&mut self) {
         if let Some(path) = &self.download_history_file_path {
             if let Err(err) = save_download_history_to_file(path, &self.download_history) {
@@ -1804,6 +1926,26 @@ fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {
     images
 }
 
+fn load_image_tag_catalog(path: Option<&Path>) -> Vec<String> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut tags: Vec<String> = serde_json::from_str(&content).unwrap_or_default();
+    let mut seen = HashSet::new();
+    tags.retain(|tag| {
+        let normalized = tag.trim().to_lowercase();
+        !normalized.is_empty() && seen.insert(normalized)
+    });
+    tags.sort_by_key(|tag| tag.to_lowercase());
+    tags
+}
+
 fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -1826,6 +1968,25 @@ fn save_image_bookmarks_to_file(path: &Path, bookmarks: &[ImageItem]) -> Result<
     let mut normalized = bookmarks.to_vec();
     let mut seen = HashSet::new();
     normalized.retain(|image| seen.insert(image.id));
+
+    let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn save_image_tag_catalog_to_file(path: &Path, tags: &[String]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let mut normalized = tags
+        .iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    normalized.retain(|tag| seen.insert(tag.to_lowercase()));
+    normalized.sort_by_key(|tag| tag.to_lowercase());
 
     let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;
