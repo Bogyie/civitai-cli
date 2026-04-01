@@ -822,6 +822,7 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
     let offset = page_index.saturating_mul(limit);
 
     let mut filters = Vec::new();
+    push_equals_filters(&mut filters, "type", &state.media_types);
     push_equals_filters(&mut filters, "tagNames", &state.tags);
     push_equals_filters(&mut filters, "toolNames", &state.tools);
     push_equals_filters(&mut filters, "techniqueNames", &state.techniques);

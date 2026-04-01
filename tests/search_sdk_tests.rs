@@ -24,7 +24,7 @@ mod fixtures {
             hide_meta: Some(false),
             user: None,
             stats: None,
-            tag_names: vec!["pg".to_string()],
+            tag_names: vec![Some("pg".to_string())],
             model_version_ids: vec![101, 202],
             nsfw_level: None,
             browsing_level: None,
@@ -75,6 +75,7 @@ mod fixtures {
         ImageSearchState {
             query: Some("cute cat".to_string()),
             sort_by: ImageSearchSortBy::MostReactions,
+            media_types: vec!["image".to_string(), "video".to_string()],
             tags: vec!["pg".to_string(), "anime".to_string()],
             users: vec!["alice".to_string()],
             tools: vec!["lora".to_string()],
@@ -132,6 +133,7 @@ mod image_state_tests {
 
         assert_eq!(state.sort_by, ImageSearchSortBy::Relevance);
         assert_eq!(state.query, None);
+        assert!(state.media_types.is_empty());
         assert_eq!(state.tags, vec!["pg".to_string()]);
     }
 
@@ -150,9 +152,10 @@ mod image_state_tests {
 
     #[test]
     fn parses_image_multi_value_query_parameters() {
-        let input = "/search/images?tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
+        let input = "/search/images?type=image,video&type=audio&tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
         let state = ImageSearchState::from_web_url(input).unwrap();
 
+        assert_eq!(state.media_types, vec!["image", "video", "audio"]);
         assert_eq!(state.tags, vec!["a", "b", "c"]);
         assert_eq!(state.users, vec!["one", "two"]);
         assert_eq!(state.sort_by, ImageSearchSortBy::Newest);
@@ -588,6 +591,100 @@ mod live_tests {
         assert!(!items.is_empty());
         assert_eq!(typed.hits.len(), items.len());
         dump_items("item", &items);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_live_civitai_image_only_web_search_sample(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let sdk = WebSearchClient::new()?;
+        let state = ImageSearchState {
+            query: Some("hello".to_string()),
+            media_types: vec!["image".to_string()],
+            limit: Some(5),
+            ..Default::default()
+        };
+        let typed = sdk.search_images(&state).await?;
+
+        println!(
+            "image_only_response_summary = {}",
+            json!({
+                "hits": typed.hits.len(),
+                "estimatedTotalHits": typed.estimated_total_hits,
+                "processingTimeMs": typed.processing_time_ms,
+                "limit": typed.limit,
+                "offset": typed.offset,
+            })
+        );
+
+        for (idx, hit) in typed.hits.iter().take(5).enumerate() {
+            println!(
+                "image_only_item[{idx}] id={}, type={}, page_url={}",
+                hit.id,
+                hit.r#type.as_deref().unwrap_or("N/A"),
+                hit.image_page_url()
+            );
+        }
+
+        assert!(!typed.hits.is_empty());
+        assert!(typed
+            .hits
+            .iter()
+            .all(|hit| matches!(hit.r#type.as_deref(), Some("image"))));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn fetch_live_civitai_video_only_web_search_sample(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let sdk = WebSearchClient::new()?;
+        let candidate_queries = ["video", "animation", "wan"];
+        let mut typed = None;
+
+        for query in candidate_queries {
+            let response = sdk
+                .search_images(&ImageSearchState {
+                    query: Some(query.to_string()),
+                    media_types: vec!["video".to_string()],
+                    limit: Some(5),
+                    ..Default::default()
+                })
+                .await?;
+            if !response.hits.is_empty() {
+                typed = Some(response);
+                break;
+            }
+        }
+
+        let typed = typed.ok_or("no video-only results found from live search")?;
+
+        println!(
+            "video_only_response_summary = {}",
+            json!({
+                "hits": typed.hits.len(),
+                "estimatedTotalHits": typed.estimated_total_hits,
+                "processingTimeMs": typed.processing_time_ms,
+                "limit": typed.limit,
+                "offset": typed.offset,
+            })
+        );
+
+        for (idx, hit) in typed.hits.iter().take(5).enumerate() {
+            println!(
+                "video_only_item[{idx}] id={}, type={}, page_url={}",
+                hit.id,
+                hit.r#type.as_deref().unwrap_or("N/A"),
+                hit.image_page_url()
+            );
+        }
+
+        assert!(!typed.hits.is_empty());
+        assert!(typed
+            .hits
+            .iter()
+            .all(|hit| matches!(hit.r#type.as_deref(), Some("video"))));
         Ok(())
     }
 

@@ -8,7 +8,7 @@ use super::constants::{
     DEFAULT_IMAGE_SORTS,
 };
 use super::shared::{
-    append_csv_pair, normalize_search_url, parse_query_map, split_multi,
+    append_csv_pair, normalize_search_url, parse_query_map, split_multi, split_multi_keys,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -75,6 +75,7 @@ impl ImageSearchSortBy {
 pub struct ImageSearchState {
     pub query: Option<String>,
     pub sort_by: ImageSearchSortBy,
+    pub media_types: Vec<String>,
     pub tags: Vec<String>,
     pub tools: Vec<String>,
     pub techniques: Vec<String>,
@@ -106,6 +107,7 @@ impl ImageSearchState {
             pairs.push(("imageId".to_string(), image_id.to_string()));
         }
 
+        append_csv_pair(&mut pairs, "type", &self.media_types);
         append_csv_pair(&mut pairs, "tags", &self.tags);
         append_csv_pair(&mut pairs, "tools", &self.tools);
         append_csv_pair(&mut pairs, "techniques", &self.techniques);
@@ -151,6 +153,7 @@ impl ImageSearchState {
             query.sort_by = ImageSearchSortBy::from_query_value(v);
         }
 
+        query.media_types = split_multi_keys(&map, &["type", "types"]);
         query.tags = split_multi(map.get("tags"));
         query.tools = split_multi(map.get("tools"));
         query.techniques = split_multi(map.get("techniques"));
@@ -206,6 +209,8 @@ fn is_known_image_key(key: &str) -> bool {
         key,
         "query"
             | "sortBy"
+            | "type"
+            | "types"
             | "tags"
             | "tools"
             | "techniques"
@@ -247,7 +252,7 @@ pub struct SearchImageHit {
     #[serde(default)]
     pub stats: Option<Value>,
     #[serde(default)]
-    pub tag_names: Vec<String>,
+    pub tag_names: Vec<Option<String>>,
     #[serde(default)]
     pub model_version_ids: Vec<u64>,
     #[serde(default)]

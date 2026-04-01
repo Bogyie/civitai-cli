@@ -1,8 +1,10 @@
 use civitai_cli::sdk::{
     DownloadClient, DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec,
-    ModelDownloadAuth, SearchImageHit, SearchModelHit,
+    ImageSearchState, ModelDownloadAuth, ModelSearchState, SearchImageHit, SearchModelHit,
+    WebSearchClient,
 };
 use civitai_cli::sdk::{DownloadDestination, SearchSdkConfig};
+use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -333,5 +335,131 @@ async fn downloads_with_query_and_bearer_auth() -> Result<(), Box<dyn std::error
         )
         .await?;
     assert_eq!(tokio::fs::read(&bearer_target).await?, b"auth bearer ok");
+    Ok(())
+}
+
+async fn download_first_chunk_to_temp(
+    client: &DownloadClient,
+    spec: &DownloadSpec,
+    name: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let response = client
+        .build_download_request(&spec.url, spec.auth.as_ref(), Some(0))?
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let mut stream = response.bytes_stream();
+    let first_chunk = stream
+        .next()
+        .await
+        .ok_or("empty download response")??;
+
+    let target = temp_path(name);
+    tokio::fs::write(&target, &first_chunk).await?;
+    assert!(!first_chunk.is_empty());
+    Ok(target)
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetch_live_civitai_image_download_sample() -> Result<(), Box<dyn std::error::Error>> {
+    let web = WebSearchClient::new()?;
+    let download = DownloadClient::new()?;
+    let response = web
+        .search_images(&ImageSearchState {
+            query: Some("landscape".to_string()),
+            tags: vec!["pg".to_string()],
+            limit: Some(10),
+            ..Default::default()
+        })
+        .await?;
+
+    let hit = response
+        .hits
+        .iter()
+        .find(|hit| !matches!(hit.r#type.as_deref(), Some("video")))
+        .ok_or("no image hit found")?;
+    let spec = download
+        .build_image_download_spec(hit)
+        .ok_or("failed to build image download spec")?;
+    let path = download_first_chunk_to_temp(&download, &spec, "live-image.bin").await?;
+    let size = tokio::fs::metadata(&path).await?.len();
+
+    println!("live_image_download_url={}", spec.url);
+    println!("live_image_download_path={}", path.display());
+    println!("live_image_download_bytes={size}");
+
+    assert!(size > 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetch_live_civitai_video_download_sample() -> Result<(), Box<dyn std::error::Error>> {
+    let web = WebSearchClient::new()?;
+    let download = DownloadClient::new()?;
+    let candidate_queries = ["video", "animation", "wan"];
+    let mut video_hit = None;
+
+    for query in candidate_queries {
+        let response = web
+            .search_images(&ImageSearchState {
+                query: Some(query.to_string()),
+                limit: Some(20),
+                ..Default::default()
+            })
+            .await?;
+        if let Some(hit) = response
+            .hits
+            .into_iter()
+            .find(|hit| matches!(hit.r#type.as_deref(), Some("video")))
+        {
+            video_hit = Some(hit);
+            break;
+        }
+    }
+
+    let hit = video_hit.ok_or("no video hit found from live search")?;
+    let spec = download
+        .build_video_download_spec(&hit)
+        .ok_or("failed to build video download spec")?;
+    let path = download_first_chunk_to_temp(&download, &spec, "live-video.bin").await?;
+    let size = tokio::fs::metadata(&path).await?.len();
+
+    println!("live_video_download_url={}", spec.url);
+    println!("live_video_download_path={}", path.display());
+    println!("live_video_download_bytes={size}");
+
+    assert!(size > 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetch_live_civitai_model_download_sample() -> Result<(), Box<dyn std::error::Error>> {
+    let web = WebSearchClient::new()?;
+    let download = DownloadClient::new()?;
+    let response = web
+        .search_models(&ModelSearchState {
+            query: Some("hello".to_string()),
+            tags: vec!["anime".to_string()],
+            limit: Some(10),
+            ..Default::default()
+        })
+        .await?;
+
+    let hit = response.hits.first().ok_or("no model hit found")?;
+    let spec = download
+        .build_model_download_spec(hit, None)
+        .ok_or("failed to build model download spec")?;
+    let path = download_first_chunk_to_temp(&download, &spec, "live-model.bin").await?;
+    let size = tokio::fs::metadata(&path).await?.len();
+
+    println!("live_model_download_url={}", spec.url);
+    println!("live_model_download_path={}", path.display());
+    println!("live_model_download_bytes={size}");
+
+    assert!(size > 0);
     Ok(())
 }
