@@ -244,7 +244,8 @@ pub async fn run_event_loop(
                                             SearchFormSection::Query => SearchFormSection::Sort,
                                             SearchFormSection::Sort => SearchFormSection::Period,
                                             SearchFormSection::Period => SearchFormSection::Type,
-                                            SearchFormSection::Type => SearchFormSection::BaseModel,
+                                            SearchFormSection::Type => SearchFormSection::Tag,
+                                            SearchFormSection::Tag => SearchFormSection::BaseModel,
                                             SearchFormSection::BaseModel => SearchFormSection::Query,
                                         };
                                     }
@@ -256,7 +257,8 @@ pub async fn run_event_loop(
                                             SearchFormSection::Sort => SearchFormSection::Query,
                                             SearchFormSection::Period => SearchFormSection::Sort,
                                             SearchFormSection::Type => SearchFormSection::Period,
-                                            SearchFormSection::BaseModel => SearchFormSection::Type,
+                                            SearchFormSection::Tag => SearchFormSection::Type,
+                                            SearchFormSection::BaseModel => SearchFormSection::Tag,
                                         };
                                     }
                                 }
@@ -266,7 +268,8 @@ pub async fn run_event_loop(
                                             SearchFormSection::Query => SearchFormSection::Sort,
                                             SearchFormSection::Sort => SearchFormSection::Period,
                                             SearchFormSection::Period => SearchFormSection::Type,
-                                            SearchFormSection::Type => SearchFormSection::BaseModel,
+                                            SearchFormSection::Type => SearchFormSection::Tag,
+                                            SearchFormSection::Tag => SearchFormSection::BaseModel,
                                             SearchFormSection::BaseModel => SearchFormSection::Query,
                                         };
                                     }
@@ -302,6 +305,7 @@ pub async fn run_event_loop(
                                                     app.search_form.base_cursor = app.search_form.base_options.len().saturating_sub(1);
                                                 }
                                             }
+                                            SearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -325,6 +329,7 @@ pub async fn run_event_loop(
                                                 app.search_form.base_cursor =
                                                     (app.search_form.base_cursor + 1) % app.search_form.base_options.len();
                                             }
+                                            SearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -356,11 +361,15 @@ pub async fn run_event_loop(
                                 KeyCode::Char(c) => {
                                     if app.search_form.focused_section == SearchFormSection::Query {
                                         app.search_form.query.push(c);
+                                    } else if app.search_form.focused_section == SearchFormSection::Tag {
+                                        app.search_form.tag_query.push(c);
                                     }
                                 }
                                 KeyCode::Backspace => {
                                     if app.search_form.focused_section == SearchFormSection::Query {
                                         app.search_form.query.pop();
+                                    } else if app.search_form.focused_section == SearchFormSection::Tag {
+                                        app.search_form.tag_query.pop();
                                     }
                                 }
                                 _ => {}
@@ -385,7 +394,8 @@ pub async fn run_event_loop(
                                                 SearchFormSection::Sort => SearchFormSection::Query,
                                                 SearchFormSection::Period => SearchFormSection::Sort,
                                                 SearchFormSection::Type => SearchFormSection::Period,
-                                                SearchFormSection::BaseModel => SearchFormSection::Type,
+                                                SearchFormSection::Tag => SearchFormSection::Type,
+                                                SearchFormSection::BaseModel => SearchFormSection::Tag,
                                             };
                                     }
                                 }
@@ -396,7 +406,8 @@ pub async fn run_event_loop(
                                                 SearchFormSection::Query => SearchFormSection::Sort,
                                                 SearchFormSection::Sort => SearchFormSection::Period,
                                                 SearchFormSection::Period => SearchFormSection::Type,
-                                                SearchFormSection::Type => SearchFormSection::BaseModel,
+                                                SearchFormSection::Type => SearchFormSection::Tag,
+                                                SearchFormSection::Tag => SearchFormSection::BaseModel,
                                                 SearchFormSection::BaseModel => SearchFormSection::Query,
                                             };
                                     }
@@ -436,6 +447,7 @@ pub async fn run_event_loop(
                                                         app.bookmark_search_form_draft.base_options.len().saturating_sub(1);
                                                 }
                                             }
+                                            SearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -463,6 +475,7 @@ pub async fn run_event_loop(
                                                     (app.bookmark_search_form_draft.base_cursor + 1)
                                                         % app.bookmark_search_form_draft.base_options.len();
                                             }
+                                            SearchFormSection::Tag => {}
                                             _ => {}
                                         }
                                     }
@@ -510,11 +523,15 @@ pub async fn run_event_loop(
                                 KeyCode::Char(c) => {
                                     if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
                                         app.bookmark_search_form_draft.query.push(c);
+                                    } else if app.bookmark_search_form_draft.focused_section == SearchFormSection::Tag {
+                                        app.bookmark_search_form_draft.tag_query.push(c);
                                     }
                                 }
                                 KeyCode::Backspace => {
                                     if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
                                         app.bookmark_search_form_draft.query.pop();
+                                    } else if app.bookmark_search_form_draft.focused_section == SearchFormSection::Tag {
+                                        app.bookmark_search_form_draft.tag_query.pop();
                                     }
                                 }
                                 _ => {}

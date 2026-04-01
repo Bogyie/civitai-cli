@@ -1151,10 +1151,16 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let selected_tags = if app.search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.search_form.tag_query.trim().to_string()
+    };
     let summary = format!(
-        "🔍 Query: \"{}\" | Type: {} | Sort: {} | Base: {} | Period: {}",
+        "🔍 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Period: {}",
         model_query,
         selected_types,
+        selected_tags,
         app.search_form
             .sort_options
             .get(app.search_form.selected_sort)
@@ -1205,10 +1211,16 @@ fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let selected_tags = if app.bookmark_search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form.tag_query.trim().to_string()
+    };
     let summary = format!(
-        "🔖 Query: \"{}\" | Type: {} | Sort: {} | Base: {} | Period: {} | Total: {}",
+        "🔖 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Period: {} | Total: {}",
         query,
         selected_types,
+        selected_tags,
         app.bookmark_search_form
             .sort_options
             .get(app.bookmark_search_form.selected_sort)
@@ -1843,12 +1855,13 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
             Line::from(""),
             Line::from(Span::styled(
                 format!(
-                    " Current: sort={} | types={} | bases={} | period={} ",
+                    " Current: sort={} | types={} | tags={} | bases={} | period={} ",
                     fm.sort_options
                         .get(fm.selected_sort)
                         .map(|sort| sort.label().to_string())
                         .unwrap_or_else(|| "Relevance".to_string()),
                     fm.selected_types.len(),
+                    if fm.tag_query.trim().is_empty() { 0 } else { fm.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
                     fm.selected_base_models.len(),
                     fm.periods
                         .get(fm.selected_period)
@@ -1863,50 +1876,36 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
             )),
         ];
         let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-        let area = centered_rect(60, 24, f.area());
+        let area = centered_rect(54, 22, f.area());
         f.render_widget(Clear, area);
         f.render_widget(p, area);
         return;
     }
 
-    let area = centered_rect(84, 82, f.area());
+    let area = centered_rect(72, 68, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {builder_title} "));
     f.render_widget(&block, area);
     let inner = block.inner(area);
+    let section_constraints = build_model_modal_constraints(fm.focused_section, inner.height);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Min(10),
-            Constraint::Length(2),
-        ])
+        .constraints(section_constraints)
         .split(inner);
 
-    let current_type = fm
-        .type_options
-        .get(fm.type_cursor)
-        .map(|item| item.label().to_string())
-        .unwrap_or_else(|| "None".to_string());
-    let current_base = fm
-        .base_options
-        .get(fm.base_cursor)
-        .map(|item| item.label().to_string())
-        .unwrap_or_else(|| "None".to_string());
     let query_focused = fm.focused_section == SearchFormSection::Query;
     let sort_focused = fm.focused_section == SearchFormSection::Sort;
     let period_focused = fm.focused_section == SearchFormSection::Period;
     let type_focused = fm.focused_section == SearchFormSection::Type;
+    let tag_focused = fm.focused_section == SearchFormSection::Tag;
     let base_focused = fm.focused_section == SearchFormSection::BaseModel;
     let query_is_configured = !fm.query.trim().is_empty();
     let sort_is_configured = true;
     let period_is_configured = true;
     let type_is_configured = !fm.selected_types.is_empty();
+    let tag_is_configured = !fm.tag_query.trim().is_empty();
     let base_is_configured = !fm.selected_base_models.is_empty();
     let sort_items = fm
         .sort_options
@@ -1980,11 +1979,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
 
     let mut sort_lines = vec![Line::from(Span::styled(
         "Browse with Left/Right",
-        if sort_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(sort_is_configured)
-        },
+        help_text_style(),
     ))];
     sort_lines.extend(build_wrapped_option_lines(
         &sort_items,
@@ -1999,11 +1994,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
 
     let mut period_lines = vec![Line::from(Span::styled(
         "Browse with Left/Right",
-        if period_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(period_is_configured)
-        },
+        help_text_style(),
     ))];
     period_lines.extend(build_wrapped_option_lines(
         &period_items,
@@ -2016,179 +2007,59 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         .wrap(Wrap { trim: true });
     f.render_widget(period_box, sections[2]);
 
-    let type_header = format!(
-        "{} Current: {} {}",
-        if type_focused { ">" } else { " " },
-        current_type,
-        if fm
-            .type_options
-            .get(fm.type_cursor)
-            .is_some_and(|item| fm.selected_types.contains(item))
-        {
-            "[x]"
-        } else {
-            "[ ]"
-        }
-    );
-    let mut type_lines = vec![Line::from(Span::styled(
-        "Browse with Left/Right, toggle with Space",
-        if type_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(type_is_configured)
-        },
-    ))];
-    type_lines.extend(build_wrapped_option_lines(
-        &type_items,
-        sections[3].width.saturating_sub(4) as usize,
-        3,
+    let type_widget = Paragraph::new(build_image_filter_box_lines(
+        "Type",
         type_focused,
-    ));
-    type_lines.push(Line::from(""));
-    type_lines.push(Line::from(Span::styled(
-        "Selected",
-        if type_focused {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            inactive_box_style(type_is_configured)
-        },
-    )));
-    type_lines.extend(if fm.selected_types.is_empty() {
-        vec![Line::from(Span::styled(
-            "All",
-            if type_focused {
-                Style::default().fg(Color::White)
-            } else {
-                inactive_box_style(type_is_configured)
-            },
-        ))]
-    } else {
-        let selected = fm
-            .selected_types
-            .iter()
-            .map(|item| item.label().to_string())
-            .collect::<Vec<_>>();
-        style_lines(
-            wrap_joined_tags(
-                &selected,
-                sections[3].width.saturating_sub(4) as usize,
-                sections[3].height.saturating_sub(7) as usize,
-            ),
-            if type_focused {
-                Style::default().fg(Color::White)
-            } else {
-                inactive_box_style(type_is_configured)
-            },
-        )
-    });
-    let mut type_block_lines = vec![Line::from(Span::styled(
-        type_header,
-        if type_focused {
-            Style::default().fg(Color::Yellow)
-        } else if type_is_configured {
-            inactive_box_style(true)
-        } else {
-            inactive_box_style(false)
-        },
-    ))];
-    type_block_lines.extend(type_lines);
-    let type_widget = Paragraph::new(type_block_lines)
+        type_is_configured,
+        &type_items,
+        &fm.selected_types.iter().map(|item| item.label().to_string()).collect::<Vec<_>>(),
+        false,
+        sections[3].width.saturating_sub(4) as usize,
+        sections[3].height.saturating_sub(3) as usize,
+    ))
         .block(styled_search_block(" Type ", type_focused, type_is_configured))
         .wrap(Wrap { trim: true });
     f.render_widget(type_widget, sections[3]);
 
-    let base_header = format!(
-        "{} Current: {} {}",
-        if base_focused { ">" } else { " " },
-        current_base,
-        if fm
-            .base_options
-            .get(fm.base_cursor)
-            .is_some_and(|item| fm.selected_base_models.contains(item))
-        {
-            "[x]"
-        } else {
-            "[ ]"
-        }
-    );
-    let mut base_lines = vec![Line::from(Span::styled(
-        "Browse with Left/Right, toggle with Space",
-        if base_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(base_is_configured)
-        },
-    ))];
-    base_lines.extend(build_wrapped_option_lines(
-        &base_items,
+    let tag_widget = Paragraph::new(build_text_filter_box_lines(
+        "Tag",
+        tag_focused,
+        tag_is_configured,
+        &fm.tag_query,
+        "Comma-separated tags",
         sections[4].width.saturating_sub(4) as usize,
-        4,
+        sections[4].height.saturating_sub(3) as usize,
+    ))
+    .block(styled_search_block(" Tags ", tag_focused, tag_is_configured))
+    .wrap(Wrap { trim: true });
+    f.render_widget(tag_widget, sections[4]);
+
+    let base_widget = Paragraph::new(build_image_filter_box_lines(
+        "Base Model",
         base_focused,
-    ));
-    base_lines.push(Line::from(""));
-    base_lines.push(Line::from(Span::styled(
-        "Selected",
-        if base_focused {
-            Style::default().fg(Color::DarkGray)
-        } else {
-            inactive_box_style(base_is_configured)
-        },
-    )));
-    base_lines.extend(if fm.selected_base_models.is_empty() {
-        vec![Line::from(Span::styled(
-            "All",
-            if base_focused {
-                Style::default().fg(Color::White)
-            } else {
-                inactive_box_style(base_is_configured)
-            },
-        ))]
-    } else {
-        let selected = fm
+        base_is_configured,
+        &base_items,
+        &fm
             .selected_base_models
             .iter()
             .map(|item| item.label().to_string())
-            .collect::<Vec<_>>();
-        style_lines(
-            wrap_joined_tags(
-                &selected,
-                sections[4].width.saturating_sub(4) as usize,
-                sections[4].height.saturating_sub(8) as usize,
-            ),
-            if base_focused {
-                Style::default().fg(Color::White)
-            } else {
-                inactive_box_style(base_is_configured)
-            },
-        )
-    });
-    let mut base_block_lines = vec![Line::from(Span::styled(
-        base_header,
-        if base_focused {
-            Style::default().fg(Color::Yellow)
-        } else if base_is_configured {
-            inactive_box_style(true)
-        } else {
-            inactive_box_style(false)
-        },
-    ))];
-    base_block_lines.extend(base_lines);
-    let base_widget = Paragraph::new(base_block_lines)
+            .collect::<Vec<_>>(),
+        false,
+        sections[5].width.saturating_sub(4) as usize,
+        sections[5].height.saturating_sub(3) as usize,
+    ))
         .block(styled_search_block(" Base Model ", base_focused, base_is_configured))
         .wrap(Wrap { trim: true });
-    f.render_widget(base_widget, sections[4]);
+    f.render_widget(base_widget, sections[5]);
 
-    let help = Paragraph::new(" [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Enter] Apply | [Esc] Cancel ")
+    let help = Paragraph::new(" [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ")
         .alignment(Alignment::Left)
         .wrap(Wrap { trim: true });
-    f.render_widget(help, sections[5]);
+    f.render_widget(help, sections[6]);
 }
 
 fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Image Bookmark Search ");
-
+    let visible_count = app.visible_image_bookmarks().len();
     let lines = vec![
         Line::from(vec![
             Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
@@ -2196,13 +2067,18 @@ fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "[Enter] Apply | [Esc] Cancel | [Type] Query",
+            format!(" Current: total={} ", visible_count),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            " [Type] Query | [Enter] Apply | [Esc] Cancel ",
             Style::default().fg(Color::DarkGray),
         )),
     ];
-
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    let area = centered_rect(40, 25, f.area());
+    let p = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(" Image Bookmark Search "))
+        .wrap(Wrap { trim: true });
+    let area = centered_rect(60, 24, f.area());
     f.render_widget(Clear, area);
     f.render_widget(p, area);
 }
@@ -2386,11 +2262,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     let mut sort_lines = vec![Line::from(Span::styled(
         "Browse with Left/Right",
-        if sort_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(true)
-        },
+        help_text_style(),
     ))];
     sort_lines.extend(build_wrapped_option_lines(
         &sort_items,
@@ -2407,11 +2279,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     let mut period_lines = vec![Line::from(Span::styled(
         "Browse with Left/Right",
-        if period_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            inactive_box_style(true)
-        },
+        help_text_style(),
     ))];
     period_lines.extend(build_wrapped_option_lines(
         &period_items,
@@ -2717,6 +2585,12 @@ fn inactive_box_style(is_configured: bool) -> Style {
     }
 }
 
+fn help_text_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM)
+}
+
 fn inactive_box_border_style(is_configured: bool) -> Style {
     if is_configured {
         Style::default().fg(Color::Yellow)
@@ -2901,6 +2775,36 @@ fn build_image_modal_constraints(
     constraints
 }
 
+fn build_model_modal_constraints(
+    focused: SearchFormSection,
+    total_height: u16,
+) -> Vec<Constraint> {
+    let help_height = 2u16;
+    let collapsed = [3u16, 3, 3, 3, 3, 3];
+    let focused_index = match focused {
+        SearchFormSection::Query => 0,
+        SearchFormSection::Sort => 1,
+        SearchFormSection::Period => 2,
+        SearchFormSection::Type => 3,
+        SearchFormSection::Tag => 4,
+        SearchFormSection::BaseModel => 5,
+    };
+    let collapsed_total = collapsed.iter().sum::<u16>() + help_height;
+    let extra = total_height.saturating_sub(collapsed_total);
+
+    let mut constraints = Vec::with_capacity(7);
+    for (idx, base) in collapsed.into_iter().enumerate() {
+        let height = if idx == focused_index {
+            base.saturating_add(extra)
+        } else {
+            base
+        };
+        constraints.push(Constraint::Length(height));
+    }
+    constraints.push(Constraint::Length(help_height));
+    constraints
+}
+
 fn build_text_filter_box_lines(
     label: &str,
     focused: bool,
@@ -2943,7 +2847,9 @@ fn build_text_filter_box_lines(
             width.max(1),
             height.saturating_sub(1).max(1),
         ),
-        if focused {
+        if !configured && !focused {
+            help_text_style()
+        } else if focused {
             Style::default().fg(Color::White)
         } else if configured {
             Style::default().fg(Color::Yellow)
@@ -2987,13 +2893,7 @@ fn build_image_filter_box_lines(
     ))];
     lines.push(Line::from(Span::styled(
         format!("Browse {} with Left/Right, toggle with Space", label),
-        if focused {
-            Style::default().fg(Color::Yellow)
-        } else if configured {
-            inactive_box_style(true)
-        } else {
-            inactive_box_style(false)
-        },
+        help_text_style(),
     )));
     lines.extend(build_wrapped_option_lines(items, width, 2, focused));
     if show_selected {

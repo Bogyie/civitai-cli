@@ -53,9 +53,10 @@ pub enum SearchFormMode {
 pub enum SearchFormSection {
     Query,
     Sort,
-    Type,
-    BaseModel,
     Period,
+    Type,
+    Tag,
+    BaseModel,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -93,6 +94,7 @@ pub struct SearchFormState {
     pub type_options: Vec<ModelType>,
     pub type_cursor: usize,
     pub selected_types: BTreeSet<ModelType>,
+    pub tag_query: String,
     pub base_options: Vec<ModelBaseModel>,
     pub base_cursor: usize,
     pub selected_base_models: BTreeSet<ModelBaseModel>,
@@ -241,6 +243,7 @@ impl SearchFormState {
             type_options: ModelType::all(),
             type_cursor: 0,
             selected_types: BTreeSet::new(),
+            tag_query: String::new(),
             base_options: ModelBaseModel::all(),
             base_cursor: 0,
             selected_base_models: BTreeSet::new(),
@@ -257,6 +260,13 @@ impl SearchFormState {
                 .get(self.selected_sort)
                 .cloned()
                 .unwrap_or_default(),
+            tags: self
+                .tag_query
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect(),
             base_models: self.selected_base_models.iter().cloned().collect(),
             types: self.selected_types.iter().cloned().collect(),
             created_at: self
