@@ -871,7 +871,25 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         ),
     ]));
 
-    let download_history_path_val = if fm.editing && fm.focused_field == 9 {
+    let media_quality_val = app.config.media_quality.label().to_string();
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 9 {
+                "> Media Quality Preference: "
+            } else {
+                "  Media Quality Preference: "
+            },
+            Style::default().fg(if fm.focused_field == 9 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
+        ),
+        Span::styled(media_quality_val, Style::default().fg(Color::Cyan)),
+    ]));
+
+    let download_history_path_val = if fm.editing && fm.focused_field == 10 {
         format!("{}█", fm.input_buffer)
     } else {
         app.config
@@ -888,12 +906,12 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 9 {
+            if fm.focused_field == 10 {
                 "> Download History File: "
             } else {
                 "  Download History File: "
             },
-            Style::default().fg(if fm.focused_field == 9 {
+            Style::default().fg(if fm.focused_field == 10 {
                 Color::Yellow
             } else {
                 Color::White
@@ -901,11 +919,30 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(
             download_history_path_val,
-            if fm.focused_field == 9 && fm.editing {
+            if fm.focused_field == 10 && fm.editing {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default().fg(Color::Cyan)
             },
+        ),
+    ]));
+
+    lines.push(Line::from(vec![
+        Span::styled(
+            if fm.focused_field == 11 {
+                "> Clear All Caches: "
+            } else {
+                "  Clear All Caches: "
+            },
+            Style::default().fg(if fm.focused_field == 11 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
+        ),
+        Span::styled(
+            "Delete search/detail/media caches only",
+            Style::default().fg(Color::Cyan),
         ),
     ]));
 
@@ -917,7 +954,13 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         )));
     } else {
         lines.push(Line::from(Span::styled(
-            " [Up/Down] Highlight | [Enter] Edit string",
+            if fm.focused_field == 9 {
+                " [Up/Down] Highlight | [Enter] Cycle quality"
+            } else if fm.focused_field == 11 {
+                " [Up/Down] Highlight | [Enter] Clear caches"
+            } else {
+                " [Up/Down] Highlight | [Enter] Edit string"
+            },
             Style::default().fg(Color::DarkGray),
         )));
     }

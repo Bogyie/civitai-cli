@@ -11,13 +11,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use crate::api::CivitaiClient;
-use crate::config::AppConfig;
+use crate::config::{AppConfig, MediaQualityPreference};
 use civitai_cli::sdk::{
     ApiImageSearchOptions, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
-    DownloadOptions, DownloadSpec, ImageSearchSortBy, ImageSearchState, ModelDownloadAuth,
-    ModelSearchState, SdkClientBuilder, SearchImageHit as ImageItem, SearchModelHit as Model,
+    DownloadOptions, DownloadSpec, ImageSearchSortBy, ImageSearchState, MediaUrlOptions,
+    ModelDownloadAuth, ModelSearchState, SdkClientBuilder, SearchImageHit as ImageItem,
+    SearchModelHit as Model, media_url_from_raw_with_options,
 };
-use crate::tui::app::{AppMessage, WorkerCommand};
+use crate::tui::app::{AppMessage, MediaRenderRequest, WorkerCommand};
 use crate::tui::image::image_media_url;
 use crate::tui::model::{
     ParsedModelFile, build_download_file_name, model_name, model_versions,
@@ -58,11 +59,175 @@ struct CachedBinaryBlob {
 
 enum CoverQueueCommand {
     Enqueue(Vec<(u64, String)>),
-    Prioritize(u64, Option<String>),
-    Prefetch(Vec<(u64, Option<String>)>),
+    Prioritize(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
+    Prefetch(Vec<(u64, Option<String>, Option<(u32, u32)>)>, MediaRenderRequest),
 }
 
 const MODEL_VERSION_COVER_IMAGE_LIMIT: usize = 1;
+
+fn media_quality_scale(preference: MediaQualityPreference) -> f32 {
+    match preference {
+        MediaQualityPreference::Low => 0.7,
+        MediaQualityPreference::Medium => 0.95,
+        MediaQualityPreference::High => 1.25,
+        MediaQualityPreference::Original => 1.0,
+    }
+}
+
+fn media_quality_value(preference: MediaQualityPreference) -> Option<u8> {
+    match preference {
+        MediaQualityPreference::Low => Some(55),
+        MediaQualityPreference::Medium => Some(72),
+        MediaQualityPreference::High => Some(85),
+        MediaQualityPreference::Original => None,
+    }
+}
+
+fn resolve_dynamic_media_target(
+    request: MediaRenderRequest,
+    source_dims: Option<(u32, u32)>,
+    preference: MediaQualityPreference,
+) -> (u32, u32, Option<u8>) {
+    let scale = media_quality_scale(preference);
+    let mut target_width = ((request.width as f32) * scale).round().max(1.0) as u32;
+    let mut target_height = ((request.height as f32) * scale).round().max(1.0) as u32;
+    let mut quality = media_quality_value(preference);
+
+    if let Some((source_width, source_height)) = source_dims {
+        target_width = target_width.min(source_width.max(1));
+        target_height = target_height.min(source_height.max(1));
+
+        let width_ratio = source_width as f32 / target_width.max(1) as f32;
+        let height_ratio = source_height as f32 / target_height.max(1) as f32;
+        let downscale_ratio = width_ratio.max(height_ratio);
+
+        if let Some(base_quality) = quality {
+            let adjusted = if downscale_ratio >= 3.5 {
+                base_quality.saturating_sub(14)
+            } else if downscale_ratio >= 2.4 {
+                base_quality.saturating_sub(10)
+            } else if downscale_ratio >= 1.6 {
+                base_quality.saturating_sub(5)
+            } else if downscale_ratio <= 1.05 {
+                base_quality.saturating_add(4).min(95)
+            } else {
+                base_quality
+            };
+            quality = Some(adjusted);
+        }
+    }
+
+    (target_width.max(1), target_height.max(1), quality)
+}
+
+fn build_media_options_for_display(
+    request: MediaRenderRequest,
+    source_dims: Option<(u32, u32)>,
+    preference: MediaQualityPreference,
+    is_video: bool,
+) -> MediaUrlOptions {
+    if preference == MediaQualityPreference::Original {
+        return MediaUrlOptions {
+            original: Some(true),
+            ..Default::default()
+        };
+    }
+
+    let (width, height, quality) =
+        resolve_dynamic_media_target(request, source_dims, preference);
+
+    if is_video {
+        MediaUrlOptions {
+            original: Some(false),
+            width: Some(width),
+            height: Some(height),
+            quality,
+            optimized: Some(true),
+            anim: Some(false),
+            ..Default::default()
+        }
+    } else {
+        MediaUrlOptions {
+            width: Some(width),
+            height: Some(height),
+            quality,
+            optimized: Some(true),
+            anim: Some(false),
+            ..Default::default()
+        }
+    }
+}
+
+fn build_cover_media_options(
+    request: MediaRenderRequest,
+    source_dims: Option<(u32, u32)>,
+    preference: MediaQualityPreference,
+) -> MediaUrlOptions {
+    if preference == MediaQualityPreference::Original {
+        return MediaUrlOptions {
+            original: Some(true),
+            ..Default::default()
+        };
+    }
+
+    let (width, height, quality) =
+        resolve_dynamic_media_target(request, source_dims, preference);
+    MediaUrlOptions {
+        width: Some(width),
+        height: Some(height),
+        quality,
+        optimized: Some(true),
+        anim: Some(false),
+        ..Default::default()
+    }
+}
+
+fn build_image_display_url(
+    item: &ImageItem,
+    request: MediaRenderRequest,
+    preference: MediaQualityPreference,
+) -> Option<String> {
+    let source_dims = item.width.zip(item.height);
+    if item.r#type.as_deref() == Some("video") {
+        item.thumbnail_url.clone().filter(|value| !value.trim().is_empty()).or_else(|| {
+            item.media_url_with_options(&build_media_options_for_display(
+                request,
+                source_dims,
+                preference,
+                true,
+            ))
+        })
+    } else if item.media_token().is_some() {
+        item.media_url_with_options(&build_media_options_for_display(
+            request,
+            source_dims,
+            preference,
+            false,
+        ))
+    } else {
+        image_media_url(item)
+    }
+}
+
+fn rewrite_cover_url_for_display(
+    raw_url: &str,
+    source_dims: Option<(u32, u32)>,
+    request: MediaRenderRequest,
+    preference: MediaQualityPreference,
+) -> Option<String> {
+    media_url_from_raw_with_options(
+        raw_url,
+        &build_cover_media_options(request, source_dims, preference),
+    )
+        .or_else(|| Some(raw_url.to_string()))
+}
+
+fn render_request_key(
+    request: MediaRenderRequest,
+    preference: MediaQualityPreference,
+) -> String {
+    format!("{}:{}x{}", preference.label(), request.width, request.height)
+}
 
 fn cache_key_for_options(opts: &ModelSearchState) -> String {
     let mut parts = Vec::new();
@@ -954,12 +1119,20 @@ pub async fn spawn_worker(
                     let model_cover_cache_path = model_cover_cache_path.clone();
                     let use_cover_cache = use_search_cache();
                     let debug_config = debug_config.clone();
+                    let request_key = render_request_key(
+                        MediaRenderRequest {
+                            width: 960,
+                            height: 720,
+                        },
+                        debug_config.media_quality,
+                    );
 
                     let handle = tokio::spawn(async move {
                         let cover_cache_root = model_cover_cache_path.lock().await.clone();
                         let result = load_model_cover_result(
                             version_id,
                             image_url,
+                            request_key,
                             req_client,
                             picker,
                             cover_cache_root,
@@ -999,8 +1172,8 @@ pub async fn spawn_worker(
                                 );
                             }
                         }
-                        CoverQueueCommand::Prefetch(jobs) => {
-                            for (version_id, image_url) in jobs {
+                        CoverQueueCommand::Prefetch(jobs, render_request) => {
+                            for (version_id, image_url, source_dims) in jobs {
                                 if running_ids.contains(&version_id) || queued_ids.contains(&version_id) {
                                     continue;
                                 }
@@ -1008,12 +1181,25 @@ pub async fn spawn_worker(
                                 let resolved_url = if let Some(url) =
                                     image_url.or_else(|| known_version_urls.get(&version_id).cloned())
                                 {
-                                    Some(url)
+                                    rewrite_cover_url_for_display(
+                                        &url,
+                                        source_dims,
+                                        render_request,
+                                        debug_config.media_quality,
+                                    )
                                 } else {
                                     fetch_cover_urls_for_version(&api_client, version_id)
                                         .await
                                         .into_iter()
                                         .next()
+                                        .and_then(|url| {
+                                            rewrite_cover_url_for_display(
+                                                &url,
+                                                source_dims,
+                                                render_request,
+                                                debug_config.media_quality,
+                                            )
+                                        })
                                 };
 
                                 if let Some(url) = resolved_url {
@@ -1028,15 +1214,38 @@ pub async fn spawn_worker(
                                 }
                             }
                         }
-                        CoverQueueCommand::Prioritize(version_id, image_url) => {
+                        CoverQueueCommand::Prioritize(
+                            version_id,
+                            image_url,
+                            source_dims,
+                            render_request,
+                        ) => {
                             focus_version = Some(version_id);
                             let mut resolved_urls =
                                 fetch_cover_urls_for_version(&api_client, version_id).await;
+                            resolved_urls = resolved_urls
+                                .into_iter()
+                                .filter_map(|url| {
+                                    rewrite_cover_url_for_display(
+                                        &url,
+                                        source_dims,
+                                        render_request,
+                                        debug_config.media_quality,
+                                    )
+                                })
+                                .collect();
                             if resolved_urls.is_empty() {
                                 if let Some(url) =
                                     image_url.or_else(|| known_version_urls.get(&version_id).cloned())
                                 {
-                                    resolved_urls.push(url);
+                                    if let Some(transformed) = rewrite_cover_url_for_display(
+                                        &url,
+                                        source_dims,
+                                        render_request,
+                                        debug_config.media_quality,
+                                    ) {
+                                        resolved_urls.push(transformed);
+                                    }
                                 }
                             }
 
@@ -1044,40 +1253,48 @@ pub async fn spawn_worker(
                                 known_version_urls.insert(version_id, first_url);
                             }
 
-                            if !resolved_urls.is_empty() {
-                                if let Some(handle) = running_handles.remove(&version_id) {
-                                    handle.abort();
-                                }
-                                let _ = running_ids.remove(&version_id);
-                                queued_ids.remove(&version_id);
-                                queue.retain(|(queued_version_id, _)| *queued_version_id != version_id);
-
-                                let tx_msg = tx_msg.clone();
-                                let req_client = req_client.clone();
-                                let picker = picker.clone();
-                                let done_tx = cover_done_tx.clone();
-                                let model_cover_cache_path = model_cover_cache_path.clone();
-                                let use_cover_cache = use_search_cache();
-                                let debug_config = debug_config.clone();
-
-                                running_ids.insert(version_id);
-                                let handle = tokio::spawn(async move {
-                                    let cover_cache_root = model_cover_cache_path.lock().await.clone();
-                                    let result = load_model_cover_results(
-                                        version_id,
-                                        resolved_urls,
-                                        req_client,
-                                        picker,
-                                        cover_cache_root,
-                                        debug_config,
-                                        use_cover_cache,
-                                    )
+                            if resolved_urls.is_empty() {
+                                let _ = tx_msg
+                                    .send(AppMessage::ModelCoverLoadFailed(version_id))
                                     .await;
-                                    let _ = tx_msg.send(result).await;
-                                    let _ = done_tx.send(version_id).await;
-                                });
-                                running_handles.insert(version_id, handle);
+                                continue;
                             }
+
+                            if let Some(handle) = running_handles.remove(&version_id) {
+                                handle.abort();
+                            }
+                            let _ = running_ids.remove(&version_id);
+                            queued_ids.remove(&version_id);
+                            queue.retain(|(queued_version_id, _)| *queued_version_id != version_id);
+
+                            let tx_msg = tx_msg.clone();
+                            let req_client = req_client.clone();
+                            let picker = picker.clone();
+                            let done_tx = cover_done_tx.clone();
+                            let model_cover_cache_path = model_cover_cache_path.clone();
+                            let use_cover_cache = use_search_cache();
+                            let debug_config = debug_config.clone();
+                            let request_key =
+                                render_request_key(render_request, debug_config.media_quality);
+
+                            running_ids.insert(version_id);
+                            let handle = tokio::spawn(async move {
+                                let cover_cache_root = model_cover_cache_path.lock().await.clone();
+                                let result = load_model_cover_results(
+                                    version_id,
+                                    resolved_urls,
+                                    request_key,
+                                    req_client,
+                                    picker,
+                                    cover_cache_root,
+                                    debug_config,
+                                    use_cover_cache,
+                                )
+                                .await;
+                                let _ = tx_msg.send(result).await;
+                                let _ = done_tx.send(version_id).await;
+                            });
+                            running_handles.insert(version_id, handle);
 
                             if running_ids.len() >= max_in_flight
                                 && !running_ids.contains(&version_id)
@@ -1132,8 +1349,8 @@ pub async fn spawn_worker(
                                     );
                                 }
                             }
-                            CoverQueueCommand::Prefetch(jobs) => {
-                                for (version_id, image_url) in jobs {
+                            CoverQueueCommand::Prefetch(jobs, render_request) => {
+                                for (version_id, image_url, source_dims) in jobs {
                                     if running_ids.contains(&version_id) || queued_ids.contains(&version_id) {
                                         continue;
                                     }
@@ -1141,12 +1358,25 @@ pub async fn spawn_worker(
                                     let resolved_url = if let Some(url) =
                                         image_url.or_else(|| known_version_urls.get(&version_id).cloned())
                                     {
-                                        Some(url)
+                                        rewrite_cover_url_for_display(
+                                            &url,
+                                            source_dims,
+                                            render_request,
+                                            debug_config.media_quality,
+                                        )
                                     } else {
                                         fetch_cover_urls_for_version(&api_client, version_id)
                                             .await
                                             .into_iter()
                                             .next()
+                                            .and_then(|url| {
+                                                rewrite_cover_url_for_display(
+                                                    &url,
+                                                    source_dims,
+                                                    render_request,
+                                                    debug_config.media_quality,
+                                                )
+                                            })
                                     };
 
                                     if let Some(url) = resolved_url {
@@ -1161,15 +1391,38 @@ pub async fn spawn_worker(
                                     }
                                 }
                             }
-                            CoverQueueCommand::Prioritize(version_id, image_url) => {
+                            CoverQueueCommand::Prioritize(
+                                version_id,
+                                image_url,
+                                source_dims,
+                                render_request,
+                            ) => {
                                 focus_version = Some(version_id);
                                 let mut resolved_urls =
                                     fetch_cover_urls_for_version(&api_client, version_id).await;
+                                resolved_urls = resolved_urls
+                                    .into_iter()
+                                    .filter_map(|url| {
+                                        rewrite_cover_url_for_display(
+                                            &url,
+                                            source_dims,
+                                            render_request,
+                                            debug_config.media_quality,
+                                        )
+                                    })
+                                    .collect();
                                 if resolved_urls.is_empty() {
                                     if let Some(url) =
                                         image_url.or_else(|| known_version_urls.get(&version_id).cloned())
                                     {
-                                        resolved_urls.push(url);
+                                        if let Some(transformed) = rewrite_cover_url_for_display(
+                                            &url,
+                                            source_dims,
+                                            render_request,
+                                            debug_config.media_quality,
+                                        ) {
+                                            resolved_urls.push(transformed);
+                                        }
                                     }
                                 }
 
@@ -1192,6 +1445,8 @@ pub async fn spawn_worker(
                                     let model_cover_cache_path = model_cover_cache_path.clone();
                                     let use_cover_cache = use_search_cache();
                                     let debug_config = debug_config.clone();
+                                    let request_key =
+                                        render_request_key(render_request, debug_config.media_quality);
 
                                     running_ids.insert(version_id);
                                     let handle = tokio::spawn(async move {
@@ -1199,6 +1454,7 @@ pub async fn spawn_worker(
                                         let result = load_model_cover_results(
                                             version_id,
                                             resolved_urls,
+                                            request_key,
                                             req_client,
                                             picker,
                                             cover_cache_root,
@@ -1252,7 +1508,7 @@ pub async fn spawn_worker(
 
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
-                WorkerCommand::FetchImages(image_opts, next_page_url) => {
+                WorkerCommand::FetchImages(image_opts, next_page_url, render_request) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -1296,6 +1552,8 @@ pub async fn spawn_worker(
                                 configured_image_search_ttl_minutes,
                             );
                         let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
+                        let media_quality = debug_config.media_quality;
+                        let request_key = render_request_key(render_request, media_quality);
                         let use_image_search_cache = image_search_ttl_minutes > 0;
                         let _ = tx_msg_clone
                             .send(AppMessage::StatusUpdate(status_with_url(
@@ -1485,10 +1743,13 @@ pub async fn spawn_worker(
                             let image_bytes_cache_root =
                                 image_bytes_cache_path.lock().await.clone();
                             let use_binary_cache = image_bytes_cache_root.is_some();
-                            if let Some(image_url) = image_media_url(&item) {
+                            if let Some(image_url) =
+                                build_image_display_url(&item, render_request, media_quality)
+                            {
                                 handles.push(tokio::spawn(load_feed_image(
                                     item.id,
                                     image_url,
+                                    request_key.clone(),
                                     req_client.clone(),
                                     picker.clone(),
                                     tx_msg_clone.clone(),
@@ -1505,7 +1766,7 @@ pub async fn spawn_worker(
                         }
                     });
                 }
-                WorkerCommand::LoadImage(item) => {
+                WorkerCommand::LoadImage(item, render_request) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -1514,10 +1775,17 @@ pub async fn spawn_worker(
                     let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
                     let use_cache = image_bytes_cache_root.is_some();
                     tokio::spawn(async move {
-                        if let Some(image_url) = image_media_url(&item) {
+                        if let Some(image_url) = build_image_display_url(
+                            &item,
+                            render_request,
+                            debug_config.media_quality,
+                        ) {
+                            let request_key =
+                                render_request_key(render_request, debug_config.media_quality);
                             load_feed_image(
                                 item.id,
                                 image_url,
+                                request_key,
                                 req_client,
                                 picker,
                                 tx_msg_clone,
@@ -1535,14 +1803,24 @@ pub async fn spawn_worker(
                     if let Ok(dyn_img) = image::load_from_memory(&bytes) {
                         let protocol = picker.new_resize_protocol(dyn_img);
                         let _ = tx_msg
-                            .send(AppMessage::ImageDecoded(image_id, protocol, bytes))
+                            .send(AppMessage::ImageDecoded(
+                                image_id,
+                                protocol,
+                                bytes,
+                                String::new(),
+                            ))
                             .await;
                     }
                 }
                 WorkerCommand::RebuildModelCover(version_id, bytes) => {
                     if let Some(protocol) = decode_model_cover(&bytes, &picker) {
                         let _ = tx_msg
-                            .send(AppMessage::ModelCoverDecoded(version_id, protocol, bytes))
+                            .send(AppMessage::ModelCoverDecoded(
+                                version_id,
+                                protocol,
+                                bytes,
+                                String::new(),
+                            ))
                             .await;
                     }
                 }
@@ -1802,9 +2080,17 @@ pub async fn spawn_worker(
 
                             let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                             if let Some(version_id) = preferred_version_id {
-                                let _ = cover_cmd_tx
-                                    .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
-                                    .await;
+                                    let _ = cover_cmd_tx
+                                        .send(CoverQueueCommand::Prioritize(
+                                            version_id,
+                                            preferred_url,
+                                            None,
+                                            MediaRenderRequest {
+                                                width: 960,
+                                                height: 720,
+                                            },
+                                        ))
+                                        .await;
                             }
 
                             let _ = tx_msg_clone
@@ -1938,6 +2224,11 @@ pub async fn spawn_worker(
                                         .send(CoverQueueCommand::Prioritize(
                                             version_id,
                                             preferred_url,
+                                            None,
+                                            MediaRenderRequest {
+                                                width: 960,
+                                                height: 720,
+                                            },
                                         ))
                                         .await;
                                 }
@@ -2032,13 +2323,70 @@ pub async fn spawn_worker(
                         )))
                         .await;
                 }
-                WorkerCommand::PrioritizeModelCover(version_id, image_url) => {
-                    let _ = cover_cmd_tx
-                        .send(CoverQueueCommand::Prioritize(version_id, image_url))
+                WorkerCommand::ClearAllCaches => {
+                    let mut removed_targets = 0usize;
+
+                    {
+                        let mut cache = search_cache.lock().await;
+                        if !cache.is_empty() {
+                            cache.clear();
+                            removed_targets += 1;
+                        }
+                    }
+                    {
+                        let mut cache = image_search_cache.lock().await;
+                        if !cache.is_empty() {
+                            cache.clear();
+                            removed_targets += 1;
+                        }
+                    }
+
+                    for root in [
+                        search_cache_path.lock().await.clone(),
+                        image_search_cache_path.lock().await.clone(),
+                        model_cover_cache_path.lock().await.clone(),
+                        image_bytes_cache_path.lock().await.clone(),
+                        image_detail_cache_path.lock().await.clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        let existed = root.exists();
+                        let removed_dir = std::fs::remove_dir_all(&root).is_ok();
+                        if existed || removed_dir {
+                            removed_targets += 1;
+                        }
+                    }
+
+                    debug_fetch_log(
+                        &downloader_config,
+                        &format!("Clear all caches requested, removed_targets={removed_targets}"),
+                    );
+                    let _ = tx_msg
+                        .send(AppMessage::StatusUpdate(format!(
+                            "Cleared cache storage ({removed_targets} target(s))"
+                        )))
                         .await;
                 }
-                WorkerCommand::PrefetchModelCovers(jobs) => {
-                    let _ = cover_cmd_tx.send(CoverQueueCommand::Prefetch(jobs)).await;
+                WorkerCommand::PrioritizeModelCover(
+                    version_id,
+                    image_url,
+                    source_dims,
+                    render_request,
+                ) => {
+                    let _ = cover_cmd_tx
+                        .send(CoverQueueCommand::Prioritize(
+                            version_id,
+                            image_url,
+                            source_dims,
+                            render_request,
+                        ))
+                        .await;
+                }
+                WorkerCommand::PrefetchModelCovers(jobs, render_request) => {
+                    let _ = cover_cmd_tx
+                        .send(CoverQueueCommand::Prefetch(jobs, render_request))
+                        .await;
                 }
                 WorkerCommand::UpdateConfig(new_cfg) => {
                     let new_key = new_cfg.api_key.clone();
@@ -2536,6 +2884,7 @@ async fn fetch_image_bytes_with_debug(
 async fn load_model_cover_result(
     version_id: u64,
     image_url: String,
+    request_key: String,
     client: Client,
     picker: Picker,
     cover_cache_root: Option<PathBuf>,
@@ -2554,7 +2903,12 @@ async fn load_model_cover_result(
                             version_id, image_url
                         ),
                     );
-                    return AppMessage::ModelCoverDecoded(version_id, protocol, bytes);
+                    return AppMessage::ModelCoverDecoded(
+                        version_id,
+                        protocol,
+                        bytes,
+                        request_key.clone(),
+                    );
                 }
 
                 let _ = std::fs::remove_file(cache_path);
@@ -2579,7 +2933,12 @@ async fn load_model_cover_result(
                         persist_model_cover_cache(&cache_path, &bytes);
                     }
                 }
-                return AppMessage::ModelCoverDecoded(version_id, protocol, bytes.to_vec());
+                return AppMessage::ModelCoverDecoded(
+                    version_id,
+                    protocol,
+                    bytes.to_vec(),
+                    request_key.clone(),
+                );
             }
             debug_fetch_log(
                 &debug_config,
@@ -2606,6 +2965,7 @@ async fn load_model_cover_result(
 async fn load_model_cover_results(
     version_id: u64,
     image_urls: Vec<String>,
+    request_key: String,
     client: Client,
     picker: Picker,
     cover_cache_root: Option<PathBuf>,
@@ -2655,7 +3015,7 @@ async fn load_model_cover_results(
     if protocols.is_empty() {
         AppMessage::ModelCoverLoadFailed(version_id)
     } else {
-        AppMessage::ModelCoversDecoded(version_id, protocols)
+        AppMessage::ModelCoversDecoded(version_id, protocols, request_key)
     }
 }
 
@@ -2688,6 +3048,7 @@ async fn fetch_cover_urls_for_version(
 async fn load_feed_image(
     image_id: u64,
     image_url: String,
+    request_key: String,
     client: Client,
     picker: Picker,
     tx_msg: mpsc::Sender<AppMessage>,
@@ -2711,7 +3072,12 @@ async fn load_feed_image(
                 if let Ok(dyn_img) = image::load_from_memory(&bytes) {
                     let protocol = picker.new_resize_protocol(dyn_img);
                     let _ = tx_msg
-                        .send(AppMessage::ImageDecoded(image_id, protocol, bytes))
+                        .send(AppMessage::ImageDecoded(
+                            image_id,
+                            protocol,
+                            bytes,
+                            request_key.clone(),
+                        ))
                         .await;
                     return;
                 }
@@ -2740,7 +3106,12 @@ async fn load_feed_image(
                 }
                 let protocol = picker.new_resize_protocol(dyn_img);
                 let _ = tx_msg
-                    .send(AppMessage::ImageDecoded(image_id, protocol, bytes.to_vec()))
+                    .send(AppMessage::ImageDecoded(
+                        image_id,
+                        protocol,
+                        bytes.to_vec(),
+                        request_key.clone(),
+                    ))
                     .await;
             } else {
                 debug_fetch_log(

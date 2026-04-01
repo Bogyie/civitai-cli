@@ -164,13 +164,13 @@ pub fn selected_version(hit: &SearchModelHit, index: usize) -> Option<ParsedMode
     versions.get(safe_index).cloned()
 }
 
-pub fn preview_image_url(hit: &SearchModelHit, version_index: usize) -> Option<String> {
+pub fn preview_image_info(hit: &SearchModelHit, version_index: usize) -> Option<ParsedModelImage> {
     let version = selected_version(hit, version_index)?;
     version
         .images
         .first()
-        .map(|image| image.url.clone())
-        .filter(|url| !url.trim().is_empty())
+        .cloned()
+        .filter(|image| !image.url.trim().is_empty())
 }
 
 pub fn default_base_model(hit: &SearchModelHit) -> Option<String> {

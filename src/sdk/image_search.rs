@@ -296,6 +296,33 @@ impl MediaUrlOptions {
     }
 }
 
+pub fn media_url_from_raw_with_options(raw_url: &str, options: &MediaUrlOptions) -> Option<String> {
+    let url = Url::parse(raw_url).ok()?;
+    let mut segments = url
+        .path_segments()
+        .map(|parts| parts.map(str::to_string).collect::<Vec<_>>())?;
+    if segments.len() < 3 {
+        return None;
+    }
+
+    let namespace = segments.remove(0);
+    let token = segments.remove(0);
+    let mut rebuilt = format!(
+        "{}/{}/{}/{}",
+        url.origin().ascii_serialization().trim_end_matches('/'),
+        namespace,
+        token,
+        options.to_path_segment()
+    );
+
+    if !segments.is_empty() {
+        rebuilt.push('/');
+        rebuilt.push_str(&segments.join("/"));
+    }
+
+    Some(rebuilt)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchImageHit {

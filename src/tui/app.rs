@@ -4,7 +4,7 @@ use civitai_cli::sdk::{
     SearchModelHit as Model,
 };
 use crate::tui::model::{
-    default_base_model, model_metrics, model_name, model_versions, preview_image_url,
+    default_base_model, model_metrics, model_name, model_versions, preview_image_info,
     selected_version,
 };
 use crate::tui::image::image_tags;
@@ -107,6 +107,12 @@ pub struct SettingsFormState {
     pub editing: bool,
     pub focused_field: usize,
     pub input_buffer: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaRenderRequest {
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -295,10 +301,10 @@ impl SearchFormState {
 
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
-    ImageDecoded(u64, StatefulProtocol, Vec<u8>),
+    ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
-    ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>), // version_id, protocol, bytes
-    ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>), // version_id, protocols+bytes
+    ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String), // version_id, protocol, bytes, request_key
+    ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String), // version_id, protocols+bytes, request_key
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
     DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>), // model_id, filename, version_id, model_name, total_bytes, file_path
@@ -362,8 +368,8 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages(ImageSearchState, Option<u32>),
-    LoadImage(ImageItem),
+    FetchImages(ImageSearchState, Option<u32>, MediaRenderRequest),
+    LoadImage(ImageItem, MediaRenderRequest),
     RebuildImageProtocol(u64, Vec<u8>),
     RebuildModelCover(u64, Vec<u8>),
     SearchModels(
@@ -375,8 +381,12 @@ pub enum WorkerCommand {
         Option<u32>,
     ),
     ClearSearchCache,
-    PrioritizeModelCover(u64, Option<String>),
-    PrefetchModelCovers(Vec<(u64, Option<String>)>),
+    ClearAllCaches,
+    PrioritizeModelCover(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
+    PrefetchModelCovers(
+        Vec<(u64, Option<String>, Option<(u32, u32)>)>,
+        MediaRenderRequest,
+    ),
     DownloadImage(ImageItem),
     DownloadModel(Model, u64, usize), // selected model hit, version_id, file_index
     PauseDownload(u64),      // model_id
@@ -423,6 +433,7 @@ pub struct App {
     pub selected_file_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, Vec<StatefulProtocol>>,
     pub model_version_image_bytes_cache: HashMap<u64, Vec<Vec<u8>>>,
+    pub model_version_image_request_keys: HashMap<u64, String>,
     pub model_version_image_failed: HashSet<u64>,
 
     pub images: Vec<ImageItem>,
@@ -430,6 +441,7 @@ pub struct App {
     pub selected_image_bookmark_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
     pub image_bytes_cache: HashMap<u64, Vec<u8>>,
+    pub image_request_keys: HashMap<u64, String>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
     pub image_feed_next_page: Option<u32>,
@@ -536,12 +548,14 @@ impl App {
             selected_file_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
             model_version_image_bytes_cache: HashMap::new(),
+            model_version_image_request_keys: HashMap::new(),
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
             selected_index: 0,
             selected_image_bookmark_index: 0,
             image_cache: HashMap::new(),
             image_bytes_cache: HashMap::new(),
+            image_request_keys: HashMap::new(),
             image_feed_loaded: false,
             image_feed_loading: false,
             image_feed_next_page: None,
@@ -690,6 +704,7 @@ impl App {
         let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
         self.image_cache.retain(|id, _| new_ids.contains(id));
         self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
+        self.image_request_keys.retain(|id, _| new_ids.contains(id));
         self.image_feed_next_page = next_page;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loaded = true;
@@ -719,6 +734,22 @@ impl App {
         if !self.images.is_empty() && self.selected_index >= self.images.len() {
             self.selected_index = self.images.len() - 1;
         }
+    }
+
+    pub fn has_cached_image_request(&self, image_id: u64, request_key: &str) -> bool {
+        self.image_cache.contains_key(&image_id)
+            && self
+                .image_request_keys
+                .get(&image_id)
+                .is_some_and(|key| key == request_key)
+    }
+
+    pub fn has_cached_model_cover_request(&self, version_id: u64, request_key: &str) -> bool {
+        self.model_version_image_cache.contains_key(&version_id)
+            && self
+                .model_version_image_request_keys
+                .get(&version_id)
+                .is_some_and(|key| key == request_key)
     }
 
     pub fn merge_image_tag_catalog_from_hits(&mut self, images: &[ImageItem]) {
@@ -1005,6 +1036,8 @@ impl App {
             .retain(|version_id, _| known_version_ids.contains(version_id));
         self.model_version_image_bytes_cache
             .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_request_keys
+            .retain(|version_id, _| known_version_ids.contains(version_id));
         self.model_version_image_failed
             .retain(|version_id| known_version_ids.contains(version_id));
         self.models = models;
@@ -1223,23 +1256,29 @@ impl App {
         Some((model.id, version.id))
     }
 
-    pub fn selected_model_version_with_cover_url(&self) -> Option<(u64, u64, Option<String>)> {
+    pub fn selected_model_version_with_cover_url(
+        &self,
+    ) -> Option<(u64, u64, Option<String>, Option<(u32, u32)>)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
         let version = selected_version(model, version_index)?;
-        if self.model_version_image_cache.contains_key(&version.id)
-            || self.model_version_image_failed.contains(&version.id)
-        {
+        if self.model_version_image_failed.contains(&version.id) {
             return None;
         }
+        let preview = preview_image_info(model, version_index);
         Some((
             model.id,
             version.id,
-            preview_image_url(model, version_index),
+            preview.as_ref().map(|image| image.url.clone()),
+            preview
+                .and_then(|image| Some((image.width?, image.height?))),
         ))
     }
 
-    pub fn selected_model_neighbor_cover_urls(&self, radius: usize) -> Vec<(u64, Option<String>)> {
+    pub fn selected_model_neighbor_cover_urls(
+        &self,
+        radius: usize,
+    ) -> Vec<(u64, Option<String>, Option<(u32, u32)>)> {
         let Some(model) = self.selected_model_in_active_view() else {
             return Vec::new();
         };
@@ -1262,11 +1301,20 @@ impl App {
             })
             .filter(|(idx, _)| *idx != center && *idx >= start && *idx <= end)
             .map(|(idx, version)| {
+                let preview = preview_image_info(model, idx);
                 (
                     version.id,
                     version.images.first().map(|image| image.url.clone()).or_else(|| {
-                        preview_image_url(model, idx)
+                        preview.as_ref().map(|image| image.url.clone())
                     }),
+                    version
+                        .images
+                        .first()
+                        .and_then(|image| Some((image.width?, image.height?)))
+                        .or_else(|| {
+                            preview
+                                .and_then(|image| Some((image.width?, image.height?)))
+                        }),
                 )
             })
             .collect()

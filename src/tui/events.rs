@@ -1,5 +1,8 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    terminal,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use std::fs::{self, OpenOptions, create_dir_all};
 use std::io::Stdout;
@@ -10,7 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::tui::app::{
     App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection,
-    MainTab, SearchFormMode, SearchFormSection, WorkerCommand,
+    MainTab, MediaRenderRequest, SearchFormMode, SearchFormSection, WorkerCommand,
 };
 use crate::tui::image::comfy_workflow_json;
 use crate::tui::ui;
@@ -68,6 +71,37 @@ fn save_text_artifact(prefix: &str, extension: &str, value: &str) -> Result<Path
     Ok(path)
 }
 
+fn current_terminal_size() -> (u16, u16) {
+    terminal::size().unwrap_or((120, 40))
+}
+
+fn current_image_render_request() -> MediaRenderRequest {
+    let (cols, rows) = current_terminal_size();
+    let panel_width = ((cols as f32) * 0.46).round().max(24.0) as u32;
+    let panel_height = ((rows as f32) * 0.72).round().max(12.0) as u32;
+    MediaRenderRequest {
+        width: panel_width.saturating_mul(14),
+        height: panel_height.saturating_mul(28),
+    }
+}
+
+fn current_model_cover_render_request() -> MediaRenderRequest {
+    let (cols, rows) = current_terminal_size();
+    let panel_width = ((cols as f32) * 0.38).round().max(18.0) as u32;
+    let panel_height = ((rows as f32) * 0.38).round().max(10.0) as u32;
+    MediaRenderRequest {
+        width: panel_width.saturating_mul(12),
+        height: panel_height.saturating_mul(24),
+    }
+}
+
+fn render_request_key(
+    request: MediaRenderRequest,
+    quality: crate::config::MediaQualityPreference,
+) -> String {
+    format!("{}:{}x{}", quality.label(), request.width, request.height)
+}
+
 pub async fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
@@ -79,11 +113,16 @@ pub async fn run_event_loop(
         }
         if let Some(image) = app.selected_image_in_active_view().cloned() {
             if let Some(tx) = &app.tx {
-                if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
-                    let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
+                let request = current_image_render_request();
+                let request_key = render_request_key(request, app.config.media_quality);
+                if app.has_cached_image_request(image.id, &request_key) {
+                    if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
+                        let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
+                    }
                 } else {
                     app.image_cache.remove(&image.id);
-                    let _ = tx.try_send(WorkerCommand::LoadImage(image));
+                    app.image_request_keys.remove(&image.id);
+                    let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
                 }
             }
         }
@@ -93,19 +132,31 @@ pub async fn run_event_loop(
         if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
             return;
         }
-        if let Some(image) = app.selected_image_in_active_view().cloned()
-            && !app.image_cache.contains_key(&image.id)
-        {
-            if let Some(tx) = &app.tx {
-                let _ = tx.try_send(WorkerCommand::LoadImage(image));
+        if let Some(image) = app.selected_image_in_active_view().cloned() {
+            let request = current_image_render_request();
+            let request_key = render_request_key(request, app.config.media_quality);
+            if !app.has_cached_image_request(image.id, &request_key) {
+                if let Some(tx) = &app.tx {
+                    let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
+                }
             }
         }
     };
 
     let send_cover_priority = |app: &mut App| {
-        if let Some((_, version_id, cover_url)) = app.selected_model_version_with_cover_url() {
+        if let Some((_, version_id, cover_url, source_dims)) = app.selected_model_version_with_cover_url() {
+            let request = current_model_cover_render_request();
+            let request_key = render_request_key(request, app.config.media_quality);
+            if app.has_cached_model_cover_request(version_id, &request_key) {
+                return;
+            }
             if let Some(tx) = &app.tx {
-                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(version_id, cover_url));
+                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(
+                    version_id,
+                    cover_url,
+                    source_dims,
+                    request,
+                ));
             }
         }
     };
@@ -118,18 +169,32 @@ pub async fn run_event_loop(
             return;
         };
         if let Some(tx) = &app.tx {
-            if let Some(bytes) = app
-                .model_version_image_bytes_cache
-                .get(&version_id)
-                .and_then(|entries| entries.first())
-                .cloned()
-            {
-                let _ = tx.try_send(WorkerCommand::RebuildModelCover(version_id, bytes));
+            let request = current_model_cover_render_request();
+            let request_key = render_request_key(request, app.config.media_quality);
+            if app.has_cached_model_cover_request(version_id, &request_key) {
+                if let Some(bytes) = app
+                    .model_version_image_bytes_cache
+                    .get(&version_id)
+                    .and_then(|entries| entries.first())
+                    .cloned()
+                {
+                    let _ = tx.try_send(WorkerCommand::RebuildModelCover(version_id, bytes));
+                }
             } else {
+                app.model_version_image_cache.remove(&version_id);
+                app.model_version_image_request_keys.remove(&version_id);
                 let cover_url = app
                     .selected_model_version_with_cover_url()
-                    .and_then(|(_, _, cover_url)| cover_url);
-                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(version_id, cover_url));
+                    .and_then(|(_, _, cover_url, _)| cover_url);
+                let source_dims = app
+                    .selected_model_version_with_cover_url()
+                    .and_then(|(_, _, _, source_dims)| source_dims);
+                let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(
+                    version_id,
+                    cover_url,
+                    source_dims,
+                    request,
+                ));
             }
         }
     };
@@ -140,8 +205,22 @@ pub async fn run_event_loop(
             return;
         }
         if let Some(tx) = &app.tx {
-            let _ = tx.try_send(WorkerCommand::PrefetchModelCovers(neighbors));
+            let _ = tx.try_send(WorkerCommand::PrefetchModelCovers(
+                neighbors,
+                current_model_cover_render_request(),
+            ));
         }
+    };
+
+    let refresh_visible_media = |app: &mut App| {
+        app.image_cache.clear();
+        app.image_request_keys.clear();
+        app.model_version_image_cache.clear();
+        app.model_version_image_request_keys.clear();
+        app.model_version_image_failed.clear();
+        reload_selected_image(app);
+        reload_selected_model_cover(app);
+        send_cover_prefetch(app);
     };
 
     let request_image_feed_if_needed = |app: &mut App, next_page: Option<u32>| {
@@ -169,6 +248,7 @@ pub async fn run_event_loop(
             match tx.try_send(WorkerCommand::FetchImages(
                 app.image_search_form.build_options(),
                 next_page,
+                current_image_render_request(),
             )) {
                 Ok(_) => {
                     app.image_feed_loading = true;
@@ -202,7 +282,22 @@ pub async fn run_event_loop(
                     event::poll(std::time::Duration::from_millis(poll_timeout_ms))
                  }) => {
                  if let Ok(Ok(true)) = event_res {
-                     if let Ok(Event::Key(key)) = event::read() {
+                     if let Ok(evt) = event::read() {
+                        if let Event::Resize(_, _) = evt {
+                            match app.active_tab {
+                                MainTab::Models | MainTab::Bookmarks => {
+                                    reload_selected_model_cover(app);
+                                    send_cover_prefetch(app);
+                                }
+                                MainTab::Images | MainTab::ImageBookmarks => {
+                                    reload_selected_image(app);
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if let Event::Key(key) = evt {
                         let is_ctrl_c_exit = matches!(key.code, KeyCode::Char('c'))
                             && key.modifiers.contains(KeyModifiers::CONTROL);
                         if app.mode == AppMode::SearchForm {
@@ -673,6 +768,7 @@ pub async fn run_event_loop(
                                         let _ = tx.try_send(WorkerCommand::FetchImages(
                                             app.image_search_form.build_options(),
                                             None,
+                                            current_image_render_request(),
                                         ));
                                         app.image_feed_loading = true;
                                         app.status = "Searching image feed...".into();
@@ -911,7 +1007,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if app.settings_form.focused_field < 9 {
+                                    if app.settings_form.focused_field < 11 {
                                         app.settings_form.focused_field += 1;
                                     }
                                 }
@@ -919,6 +1015,20 @@ pub async fn run_event_loop(
                                     app.settings_form.editing = false;
                                 }
                                 KeyCode::Enter => {
+                                    if app.settings_form.focused_field == 11 {
+                                        app.image_cache.clear();
+                                        app.image_bytes_cache.clear();
+                                        app.image_request_keys.clear();
+                                        app.model_version_image_cache.clear();
+                                        app.model_version_image_bytes_cache.clear();
+                                        app.model_version_image_request_keys.clear();
+                                        app.model_version_image_failed.clear();
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::ClearAllCaches);
+                                        }
+                                        app.status = "Clearing cache storage...".into();
+                                        continue;
+                                    }
                                     if app.settings_form.focused_field == 0 {
                                         app.config.api_key = if app.settings_form.input_buffer.is_empty() { None } else { Some(app.settings_form.input_buffer.clone()) };
                                     } else if app.settings_form.focused_field == 1 {
@@ -991,7 +1101,7 @@ pub async fn run_event_loop(
                                         };
                                         app.config.bookmark_file_path = path.clone();
                                         app.bookmark_file_path = path;
-                                    } else if app.settings_form.focused_field == 9 {
+                                    } else if app.settings_form.focused_field == 10 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -1003,6 +1113,9 @@ pub async fn run_event_loop(
                                             app.config.download_history_file_path = None;
                                             app.download_history_file_path = None;
                                         }
+                                    } else if app.settings_form.focused_field == 9 {
+                                        app.config.media_quality = app.config.media_quality.next();
+                                        refresh_visible_media(app);
                                     }
                                     if let Err(e) = app.config.save() {
                                         app.last_error = Some(format!("Failed to save config: {}", e));
@@ -1115,6 +1228,34 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Enter => {
                                 if app.active_tab == MainTab::Settings {
+                                    if app.settings_form.focused_field == 9 {
+                                        app.config.media_quality = app.config.media_quality.next();
+                                        refresh_visible_media(app);
+                                        if let Err(e) = app.config.save() {
+                                            app.last_error = Some(format!("Failed to save config: {}", e));
+                                            app.show_status_modal = true;
+                                        } else {
+                                            app.last_error = None;
+                                            if let Some(tx) = &app.tx {
+                                                let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                    if app.settings_form.focused_field == 11 {
+                                        app.image_cache.clear();
+                                        app.image_bytes_cache.clear();
+                                        app.image_request_keys.clear();
+                                        app.model_version_image_cache.clear();
+                                        app.model_version_image_bytes_cache.clear();
+                                        app.model_version_image_request_keys.clear();
+                                        app.model_version_image_failed.clear();
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::ClearAllCaches);
+                                        }
+                                        app.status = "Clearing cache storage...".into();
+                                        continue;
+                                    }
                                     app.settings_form.editing = true;
                                     app.settings_form.input_buffer = if app.settings_form.focused_field == 0 {
                                         app.config.api_key.clone().unwrap_or_default()
@@ -1140,12 +1281,16 @@ pub async fn run_event_loop(
                                         app.config.image_detail_cache_ttl_minutes.to_string()
                                     } else if app.settings_form.focused_field == 8 {
                                         app.config.image_cache_ttl_minutes.to_string()
-                                    } else if app.settings_form.focused_field == 9 {
+                                    } else if app.settings_form.focused_field == 10 {
                                         app.config
                                             .download_history_file_path
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
+                                    } else if app.settings_form.focused_field == 11 {
+                                        String::new()
+                                    } else if app.settings_form.focused_field == 9 {
+                                        String::new()
                                     } else {
                                         app.config.model_search_cache_ttl_hours.to_string()
                                     };
@@ -1166,7 +1311,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < 9 { app.settings_form.focused_field += 1; }
+                                    if app.settings_form.focused_field < 11 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -1606,6 +1751,7 @@ pub async fn run_event_loop(
                             _ => {}
                         }
 
+                        }
                      }
                  }
              }
@@ -1644,19 +1790,28 @@ pub async fn run_event_loop(
                             }
                         }
                     }
-                     AppMessage::ImageDecoded(id, protocol, bytes) => {
+                     AppMessage::ImageDecoded(id, protocol, bytes, request_key) => {
                          app.image_cache.insert(id, protocol);
                          app.image_bytes_cache.insert(id, bytes);
+                         if !request_key.is_empty() {
+                             app.image_request_keys.insert(id, request_key);
+                         }
                      }
-                     AppMessage::ModelCoverDecoded(version_id, protocol, bytes) => {
+                     AppMessage::ModelCoverDecoded(version_id, protocol, bytes, request_key) => {
                          app.model_version_image_cache.insert(version_id, vec![protocol]);
                          app.model_version_image_bytes_cache.insert(version_id, vec![bytes]);
+                         if !request_key.is_empty() {
+                             app.model_version_image_request_keys.insert(version_id, request_key);
+                         }
                          app.model_version_image_failed.remove(&version_id);
                      }
-                     AppMessage::ModelCoversDecoded(version_id, protocols) => {
+                     AppMessage::ModelCoversDecoded(version_id, protocols, request_key) => {
                          let (protocols, bytes): (Vec<_>, Vec<_>) = protocols.into_iter().unzip();
                          app.model_version_image_cache.insert(version_id, protocols);
                          app.model_version_image_bytes_cache.insert(version_id, bytes);
+                         if !request_key.is_empty() {
+                             app.model_version_image_request_keys.insert(version_id, request_key);
+                         }
                          app.model_version_image_failed.remove(&version_id);
                      }
                      AppMessage::ModelCoverLoadFailed(version_id) => {

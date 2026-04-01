@@ -20,6 +20,39 @@ fn default_image_cache_ttl_minutes() -> u64 {
     0
 }
 
+fn default_media_quality() -> MediaQualityPreference {
+    MediaQualityPreference::Medium
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaQualityPreference {
+    Low,
+    Medium,
+    High,
+    Original,
+}
+
+impl MediaQualityPreference {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::Original => "Original",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::Original,
+            Self::Original => Self::Low,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
     pub api_key: Option<String>,
@@ -39,6 +72,8 @@ pub struct AppConfig {
     pub image_detail_cache_ttl_minutes: u64,
     #[serde(default = "default_image_cache_ttl_minutes")]
     pub image_cache_ttl_minutes: u64,
+    #[serde(default = "default_media_quality")]
+    pub media_quality: MediaQualityPreference,
 }
 
 impl AppConfig {
@@ -145,6 +180,7 @@ impl Default for AppConfig {
             image_search_cache_ttl_minutes: default_image_search_cache_ttl_minutes(),
             image_detail_cache_ttl_minutes: default_image_detail_cache_ttl_minutes(),
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
+            media_quality: default_media_quality(),
         }
     }
 }
