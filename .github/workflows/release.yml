@@ -153,3 +153,70 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.package.outputs.asset_path }}
+
+  build-linux-packages:
+    name: Build Linux packages
+    needs: validate-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: packages-x86_64-unknown-linux-gnu
+
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install --locked cargo-deb
+          cargo install --locked cargo-generate-rpm
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target x86_64-unknown-linux-gnu
+
+      - name: Build .deb package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo deb --no-build --target x86_64-unknown-linux-gnu
+
+      - name: Build .rpm package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-rpm --target x86_64-unknown-linux-gnu
+
+      - name: Collect package artifacts
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-gnu/debian/*.deb dist/
+          cp target/generate-rpm/*.rpm dist/
+          printf 'files<<EOF\n' >> "${GITHUB_OUTPUT}"
+          find dist -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' \) | sort >> "${GITHUB_OUTPUT}"
+          printf 'EOF\n' >> "${GITHUB_OUTPUT}"
+
+      - name: Upload packages to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: dist/*
+
+      - name: Upload packages to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.collect.outputs.files }}

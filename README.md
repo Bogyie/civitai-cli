@@ -46,6 +46,22 @@ Or:
 make build
 ```
 
+### Install from release packages
+
+Debian / Ubuntu:
+
+```bash
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli_1.0.0_amd64.deb
+sudo dpkg -i civitai-cli_1.0.0_amd64.deb
+```
+
+Fedora / RHEL / openSUSE:
+
+```bash
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli-1.0.0-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.0.0-1.x86_64.rpm
+```
+
 ## Screenshots
 
 ### Models

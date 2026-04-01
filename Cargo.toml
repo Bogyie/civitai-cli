@@ -2,6 +2,10 @@
 name = "civitai-cli"
 version = "1.0.0"
 edition = "2024"
+description = "Terminal-first Civitai browser and downloader for ComfyUI-focused workflows"
+license = "Apache-2.0"
+repository = "https://github.com/Bogyie/civitai-cli"
+homepage = "https://github.com/Bogyie/civitai-cli"
 
 [dependencies]
 anyhow = "1.0.102"
@@ -20,3 +24,31 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.50.0", features = ["full"] }
 toml = "1.1.0"
+
+[package.metadata.deb]
+maintainer = "Bogyie"
+copyright = "2026, Bogyie"
+license-file = ["LICENSE", "0"]
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+Terminal-first Civitai browser and downloader for ComfyUI-focused workflows.
+Includes model browsing, image feed browsing, bookmarking, caching, and download management.
+"""
+assets = [
+  ["target/release/civitai-cli", "usr/bin/civitai-cli", "755"],
+  ["README.md", "usr/share/doc/civitai-cli/README.md", "644"],
+  ["README-KO.md", "usr/share/doc/civitai-cli/README-KO.md", "644"],
+  ["LICENSE", "usr/share/doc/civitai-cli/LICENSE", "644"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Terminal-first Civitai browser and downloader"
+license = "Apache-2.0"
+assets = [
+  { source = "target/release/civitai-cli", dest = "/usr/bin/civitai-cli", mode = "755" },
+  { source = "README.md", dest = "/usr/share/doc/civitai-cli/README.md", mode = "644", doc = true },
+  { source = "README-KO.md", dest = "/usr/share/doc/civitai-cli/README-KO.md", mode = "644", doc = true },
+  { source = "LICENSE", dest = "/usr/share/licenses/civitai-cli/LICENSE", mode = "644", doc = true },
+]

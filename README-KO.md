@@ -46,6 +46,22 @@ cargo build
 make build
 ```
 
+### 릴리즈 패키지로 설치
+
+Debian / Ubuntu:
+
+```bash
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli_1.0.0_amd64.deb
+sudo dpkg -i civitai-cli_1.0.0_amd64.deb
+```
+
+Fedora / RHEL / openSUSE:
+
+```bash
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli-1.0.0-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.0.0-1.x86_64.rpm
+```
+
 ## 스크린샷
 
 ### Models
