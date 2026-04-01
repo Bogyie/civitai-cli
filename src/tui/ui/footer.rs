@@ -25,16 +25,16 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
 
     let shortcuts = match app.active_tab {
         MainTab::Models => {
-            "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download"
+            "[?] Help  [↑/↓ or j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download"
         }
         MainTab::Bookmarks => {
-            "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove"
+            "[?] Help  [↑/↓ or j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove"
         }
         MainTab::Images => {
-            "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+            "[?] Help  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
         MainTab::ImageBookmarks => {
-            "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+            "[?] Help  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
         MainTab::Downloads => {
             "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove"

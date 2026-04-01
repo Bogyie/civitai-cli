@@ -140,18 +140,16 @@ pub(super) fn handle_tab_key(
         KeyCode::Char('J') => {
             match app.active_tab {
                 MainTab::Models | MainTab::Bookmarks => app.select_next_file(),
-                MainTab::Images | MainTab::ImageBookmarks => app.select_next_image_model(),
                 MainTab::Downloads => app.select_next_history(),
-                MainTab::Settings => {}
+                MainTab::Images | MainTab::ImageBookmarks | MainTab::Settings => {}
             }
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('K') => {
             match app.active_tab {
                 MainTab::Models | MainTab::Bookmarks => app.select_previous_file(),
-                MainTab::Images | MainTab::ImageBookmarks => app.select_previous_image_model(),
                 MainTab::Downloads => app.select_previous_history(),
-                MainTab::Settings => {}
+                MainTab::Images | MainTab::ImageBookmarks | MainTab::Settings => {}
             }
             return Some(LoopControl::Continue);
         }
@@ -408,10 +406,6 @@ fn handle_left(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Images | MainTab::ImageBookmarks => {
-            app.select_previous();
-            ensure_selected_image_loaded(app);
-        }
         MainTab::Models | MainTab::Bookmarks => {
             app.select_previous_version();
             send_cover_priority(app);
@@ -438,16 +432,6 @@ fn handle_right(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Images | MainTab::ImageBookmarks => {
-            app.select_next();
-            if app.active_tab == MainTab::Images
-                && app.can_request_more_images(5)
-                && let Some(next_page) = app.next_image_feed_page()
-            {
-                request_image_feed_if_needed(app, Some(next_page));
-            }
-            ensure_selected_image_loaded(app);
-        }
         MainTab::Models | MainTab::Bookmarks => {
             app.select_next_version();
             send_cover_priority(app);
@@ -560,7 +544,9 @@ fn handle_down(app: &mut App) {
                 app.select_next_download();
             }
         }
-        _ => {}
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => {
+            handle_next_selection(app);
+        }
     }
 }
 
@@ -578,7 +564,9 @@ fn handle_up(app: &mut App) {
                 app.select_previous_download();
             }
         }
-        _ => {}
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => {
+            handle_previous_selection(app);
+        }
     }
 }
 
