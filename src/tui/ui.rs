@@ -189,6 +189,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
         MainTab::Images => {
+            f.render_widget(Clear, chunks[1]);
             let image_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -205,6 +206,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
         MainTab::ImageBookmarks => {
+            f.render_widget(Clear, chunks[1]);
             let image_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -915,6 +917,7 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let inner_area = block.inner(area);
     f.render_widget(block, area);
+    f.render_widget(Clear, inner_area);
 
     if let Some(protocol) = app.image_cache.get_mut(&img.id) {
         let image_widget = StatefulImage::new();
@@ -926,15 +929,15 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Image Details ");
-
     let Some(img) = app.selected_image_in_active_view() else {
-        f.render_widget(Paragraph::new("No metadata available.").block(block), area);
+        f.render_widget(
+            Paragraph::new("No metadata available.")
+                .block(Block::default().borders(Borders::ALL).title(" Image ")),
+            area,
+        );
         return;
     };
 
-    let inner = block.inner(area);
-    f.render_widget(&block, area);
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -944,7 +947,7 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(4),
             Constraint::Min(6),
         ])
-        .split(inner);
+        .split(area);
 
     let dimensions = match (img.width, img.height) {
         (Some(width), Some(height)) => format!("{width}x{height}"),

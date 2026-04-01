@@ -1343,6 +1343,40 @@ pub async fn spawn_worker(
                         }
                     });
                 }
+                WorkerCommand::LoadImage(item) => {
+                    let tx_msg_clone = tx_msg.clone();
+                    let req_client = req_client.clone();
+                    let picker = picker.clone();
+                    let debug_config = downloader_config.clone();
+                    let image_bytes_cache_root = image_bytes_cache_path.lock().await.clone();
+                    let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
+                    let use_cache = use_search_cache();
+                    tokio::spawn(async move {
+                        if let Some(image_url) = image_media_url(&item) {
+                            load_feed_image(
+                                item.id,
+                                image_url,
+                                req_client,
+                                picker,
+                                tx_msg_clone,
+                                Arc::new(Semaphore::new(1)),
+                                debug_config,
+                                image_bytes_cache_root,
+                                image_cache_ttl_minutes,
+                                use_cache,
+                            )
+                            .await;
+                        }
+                    });
+                }
+                WorkerCommand::RebuildImageProtocol(image_id, bytes) => {
+                    if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+                        let protocol = picker.new_resize_protocol(dyn_img);
+                        let _ = tx_msg
+                            .send(AppMessage::ImageDecoded(image_id, protocol, bytes))
+                            .await;
+                    }
+                }
                 WorkerCommand::SearchModels(
                     opts,
                     preferred_model_id,
@@ -2504,7 +2538,7 @@ async fn load_feed_image(
                 if let Ok(dyn_img) = image::load_from_memory(&bytes) {
                     let protocol = picker.new_resize_protocol(dyn_img);
                     let _ = tx_msg
-                        .send(AppMessage::ImageDecoded(image_id, protocol))
+                        .send(AppMessage::ImageDecoded(image_id, protocol, bytes))
                         .await;
                     return;
                 }
@@ -2533,7 +2567,7 @@ async fn load_feed_image(
                 }
                 let protocol = picker.new_resize_protocol(dyn_img);
                 let _ = tx_msg
-                    .send(AppMessage::ImageDecoded(image_id, protocol))
+                    .send(AppMessage::ImageDecoded(image_id, protocol, bytes.to_vec()))
                     .await;
             } else {
                 debug_fetch_log(

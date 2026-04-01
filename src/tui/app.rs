@@ -274,7 +274,7 @@ impl SearchFormState {
 
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
-    ImageDecoded(u64, StatefulProtocol),
+    ImageDecoded(u64, StatefulProtocol, Vec<u8>),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
     ModelCoversDecoded(u64, Vec<StatefulProtocol>), // version_id, protocols
@@ -342,6 +342,8 @@ pub struct InterruptedDownloadSession {
 
 pub enum WorkerCommand {
     FetchImages(ImageSearchState, Option<u32>),
+    LoadImage(ImageItem),
+    RebuildImageProtocol(u64, Vec<u8>),
     SearchModels(
         ModelSearchState,
         Option<u64>,
@@ -403,6 +405,7 @@ pub struct App {
     pub selected_index: usize,
     pub selected_image_bookmark_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
+    pub image_bytes_cache: HashMap<u64, Vec<u8>>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
     pub image_feed_next_page: Option<u32>,
@@ -511,6 +514,7 @@ impl App {
             selected_index: 0,
             selected_image_bookmark_index: 0,
             image_cache: HashMap::new(),
+            image_bytes_cache: HashMap::new(),
             image_feed_loaded: false,
             image_feed_loading: false,
             image_feed_next_page: None,
@@ -656,6 +660,9 @@ impl App {
         mut images: Vec<ImageItem>,
         next_page: Option<u32>,
     ) {
+        let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
+        self.image_cache.retain(|id, _| new_ids.contains(id));
+        self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
         self.image_feed_next_page = next_page;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loaded = true;

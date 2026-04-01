@@ -73,6 +73,35 @@ pub async fn run_event_loop(
     app: &mut App,
     mut rx: mpsc::Receiver<AppMessage>,
 ) -> Result<()> {
+    let reload_selected_image = |app: &mut App| {
+        if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = app.selected_image_in_active_view().cloned() {
+            if let Some(tx) = &app.tx {
+                if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
+                    let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
+                } else {
+                    app.image_cache.remove(&image.id);
+                    let _ = tx.try_send(WorkerCommand::LoadImage(image));
+                }
+            }
+        }
+    };
+
+    let ensure_selected_image_loaded = |app: &mut App| {
+        if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = app.selected_image_in_active_view().cloned()
+            && !app.image_cache.contains_key(&image.id)
+        {
+            if let Some(tx) = &app.tx {
+                let _ = tx.try_send(WorkerCommand::LoadImage(image));
+            }
+        }
+    };
+
     let send_cover_priority = |app: &mut App| {
         if let Some((_, version_id, cover_url)) = app.selected_model_version_with_cover_url() {
             if let Some(tx) = &app.tx {
@@ -471,6 +500,7 @@ pub async fn run_event_loop(
                             match key.code {
                                 KeyCode::Esc => {
                                     app.mode = AppMode::Browsing;
+                                    reload_selected_image(app);
                                 }
                                 KeyCode::Up => {
                                     if app.image_search_form.mode == SearchFormMode::Builder {
@@ -581,6 +611,7 @@ pub async fn run_event_loop(
                                     app.mode = AppMode::Browsing;
                                     app.images.clear();
                                     app.image_cache.clear();
+                                    app.image_bytes_cache.clear();
                                     app.selected_index = 0;
                                     app.image_feed_loaded = false;
                                     app.image_feed_loading = false;
@@ -963,11 +994,13 @@ pub async fn run_event_loop(
                                 app.active_tab = next_tab;
                                 if prev_tab != next_tab && next_tab == MainTab::Images {
                                     request_image_feed_if_needed(app, None);
+                                    ensure_selected_image_loaded(app);
                                 }
                                 if app.active_tab == MainTab::Bookmarks {
                                     app.clamp_bookmark_selection();
                                 } else if app.active_tab == MainTab::ImageBookmarks {
                                     app.clamp_image_bookmark_selection();
+                                    ensure_selected_image_loaded(app);
                                 }
                             }
                             KeyCode::Char('1') => {
@@ -983,10 +1016,12 @@ pub async fn run_event_loop(
                                 if prev_tab != MainTab::Images {
                                     request_image_feed_if_needed(app, None);
                                 }
+                                ensure_selected_image_loaded(app);
                             }
                             KeyCode::Char('4') => {
                                 app.active_tab = MainTab::ImageBookmarks;
                                 app.clamp_image_bookmark_selection();
+                                ensure_selected_image_loaded(app);
                             }
                             KeyCode::Char('5') => {
                                 app.active_tab = MainTab::Downloads;
@@ -1109,6 +1144,7 @@ pub async fn run_event_loop(
                                             request_image_feed_if_needed(app, Some(next_page));
                                         }
                                     }
+                                    ensure_selected_image_loaded(app);
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                         send_cover_prefetch(app);
@@ -1126,6 +1162,7 @@ pub async fn run_event_loop(
                                     }
                                 } else {
                                     app.select_previous();
+                                    ensure_selected_image_loaded(app);
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                         send_cover_prefetch(app);
@@ -1536,8 +1573,9 @@ pub async fn run_event_loop(
                             }
                         }
                     }
-                     AppMessage::ImageDecoded(id, protocol) => {
+                     AppMessage::ImageDecoded(id, protocol, bytes) => {
                          app.image_cache.insert(id, protocol);
+                         app.image_bytes_cache.insert(id, bytes);
                      }
                      AppMessage::ModelCoverDecoded(version_id, protocol) => {
                          app.model_version_image_cache.entry(version_id).or_insert_with(|| vec![protocol]);
