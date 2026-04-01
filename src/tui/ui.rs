@@ -23,7 +23,7 @@ use crate::tui::app::{
 };
 use crate::tui::image::{
     comfy_workflow_json, comfy_workflow_node_count, image_prompt, image_stats, image_tags,
-    image_username,
+    image_used_models, image_username,
 };
 use crate::tui::model::{
     build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
@@ -812,6 +812,7 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(4),
             Constraint::Length(if app.image_detail_expanded { 8 } else { 5 }),
             Constraint::Length(4),
+            Constraint::Length(6),
             Constraint::Min(6),
         ])
         .split(area);
@@ -860,13 +861,24 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             )
         })
         .unwrap_or_else(|| "No Comfy workflow metadata".to_string());
+    let used_models = image_used_models(img);
     let tags = image_tags(img);
     let tag_lines = if tags.is_empty() {
         vec![Line::from("<none>")]
     } else {
-        wrap_joined_tags(&tags, sections[4].width.saturating_sub(2) as usize, 2)
+        wrap_joined_tags(&tags, sections[5].width.saturating_sub(2) as usize, 2)
     };
     let tag_count_value = format!("{} tag(s)", tags.len());
+    let used_model_lines = if used_models.is_empty() {
+        vec![Line::from("<none>")]
+    } else {
+        wrap_text_lines(
+            &used_models.join("\n"),
+            sections[4].width.saturating_sub(2) as usize,
+            sections[4].height.saturating_sub(2) as usize,
+        )
+    };
+    let used_model_count = format!("{} item(s)", used_models.len());
     let image_link = img.image_page_url();
     let advanced_json = img
         .metadata
@@ -942,13 +954,23 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             .wrap(Wrap { trim: true }),
         sections[3],
     );
+    f.render_widget(
+        Paragraph::new({
+            let mut lines = vec![Line::from(model_key_value_spans("Used", &used_model_count))];
+            lines.extend(used_model_lines);
+            lines
+        })
+        .block(Block::default().borders(Borders::ALL).title(" Models "))
+        .wrap(Wrap { trim: true }),
+        sections[4],
+    );
 
     if app.image_advanced_visible {
         tag_block_lines.push(Line::from(""));
         tag_block_lines.extend(wrap_text_lines(
             &advanced_json,
-            sections[4].width.saturating_sub(2) as usize,
-            sections[4].height.saturating_sub(5) as usize,
+            sections[5].width.saturating_sub(2) as usize,
+            sections[5].height.saturating_sub(5) as usize,
         ));
     }
     f.render_widget(
@@ -959,7 +981,7 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 " Tags "
             }))
             .wrap(Wrap { trim: false }),
-        sections[4],
+        sections[5],
     );
 }
 

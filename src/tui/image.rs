@@ -1,5 +1,6 @@
 use civitai_cli::sdk::SearchImageHit;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedImageStats {
@@ -58,6 +59,30 @@ pub fn image_tags(hit: &SearchImageHit) -> Vec<String> {
         .filter_map(|value| value.clone())
         .filter(|value| !value.trim().is_empty())
         .collect()
+}
+
+pub fn image_used_models(hit: &SearchImageHit) -> Vec<String> {
+    let mut values = BTreeSet::new();
+
+    if let Some(base_model) = hit.base_model.as_ref().filter(|value| !value.trim().is_empty()) {
+        values.insert(format!("Base: {base_model}"));
+    }
+
+    if !hit.model_version_ids.is_empty() {
+        let joined = hit
+            .model_version_ids
+            .iter()
+            .map(|value| format!("v{value}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        values.insert(format!("Linked versions: {joined}"));
+    }
+
+    if let Some(metadata) = hit.metadata.as_ref() {
+        collect_model_artifacts(metadata, None, &mut values);
+    }
+
+    values.into_iter().collect()
 }
 
 pub fn comfy_workflow_value(hit: &SearchImageHit) -> Option<Value> {
@@ -170,5 +195,54 @@ fn value_u64(value: Option<&Value>) -> u64 {
         Some(Value::Number(raw)) => raw.as_u64().unwrap_or_default(),
         Some(Value::String(raw)) => raw.parse::<u64>().unwrap_or_default(),
         _ => 0,
+    }
+}
+
+fn collect_model_artifacts(value: &Value, key_hint: Option<&str>, values: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                collect_model_artifacts(nested, Some(key), values);
+            }
+        }
+        Value::Array(items) => {
+            for nested in items {
+                collect_model_artifacts(nested, key_hint, values);
+            }
+        }
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return;
+            }
+
+            let lower = trimmed.to_ascii_lowercase();
+            let key = key_hint.unwrap_or_default().to_ascii_lowercase();
+            let looks_like_model_file = lower.ends_with(".safetensors")
+                || lower.ends_with(".ckpt")
+                || lower.ends_with(".pt")
+                || lower.ends_with(".pth")
+                || lower.ends_with(".bin");
+            let key_suggests_model = key.contains("lora")
+                || key.contains("model")
+                || key.contains("ckpt")
+                || key.contains("unet")
+                || key.contains("vae")
+                || key.contains("clip");
+
+            if looks_like_model_file || key_suggests_model {
+                let label = match key.as_str() {
+                    key if key.contains("lora") => "LoRA",
+                    key if key.contains("vae") => "VAE",
+                    key if key.contains("clip") => "CLIP",
+                    key if key.contains("unet") => "UNet",
+                    key if key.contains("checkpoint") || key.contains("ckpt") => "Checkpoint",
+                    key if key.contains("model") => "Model",
+                    _ => "Asset",
+                };
+                values.insert(format!("{label}: {trimmed}"));
+            }
+        }
+        _ => {}
     }
 }
