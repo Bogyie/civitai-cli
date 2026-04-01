@@ -457,6 +457,7 @@ pub struct App {
 
     pub status: String,
     pub last_error: Option<String>,
+    pub show_help_modal: bool,
     pub show_status_modal: bool,
     pub show_exit_confirm_modal: bool,
     pub show_resume_download_modal: bool,
@@ -572,6 +573,7 @@ impl App {
             show_resume_download_modal,
             status: "Initializing App...".to_string(),
             last_error: None,
+            show_help_modal: false,
             show_status_modal: false,
             show_exit_confirm_modal: false,
             bookmark_path_prompt_action: None,

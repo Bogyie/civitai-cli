@@ -878,6 +878,16 @@ pub async fn run_event_loop(
                             continue;
                         }
 
+                        if app.show_help_modal {
+                            match key.code {
+                                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Enter => {
+                                    app.show_help_modal = false;
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if app.show_bookmark_confirm_modal {
                             match key.code {
                                 KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -1745,11 +1755,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('?') => {
-                                if app.active_tab == MainTab::Models {
-                                    app.last_error = None;
-                                    app.status = "Model keys\nj/k move  g/G top/bottom  Ctrl-u/Ctrl-d jump  / quick search  f filters  v details  [ ] version  d download  b bookmark  r refresh  c clear cache".into();
-                                    app.show_status_modal = true;
-                                }
+                                app.show_help_modal = true;
                             }
                             KeyCode::Char('e') => {
                                     if app.active_tab == MainTab::Bookmarks {

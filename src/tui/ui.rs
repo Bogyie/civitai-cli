@@ -236,6 +236,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_status_modal(f, app);
     }
 
+    if app.show_help_modal {
+        draw_help_modal(f, app);
+    }
+
     if app.show_bookmark_confirm_modal {
         draw_bookmark_confirm_modal(f, app);
     }
@@ -2256,6 +2260,146 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(80, 60, f.area());
     f.render_widget(Clear, area);
     f.render_widget(p, area);
+}
+
+fn draw_help_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(72, 60, f.area());
+    let block = Block::default().borders(Borders::ALL).title(" Keyboard Help ");
+    f.render_widget(Clear, area);
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(6),
+            Constraint::Length(7),
+            Constraint::Min(4),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let title = match app.active_tab {
+        MainTab::Models => "Models",
+        MainTab::Bookmarks => "Bookmarks",
+        MainTab::Images => "Image Feed",
+        MainTab::ImageBookmarks => "Image Bookmarks",
+        MainTab::Downloads => "Downloads",
+        MainTab::Settings => "Settings",
+    };
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Tab ", Style::default().fg(Color::DarkGray)),
+            Span::styled(title, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(Span::styled(
+            "Global navigation is consistent across tabs. Context actions change by tab.",
+            help_text_style(),
+        )),
+    ]);
+    f.render_widget(header, sections[0]);
+
+    let nav = Paragraph::new(match app.active_tab {
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+            Line::from(" [1-6] Switch tabs"),
+            Line::from(" [j/k] Move selection"),
+            Line::from(" [g/G] First/Last item"),
+            Line::from(" [Ctrl-u / Ctrl-d] Jump faster"),
+        ],
+        MainTab::Downloads | MainTab::Settings => vec![
+            Line::from(" [1-6] Switch tabs"),
+            Line::from(" [j/k] Move selection"),
+            Line::from(" [Esc] Close modal / cancel"),
+            Line::from(" [?] Toggle this help"),
+        ],
+    })
+    .block(Block::default().borders(Borders::ALL).title(" Navigation "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(nav, sections[1]);
+
+    let search = Paragraph::new(match app.active_tab {
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+            Line::from(" [/] Quick search"),
+            Line::from(" [f] Open filter builder"),
+            Line::from(" [Enter] Apply search / run selected action"),
+            Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle"),
+            Line::from(" Text sections accept typing directly"),
+        ],
+        MainTab::Downloads => vec![
+            Line::from(" No search in this tab"),
+            Line::from(" Focus stays on active queue or history"),
+            Line::from(" Actions run against current selection"),
+        ],
+        MainTab::Settings => vec![
+            Line::from(" [Enter] Edit selected text field"),
+            Line::from(" [h/l] Cycle selected enum action"),
+            Line::from(" While editing: type text, [Enter] save, [Esc] cancel"),
+        ],
+    })
+    .block(Block::default().borders(Borders::ALL).title(" Search & Input "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(search, sections[2]);
+
+    let actions_lines = match app.active_tab {
+        MainTab::Models => vec![
+            Line::from(" [v] Toggle detail panel"),
+            Line::from(" [←/→] Change version"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change file"),
+            Line::from(" [d] Download selected file"),
+            Line::from(" [b] Bookmark selected model"),
+            Line::from(" [r] Refresh current search  [c] Clear model search cache"),
+        ],
+        MainTab::Bookmarks => vec![
+            Line::from(" [v] Toggle detail panel"),
+            Line::from(" [←/→] Change version"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change file"),
+            Line::from(" [d] Download selected file"),
+            Line::from(" [b] Remove selected bookmark"),
+            Line::from(" [e] Export bookmarks  [i] Import bookmarks"),
+        ],
+        MainTab::Images => vec![
+            Line::from(" [d] Download current image"),
+            Line::from(" [b] Bookmark current image"),
+            Line::from(" [m] Expand prompt/details"),
+            Line::from(" [a] Toggle advanced metadata"),
+            Line::from(" [o] Copy image page link"),
+            Line::from(" [w] Copy workflow  [W] Save workflow JSON"),
+        ],
+        MainTab::ImageBookmarks => vec![
+            Line::from(" [d] Download current image"),
+            Line::from(" [b] Remove current bookmark"),
+            Line::from(" [m] Expand prompt/details"),
+            Line::from(" [a] Toggle advanced metadata"),
+            Line::from(" [o] Copy image page link"),
+            Line::from(" [w] Copy workflow  [W] Save workflow JSON"),
+        ],
+        MainTab::Downloads => vec![
+            Line::from(" [p] Pause / resume active download"),
+            Line::from(" [c] Cancel active download"),
+            Line::from(" [r] Resume from selected history entry"),
+            Line::from(" [d] Remove history entry"),
+            Line::from(" [D] Remove history entry and file"),
+        ],
+        MainTab::Settings => vec![
+            Line::from(" [j/k] Move between controls"),
+            Line::from(" [Enter] Edit or run selected control"),
+            Line::from(" [h/l] Cycle media quality"),
+            Line::from(" Clear All Caches keeps bookmarks, tags, settings, and history"),
+        ],
+    };
+    let actions = Paragraph::new(actions_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Context Actions "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(actions, sections[3]);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " [Esc] Close  [?] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(footer, sections[4]);
 }
 
 fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
