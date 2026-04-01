@@ -2,7 +2,10 @@ use crate::api::ImageItem;
 use civitai_cli::sdk::{
     ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType, SearchModelHit as Model,
 };
-use crate::tui::model::{model_name, model_versions, preview_image_url, selected_version};
+use crate::tui::model::{
+    default_base_model, model_metrics, model_name, model_versions, preview_image_url,
+    selected_version,
+};
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
@@ -79,6 +82,7 @@ impl SearchPeriod {
     }
 }
 
+#[derive(Clone)]
 pub struct SearchFormState {
     pub query: String,
     pub mode: SearchFormMode,
@@ -360,6 +364,8 @@ pub struct App {
     pub mode: AppMode,
     pub config: crate::config::AppConfig,
     pub search_form: SearchFormState,
+    pub bookmark_search_form: SearchFormState,
+    pub bookmark_search_form_draft: SearchFormState,
     pub image_search_form: ImageSearchFormState,
     pub settings_form: SettingsFormState,
 
@@ -468,6 +474,8 @@ impl App {
             mode: AppMode::Browsing,
             config,
             search_form: SearchFormState::new(),
+            bookmark_search_form: SearchFormState::new(),
+            bookmark_search_form_draft: SearchFormState::new(),
             image_search_form: ImageSearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
@@ -1105,35 +1113,46 @@ impl App {
     }
 
     pub fn visible_bookmarks(&self) -> Vec<Model> {
-        let query = self.bookmark_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            self.bookmarks.clone()
-        } else {
-            self.bookmarks
-                .iter()
-                .filter(|model| model_name(model).to_ascii_lowercase().contains(&query))
-                .cloned()
-                .collect()
-        }
+        let query = self.bookmark_search_form.query.trim().to_ascii_lowercase();
+        let mut items = self
+            .bookmarks
+            .iter()
+            .filter(|model| {
+                bookmark_matches_query(model, &query)
+                    && bookmark_matches_type(model, &self.bookmark_search_form.selected_types)
+                    && bookmark_matches_base_model(
+                        model,
+                        &self.bookmark_search_form.selected_base_models,
+                    )
+                    && bookmark_matches_period(
+                        model,
+                        self.bookmark_search_form
+                            .periods
+                            .get(self.bookmark_search_form.selected_period),
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        sort_bookmarks(
+            &mut items,
+            self.bookmark_search_form
+                .sort_options
+                .get(self.bookmark_search_form.selected_sort)
+                .unwrap_or(&ModelSearchSortBy::Relevance),
+        );
+        items
     }
 
     pub fn visible_bookmark_indices(&self) -> Vec<usize> {
-        let query = self.bookmark_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            (0..self.bookmarks.len()).collect()
-        } else {
-            self.bookmarks
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, model)| {
-                    if model_name(model).to_ascii_lowercase().contains(&query) {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        }
+        self.visible_bookmarks()
+            .into_iter()
+            .filter_map(|visible| {
+                self.bookmarks
+                    .iter()
+                    .position(|model| model.id == visible.id)
+            })
+            .collect()
     }
 
     pub fn clamp_bookmark_selection(&mut self) {
@@ -1268,9 +1287,10 @@ impl App {
     }
 
     pub fn begin_bookmark_search(&mut self) {
-        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.bookmark_search_form_draft = self.bookmark_search_form.clone();
+        self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::SearchBookmarks;
-        self.status = "Search bookmarks. Enter apply, Esc cancel".to_string();
+        self.status = "Filter bookmarks. Enter apply, Esc cancel".to_string();
     }
 
     pub fn begin_bookmark_export_prompt(&mut self) {
@@ -1469,23 +1489,26 @@ impl App {
     }
 
     pub fn apply_bookmark_query(&mut self) {
-        self.bookmark_query = self.bookmark_query_draft.clone();
+        self.bookmark_search_form = self.bookmark_search_form_draft.clone();
+        self.bookmark_query = self.bookmark_search_form.query.clone();
+        self.bookmark_query_draft = self.bookmark_query.clone();
         self.mode = AppMode::Browsing;
         self.clamp_bookmark_selection();
         self.status = format!(
-            "Bookmark query applied: {}",
-            if self.bookmark_query.is_empty() {
+            "Bookmark filter applied: {}",
+            if self.bookmark_search_form.query.is_empty() {
                 "<all>".to_string()
             } else {
-                self.bookmark_query.clone()
+                self.bookmark_search_form.query.clone()
             }
         );
     }
 
     pub fn cancel_bookmark_search(&mut self) {
-        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.bookmark_search_form_draft = self.bookmark_search_form.clone();
+        self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::Browsing;
-        self.status = "Bookmark search cancelled.".to_string();
+        self.status = "Bookmark filter cancelled.".to_string();
     }
 
     pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {
@@ -1606,6 +1629,113 @@ fn period_to_created_at(period: &str) -> Option<String> {
     };
 
     Some(format!("{start}-{end}"))
+}
+
+fn bookmark_matches_query(model: &Model, query: &str) -> bool {
+    query.is_empty() || model_name(model).to_ascii_lowercase().contains(query)
+}
+
+fn bookmark_matches_type(model: &Model, selected_types: &BTreeSet<ModelType>) -> bool {
+    if selected_types.is_empty() {
+        return true;
+    }
+
+    let Some(model_type) = model.r#type.as_deref() else {
+        return false;
+    };
+    let normalized = model_type.to_ascii_lowercase();
+    selected_types.iter().any(|item| {
+        normalized == item.as_query_value().to_ascii_lowercase()
+            || normalized == item.label().to_ascii_lowercase()
+    })
+}
+
+fn bookmark_matches_base_model(
+    model: &Model,
+    selected_base_models: &BTreeSet<ModelBaseModel>,
+) -> bool {
+    if selected_base_models.is_empty() {
+        return true;
+    }
+
+    let Some(base_model) = default_base_model(model) else {
+        return false;
+    };
+    let normalized = base_model.to_ascii_lowercase();
+    selected_base_models.iter().any(|item| {
+        normalized == item.as_query_value().to_ascii_lowercase()
+            || normalized == item.label().to_ascii_lowercase()
+    })
+}
+
+fn bookmark_matches_period(model: &Model, period: Option<&SearchPeriod>) -> bool {
+    let Some(period) = period else {
+        return true;
+    };
+    if *period == SearchPeriod::AllTime {
+        return true;
+    }
+
+    let Some(model_ts) = model.last_version_at_unix else {
+        return true;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs() as i64;
+    let window = match period {
+        SearchPeriod::Day => 24 * 60 * 60,
+        SearchPeriod::Week => 7 * 24 * 60 * 60,
+        SearchPeriod::Month => 30 * 24 * 60 * 60,
+        SearchPeriod::Year => 365 * 24 * 60 * 60,
+        SearchPeriod::AllTime => return true,
+    };
+
+    model_ts >= now.saturating_sub(window)
+}
+
+fn sort_bookmarks(items: &mut [Model], sort_by: &ModelSearchSortBy) {
+    match sort_by {
+        ModelSearchSortBy::Relevance => {}
+        ModelSearchSortBy::HighestRated => items.sort_by(|a, b| {
+            model_metrics(b)
+                .rating
+                .total_cmp(&model_metrics(a).rating)
+                .then_with(|| model_metrics(b).rating_count.cmp(&model_metrics(a).rating_count))
+        }),
+        ModelSearchSortBy::MostDownloaded => items.sort_by(|a, b| {
+            model_metrics(b)
+                .download_count
+                .cmp(&model_metrics(a).download_count)
+        }),
+        ModelSearchSortBy::MostLiked => items.sort_by(|a, b| {
+            model_metrics(b)
+                .favorite_count
+                .cmp(&model_metrics(a).favorite_count)
+                .then_with(|| model_metrics(b).thumbs_up_count.cmp(&model_metrics(a).thumbs_up_count))
+        }),
+        ModelSearchSortBy::MostDiscussed => items.sort_by(|a, b| {
+            model_metrics(b)
+                .comment_count
+                .cmp(&model_metrics(a).comment_count)
+        }),
+        ModelSearchSortBy::MostCollected => items.sort_by(|a, b| {
+            model_metrics(b)
+                .collected_count
+                .cmp(&model_metrics(a).collected_count)
+        }),
+        ModelSearchSortBy::MostBuzz => items.sort_by(|a, b| {
+            model_metrics(b)
+                .tipped_amount_count
+                .cmp(&model_metrics(a).tipped_amount_count)
+        }),
+        ModelSearchSortBy::Newest => items.sort_by(|a, b| {
+            b.last_version_at_unix
+                .unwrap_or_default()
+                .cmp(&a.last_version_at_unix.unwrap_or_default())
+        }),
+        ModelSearchSortBy::Custom(_) => {}
+    }
 }
 
 fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {

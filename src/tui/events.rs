@@ -290,6 +290,159 @@ pub async fn run_event_loop(
                             continue; // Skip global navigation if form is active
                         }
 
+                        if app.mode == AppMode::SearchBookmarks {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.cancel_bookmark_search();
+                                }
+                                KeyCode::Enter => {
+                                    app.apply_bookmark_query();
+                                }
+                                KeyCode::Up => {
+                                    if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
+                                        app.bookmark_search_form_draft.focused_section =
+                                            match app.bookmark_search_form_draft.focused_section {
+                                                SearchFormSection::Query => SearchFormSection::BaseModel,
+                                                SearchFormSection::Sort => SearchFormSection::Query,
+                                                SearchFormSection::Period => SearchFormSection::Sort,
+                                                SearchFormSection::Type => SearchFormSection::Period,
+                                                SearchFormSection::BaseModel => SearchFormSection::Type,
+                                            };
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
+                                        app.bookmark_search_form_draft.focused_section =
+                                            match app.bookmark_search_form_draft.focused_section {
+                                                SearchFormSection::Query => SearchFormSection::Sort,
+                                                SearchFormSection::Sort => SearchFormSection::Period,
+                                                SearchFormSection::Period => SearchFormSection::Type,
+                                                SearchFormSection::Type => SearchFormSection::BaseModel,
+                                                SearchFormSection::BaseModel => SearchFormSection::Query,
+                                            };
+                                    }
+                                }
+                                KeyCode::Left => {
+                                    if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
+                                        match app.bookmark_search_form_draft.focused_section {
+                                            SearchFormSection::Sort => {
+                                                if app.bookmark_search_form_draft.selected_sort > 0 {
+                                                    app.bookmark_search_form_draft.selected_sort -= 1;
+                                                } else {
+                                                    app.bookmark_search_form_draft.selected_sort =
+                                                        app.bookmark_search_form_draft.sort_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::Period => {
+                                                if app.bookmark_search_form_draft.selected_period > 0 {
+                                                    app.bookmark_search_form_draft.selected_period -= 1;
+                                                } else {
+                                                    app.bookmark_search_form_draft.selected_period =
+                                                        app.bookmark_search_form_draft.periods.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::Type => {
+                                                if app.bookmark_search_form_draft.type_cursor > 0 {
+                                                    app.bookmark_search_form_draft.type_cursor -= 1;
+                                                } else {
+                                                    app.bookmark_search_form_draft.type_cursor =
+                                                        app.bookmark_search_form_draft.type_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                if app.bookmark_search_form_draft.base_cursor > 0 {
+                                                    app.bookmark_search_form_draft.base_cursor -= 1;
+                                                } else {
+                                                    app.bookmark_search_form_draft.base_cursor =
+                                                        app.bookmark_search_form_draft.base_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
+                                        match app.bookmark_search_form_draft.focused_section {
+                                            SearchFormSection::Sort => {
+                                                app.bookmark_search_form_draft.selected_sort =
+                                                    (app.bookmark_search_form_draft.selected_sort + 1)
+                                                        % app.bookmark_search_form_draft.sort_options.len();
+                                            }
+                                            SearchFormSection::Period => {
+                                                app.bookmark_search_form_draft.selected_period =
+                                                    (app.bookmark_search_form_draft.selected_period + 1)
+                                                        % app.bookmark_search_form_draft.periods.len();
+                                            }
+                                            SearchFormSection::Type => {
+                                                app.bookmark_search_form_draft.type_cursor =
+                                                    (app.bookmark_search_form_draft.type_cursor + 1)
+                                                        % app.bookmark_search_form_draft.type_options.len();
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                app.bookmark_search_form_draft.base_cursor =
+                                                    (app.bookmark_search_form_draft.base_cursor + 1)
+                                                        % app.bookmark_search_form_draft.base_options.len();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('f') => {
+                                    app.bookmark_search_form_draft.begin_builder();
+                                }
+                                KeyCode::Char(' ') => {
+                                    if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
+                                        match app.bookmark_search_form_draft.focused_section {
+                                            SearchFormSection::Type => {
+                                                if let Some(item) = app
+                                                    .bookmark_search_form_draft
+                                                    .type_options
+                                                    .get(app.bookmark_search_form_draft.type_cursor)
+                                                    .cloned()
+                                                {
+                                                    if !app.bookmark_search_form_draft.selected_types.insert(item.clone()) {
+                                                        app.bookmark_search_form_draft.selected_types.remove(&item);
+                                                    }
+                                                }
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                if let Some(item) = app
+                                                    .bookmark_search_form_draft
+                                                    .base_options
+                                                    .get(app.bookmark_search_form_draft.base_cursor)
+                                                    .cloned()
+                                                {
+                                                    if !app
+                                                        .bookmark_search_form_draft
+                                                        .selected_base_models
+                                                        .insert(item.clone())
+                                                    {
+                                                        app.bookmark_search_form_draft
+                                                            .selected_base_models
+                                                            .remove(&item);
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
+                                        app.bookmark_search_form_draft.query.push(c);
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
+                                        app.bookmark_search_form_draft.query.pop();
+                                    }
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if app.mode == AppMode::SearchImages {
                             match key.code {
                                 KeyCode::Esc => {
@@ -395,25 +548,6 @@ pub async fn run_event_loop(
                                     } else if app.image_search_form.focused_field == 4 {
                                         app.image_search_form.tag_text.pop();
                                     }
-                                }
-                                _ => {}
-                            }
-                            continue;
-                        }
-
-                        if app.mode == AppMode::SearchBookmarks {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.cancel_bookmark_search();
-                                }
-                                KeyCode::Enter => {
-                                    app.apply_bookmark_query();
-                                }
-                                KeyCode::Char(c) => {
-                                    app.bookmark_query_draft.push(c);
-                                }
-                                KeyCode::Backspace => {
-                                    app.bookmark_query_draft.pop();
                                 }
                                 _ => {}
                             }
@@ -1119,6 +1253,7 @@ pub async fn run_event_loop(
                                     app.begin_image_bookmark_search();
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.begin_bookmark_search();
+                                    app.bookmark_search_form_draft.begin_quick_search();
                                 }
                             }
                             KeyCode::Char('f') => {
@@ -1126,6 +1261,10 @@ pub async fn run_event_loop(
                                     app.mode = AppMode::SearchForm;
                                     app.search_form.begin_builder();
                                     app.status = "Search builder. Tab section, arrows move, Space toggle, Enter apply.".into();
+                                } else if app.active_tab == MainTab::Bookmarks {
+                                    app.begin_bookmark_search();
+                                    app.bookmark_search_form_draft.begin_builder();
+                                    app.status = "Bookmark filters. Arrows move, Space toggle, Enter apply.".into();
                                 }
                             }
                             KeyCode::Char('g') => {

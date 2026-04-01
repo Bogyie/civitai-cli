@@ -19,7 +19,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::tui::app::{
     App, AppMode, DownloadHistoryStatus, DownloadState, MainTab, SearchFormMode,
-    SearchFormSection,
+    SearchFormSection, SearchFormState,
 };
 use crate::tui::model::{
     build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
@@ -132,7 +132,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
 
             if app.mode == AppMode::SearchForm {
-                draw_search_popup(f, app);
+                draw_search_popup(f, &app.search_form, "Search Builder", "Quick Search");
             }
         }
         MainTab::Bookmarks => {
@@ -173,7 +173,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
 
             if app.mode == AppMode::SearchBookmarks {
-                draw_bookmark_search_popup(f, app);
+                draw_search_popup(
+                    f,
+                    &app.bookmark_search_form_draft,
+                    "Bookmark Filters",
+                    "Bookmark Search",
+                );
             }
             if app.mode == AppMode::BookmarkPathPrompt {
                 draw_bookmark_path_prompt(f, app);
@@ -1120,14 +1125,46 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
-    let query = if app.bookmark_query.is_empty() {
+    let query = if app.bookmark_search_form.query.is_empty() {
         "<all>"
     } else {
-        &app.bookmark_query
+        &app.bookmark_search_form.query
+    };
+    let selected_types = if app.bookmark_search_form.selected_types.is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form
+            .selected_types
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let selected_bases = if app.bookmark_search_form.selected_base_models.is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form
+            .selected_base_models
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     let summary = format!(
-        "🔍 Bookmarks Query: \"{}\" | Total: {}",
+        "🔖 Query: \"{}\" | Type: {} | Sort: {} | Base: {} | Period: {} | Total: {}",
         query,
+        selected_types,
+        app.bookmark_search_form
+            .sort_options
+            .get(app.bookmark_search_form.selected_sort)
+            .map(|sort| sort.label().to_string())
+            .unwrap_or_else(|| "Relevance".into()),
+        selected_bases,
+        app.bookmark_search_form
+            .periods
+            .get(app.bookmark_search_form.selected_period)
+            .map(|period| period.label())
+            .unwrap_or("AllTime"),
         app.visible_bookmarks().len()
     );
 
@@ -1716,10 +1753,11 @@ fn draw_model_sidebar(
     }
 }
 
-fn draw_search_popup(f: &mut Frame, app: &App) {
-    let fm = &app.search_form;
+fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, quick_title: &str) {
     if fm.mode == SearchFormMode::Quick {
-        let block = Block::default().borders(Borders::ALL).title(" Quick Search ");
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {quick_title} "));
         let lines = vec![
             Line::from(vec![
                 Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
@@ -1756,7 +1794,9 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
 
     let area = centered_rect(84, 82, f.area());
     f.render_widget(Clear, area);
-    let block = Block::default().borders(Borders::ALL).title(" Search Builder ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {builder_title} "));
     f.render_widget(&block, area);
     let inner = block.inner(area);
     let sections = Layout::default()
@@ -2067,29 +2107,6 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(help, sections[5]);
 }
 
-fn draw_bookmark_search_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Bookmark Search ");
-
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{}█", app.bookmark_query_draft)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "[Enter] Apply | [Esc] Cancel | [Type] Query",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
-
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    let area = centered_rect(40, 25, f.area());
-    f.render_widget(Clear, area);
-    f.render_widget(p, area);
-}
-
 fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -2334,7 +2351,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Bookmark | [r] Refresh | [c] Clear | [?] Help"
         }
         MainTab::Bookmarks => {
-            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Remove | [e] Export | [i] Import"
+            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Remove | [e] Export | [i] Import"
         }
         MainTab::Images => "[/] Search | [b] Bookmark | [d] Download | [m] Status",
         MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
