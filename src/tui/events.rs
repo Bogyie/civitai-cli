@@ -1,17 +1,21 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::fs::{self, create_dir_all, OpenOptions};
+use ratatui::{Terminal, backend::CrosstermBackend};
+use std::fs::{self, OpenOptions, create_dir_all};
 use std::io::Stdout;
 use std::io::{ErrorKind, Write};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-use crate::tui::app::{App, AppMessage, AppMode, DownloadState, MainTab, WorkerCommand, DownloadHistoryStatus};
+use crate::tui::app::{
+    App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, MainTab, WorkerCommand,
+};
 use crate::tui::ui;
 
 fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
-    crate::config::AppConfig::config_dir().or_else(|| config.search_cache_path()).map(|dir| dir.join("fetch_debug.log"))
+    crate::config::AppConfig::config_dir()
+        .or_else(|| config.search_cache_path())
+        .map(|dir| dir.join("fetch_debug.log"))
 }
 
 fn debug_fetch_log_to_file(path: &std::path::Path, message: &str) {

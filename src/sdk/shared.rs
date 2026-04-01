@@ -96,9 +96,12 @@ pub fn normalize_search_url(raw: &str, default_path: &str) -> Result<String> {
 }
 
 pub fn parse_query_map(url: &Url) -> std::collections::BTreeMap<String, Vec<String>> {
-    let mut map: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for (key, value) in url.query_pairs() {
-        map.entry(key.to_string()).or_default().push(value.to_string());
+        map.entry(key.to_string())
+            .or_default()
+            .push(value.to_string());
     }
     map
 }

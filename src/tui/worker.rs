@@ -3,18 +3,18 @@ use ratatui_image::picker::Picker;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{create_dir_all, OpenOptions};
+use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use crate::api::{CivitaiClient, Model};
 use crate::api::types::PaginationMetadata;
+use crate::api::{CivitaiClient, Model};
 use crate::config::AppConfig;
-use crate::download::manager::DownloadControl;
 use crate::download::DownloadManager;
+use crate::download::manager::DownloadControl;
 use crate::tui::app::{AppMessage, WorkerCommand};
 
 type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
@@ -79,12 +79,7 @@ fn cache_key_for_options(opts: &crate::api::client::SearchOptions) -> String {
         .unwrap_or_else(|| "all".to_string());
     format!(
         "q={}|tag={}|user={}|t={}|sort={}|base={}",
-        query,
-        tag,
-        username,
-        types,
-        sort,
-        base_models
+        query, tag, username, types, sort, base_models
     )
 }
 
@@ -92,7 +87,9 @@ fn normalize_cache_segment(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-fn normalize_search_options_for_cache(mut opts: crate::api::client::SearchOptions) -> crate::api::client::SearchOptions {
+fn normalize_search_options_for_cache(
+    mut opts: crate::api::client::SearchOptions,
+) -> crate::api::client::SearchOptions {
     opts.query = opts.query.trim().to_string();
     let normalize = |value: Option<String>| {
         value
@@ -187,7 +184,10 @@ fn build_search_url(opts: &crate::api::client::SearchOptions) -> String {
     }
 
     if let Some(allow_different_licenses) = opts.allow_different_licenses {
-        url.push_str(&format!("&allowDifferentLicenses={}", allow_different_licenses));
+        url.push_str(&format!(
+            "&allowDifferentLicenses={}",
+            allow_different_licenses
+        ));
     }
 
     if let Some(nsfw) = opts.nsfw {
@@ -200,7 +200,11 @@ fn build_search_url(opts: &crate::api::client::SearchOptions) -> String {
 
     if let Some(ids) = &opts.ids {
         if !ids.is_empty() {
-            let joined = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+            let joined = ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
             url.push_str(&format!("&ids={}", joined));
         }
     }
@@ -308,7 +312,9 @@ fn model_cover_cache_root(config: &AppConfig) -> Option<PathBuf> {
 }
 
 fn image_search_cache_root(config: &AppConfig) -> Option<PathBuf> {
-    config.search_cache_path().map(|root| root.join("image_search"))
+    config
+        .search_cache_path()
+        .map(|root| root.join("image_search"))
 }
 
 fn image_bytes_cache_root(config: &AppConfig) -> Option<PathBuf> {
@@ -316,9 +322,9 @@ fn image_bytes_cache_root(config: &AppConfig) -> Option<PathBuf> {
 }
 
 fn debug_fetch_log_path(config: &AppConfig) -> Option<PathBuf> {
-    AppConfig::config_dir().or_else(|| config.search_cache_path()).map(|dir| {
-        dir.join("fetch_debug.log")
-    })
+    AppConfig::config_dir()
+        .or_else(|| config.search_cache_path())
+        .map(|dir| dir.join("fetch_debug.log"))
 }
 
 fn debug_fetch_log_to_file(log_path: Option<&Path>, message: &str) {
@@ -437,19 +443,26 @@ fn prune_search_cache(cache: &mut SearchCache, ttl_hours: u64) -> usize {
 }
 
 fn cache_entry_path(cache_root: &Path, cache_key: &str) -> PathBuf {
-    let key = cache_key.chars().map(|c| {
-        if c.is_ascii_alphanumeric() || c == '=' || c == '_' || c == '.' || c == '-' {
-            c
-        } else {
-            '_'
-        }
-    }).collect::<String>();
+    let key = cache_key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '=' || c == '_' || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in cache_key.as_bytes() {
         hash ^= *byte as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
-    cache_root.join(format!("{:x}_{}.bin", hash, key.chars().take(32).collect::<String>()))
+    cache_root.join(format!(
+        "{:x}_{}.bin",
+        hash,
+        key.chars().take(32).collect::<String>()
+    ))
 }
 
 fn clear_cached_search_cache(cache_root: &Path) -> usize {
@@ -716,14 +729,18 @@ pub async fn spawn_worker(
     let cover_worker_config = downloader_config.clone();
     let search_cache_path = model_search_cache_path(&downloader_config);
     let image_search_cache_path = image_search_cache_root(&downloader_config);
-    let search_cache_ttl_hours = Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours));
+    let search_cache_ttl_hours =
+        Arc::new(Mutex::new(downloader_config.model_search_cache_ttl_hours));
     let image_search_cache_ttl_minutes =
         Arc::new(Mutex::new(downloader_config.image_search_cache_ttl_minutes));
     let image_cache_ttl_minutes = Arc::new(Mutex::new(downloader_config.image_cache_ttl_minutes));
     let model_cover_cache_path = Arc::new(Mutex::new(model_cover_cache_root(&downloader_config)));
     let image_bytes_cache_path = Arc::new(Mutex::new(image_bytes_cache_root(&downloader_config)));
     let search_cache = Arc::new(Mutex::new(if use_search_cache() {
-        load_search_cache(search_cache_path.as_deref(), *search_cache_ttl_hours.lock().await)
+        load_search_cache(
+            search_cache_path.as_deref(),
+            *search_cache_ttl_hours.lock().await,
+        )
     } else {
         HashMap::new()
     }));
@@ -742,12 +759,12 @@ pub async fn spawn_worker(
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
     tokio::spawn({
-                    let tx_msg = tx_msg.clone();
-                    let req_client = req_client.clone();
-                    let picker = picker.clone();
-                    let model_cover_cache_path = model_cover_cache_path.clone();
-                    let debug_config = cover_worker_config.clone();
-                    async move {
+        let tx_msg = tx_msg.clone();
+        let req_client = req_client.clone();
+        let picker = picker.clone();
+        let model_cover_cache_path = model_cover_cache_path.clone();
+        let debug_config = cover_worker_config.clone();
+        async move {
             let mut queue: VecDeque<(u64, String)> = VecDeque::new();
             let mut queued_ids: HashSet<u64> = HashSet::new();
             let mut running_ids: HashSet<u64> = HashSet::new();
@@ -756,19 +773,20 @@ pub async fn spawn_worker(
             let mut focus_version: Option<u64> = None;
             let max_in_flight = 3usize;
 
-            let enqueue_or_bump_queue =
-                |queue: &mut VecDeque<(u64, String)>,
-                 queued_ids: &mut HashSet<u64>,
-                 version_id: u64,
-                 image_url: String,
-                 at_front: bool| {
-                    upsert_job(queue, queued_ids, version_id, image_url, at_front);
-                };
+            let enqueue_or_bump_queue = |queue: &mut VecDeque<(u64, String)>,
+                                         queued_ids: &mut HashSet<u64>,
+                                         version_id: u64,
+                                         image_url: String,
+                                         at_front: bool| {
+                upsert_job(queue, queued_ids, version_id, image_url, at_front);
+            };
 
             loop {
                 while running_handles.len() < max_in_flight {
                     let next_job = pop_next_job(&mut queue, focus_version);
-                    let Some((version_id, image_url)) = next_job else { break };
+                    let Some((version_id, image_url)) = next_job else {
+                        break;
+                    };
 
                     let _ = queued_ids.remove(&version_id);
                     running_ids.insert(version_id);
@@ -782,17 +800,17 @@ pub async fn spawn_worker(
                     let debug_config = debug_config.clone();
 
                     let handle = tokio::spawn(async move {
-                                let cover_cache_root = model_cover_cache_path.lock().await.clone();
-                                let result = load_model_cover_result(
-                                    version_id,
-                                    image_url,
-                                    req_client,
-                                    picker,
-                                    cover_cache_root,
-                                    debug_config,
-                                    use_cover_cache,
-                                )
-                                .await;
+                        let cover_cache_root = model_cover_cache_path.lock().await.clone();
+                        let result = load_model_cover_result(
+                            version_id,
+                            image_url,
+                            req_client,
+                            picker,
+                            cover_cache_root,
+                            debug_config,
+                            use_cover_cache,
+                        )
+                        .await;
                         let _ = tx_msg.send(result).await;
                         let _ = done_tx.send(version_id).await;
                     });
@@ -800,7 +818,9 @@ pub async fn spawn_worker(
                 }
 
                 if queue.is_empty() && running_handles.is_empty() {
-                    let Some(cmd) = cover_cmd_rx.recv().await else { break };
+                    let Some(cmd) = cover_cmd_rx.recv().await else {
+                        break;
+                    };
                     match cmd {
                         CoverQueueCommand::Enqueue(jobs) => {
                             for (version_id, image_url) in jobs {
@@ -830,20 +850,33 @@ pub async fn spawn_worker(
                                 image_url.or_else(|| known_version_urls.get(&version_id).cloned())
                             {
                                 known_version_urls.insert(version_id, url.clone());
-                                if !running_ids.contains(&version_id) && !queued_ids.contains(&version_id) {
-                                    enqueue_or_bump_queue(&mut queue, &mut queued_ids, version_id, url, true);
+                                if !running_ids.contains(&version_id)
+                                    && !queued_ids.contains(&version_id)
+                                {
+                                    enqueue_or_bump_queue(
+                                        &mut queue,
+                                        &mut queued_ids,
+                                        version_id,
+                                        url,
+                                        true,
+                                    );
                                 }
                             }
 
-                            if running_ids.len() >= max_in_flight && !running_ids.contains(&version_id) {
-                                let to_pause = running_ids.iter().copied().find(|id| Some(*id) != focus_version);
+                            if running_ids.len() >= max_in_flight
+                                && !running_ids.contains(&version_id)
+                            {
+                                let to_pause = running_ids
+                                    .iter()
+                                    .copied()
+                                    .find(|id| Some(*id) != focus_version);
                                 if let Some(pause_id) = to_pause {
                                     if let Some(handle) = running_handles.remove(&pause_id) {
                                         handle.abort();
                                     }
                                     let _ = running_ids.remove(&pause_id);
 
-                                if let Some(url) = known_version_urls.get(&pause_id).cloned() {
+                                    if let Some(url) = known_version_urls.get(&pause_id).cloned() {
                                         enqueue_or_bump_queue(
                                             &mut queue,
                                             &mut queued_ids,
@@ -1041,8 +1074,9 @@ pub async fn spawn_worker(
                                 Some(_) => {
                                     cache.remove(&cache_key);
                                     if let Some(cache_root) = cache_root.as_deref() {
-                                        let _ =
-                                            std::fs::remove_file(cache_entry_path(cache_root, &cache_key));
+                                        let _ = std::fs::remove_file(cache_entry_path(
+                                            cache_root, &cache_key,
+                                        ));
                                         save_image_search_cache(
                                             Some(cache_root),
                                             &cache,
@@ -1073,8 +1107,9 @@ pub async fn spawn_worker(
                                     requested_nsfw.as_deref(),
                                 );
                                 let metadata = res.metadata.clone();
-                                let next_page =
-                                    metadata.as_ref().and_then(|metadata| metadata.next_page.clone());
+                                let next_page = metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.next_page.clone());
                                 let filtered_count = filtered_items.len();
                                 let visible_items = filtered_items
                                     .clone()
@@ -1151,7 +1186,8 @@ pub async fn spawn_worker(
                                 &debug_config,
                                 &format!("FetchImages: enqueue image id={}", item.id),
                             );
-                            let image_bytes_cache_root = image_bytes_cache_path.lock().await.clone();
+                            let image_bytes_cache_root =
+                                image_bytes_cache_path.lock().await.clone();
                             handles.push(tokio::spawn(load_feed_image(
                                 item.id,
                                 item.url,
@@ -1181,7 +1217,8 @@ pub async fn spawn_worker(
                     let tx_msg_clone = tx_msg.clone();
                     let cover_cmd_tx = cover_cmd_tx.clone();
                     let opts = normalize_search_options_for_cache(opts);
-                    let civitai_clone = CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
+                    let civitai_clone =
+                        CivitaiClient::new(downloader_config.api_key.clone()).unwrap();
                     let search_cache = search_cache.clone();
                     let search_cache_ttl_hours = search_cache_ttl_hours.clone();
                     let search_cache_path = search_cache_path.clone();
@@ -1197,9 +1234,9 @@ pub async fn spawn_worker(
                         let next_page_url = next_page_url.filter(|url| !url.trim().is_empty());
                         let use_next_page_url = next_page_url.is_some();
                         let effective_force_refresh = force_refresh || !use_cache;
-                        let mut request_url = next_page_url.clone().unwrap_or_else(|| {
-                            build_search_url(&opts)
-                        });
+                        let mut request_url = next_page_url
+                            .clone()
+                            .unwrap_or_else(|| build_search_url(&opts));
 
                         debug_fetch_log(
                             &debug_config,
@@ -1239,16 +1276,21 @@ pub async fn spawn_worker(
                             }
 
                             let mut entry = cache.get(&cache_key).cloned();
-                                if entry.is_none() {
-                                    if let Some(cache_root) = cache_path.as_deref() {
-                                        let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
-                                                "Checking on-disk cache for \"{}\"",
-                                                query_label
+                            if entry.is_none() {
+                                if let Some(cache_root) = cache_path.as_deref() {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::StatusUpdate(format!(
+                                            "Checking on-disk cache for \"{}\"",
+                                            query_label
                                         )))
                                         .await;
-                                    if let Some(on_disk_entry) = load_cached_search_entry(cache_root, &cache_key) {
-                                        if is_cache_valid(on_disk_entry.cached_at_unix_secs, ttl_hours) {
+                                    if let Some(on_disk_entry) =
+                                        load_cached_search_entry(cache_root, &cache_key)
+                                    {
+                                        if is_cache_valid(
+                                            on_disk_entry.cached_at_unix_secs,
+                                            ttl_hours,
+                                        ) {
                                             cache.insert(cache_key.clone(), on_disk_entry.clone());
                                             save_search_cache(Some(cache_root), &cache, ttl_hours);
                                             entry = Some(on_disk_entry);
@@ -1287,10 +1329,14 @@ pub async fn spawn_worker(
 
                             if let Some(entry) = entry {
                                 if is_cache_valid(entry.cached_at_unix_secs, ttl_hours) {
-                                    cached_next_page = entry.metadata.as_ref().and_then(|metadata| metadata.next_page.clone());
+                                    cached_next_page = entry
+                                        .metadata
+                                        .as_ref()
+                                        .and_then(|metadata| metadata.next_page.clone());
                                     if !append {
                                         cached_slice = Some(entry.models.clone());
-                                        cached_has_more = has_more_from_metadata(entry.metadata.as_ref());
+                                        cached_has_more =
+                                            has_more_from_metadata(entry.metadata.as_ref());
                                         debug_fetch_log(
                                             &debug_config,
                                             &format!(
@@ -1332,10 +1378,7 @@ pub async fn spawn_worker(
                             } else {
                                 debug_fetch_log(
                                     &debug_config,
-                                    &format!(
-                                        "SearchModels: no cache hit for \"{}\"",
-                                        query_label
-                                    ),
+                                    &format!("SearchModels: no cache hit for \"{}\"", query_label),
                                 );
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
@@ -1344,17 +1387,23 @@ pub async fn spawn_worker(
                                     )))
                                     .await;
                             }
-                            } else {
-                            let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
-                                    "{}",
-                                    if use_cache {
-                                        format!("Bypassing cache for \"{}\" due to manual refresh", query_label)
-                                    } else {
-                                        format!("Debug mode: cache disabled; fetching from network",)
-                                    }
-                                )))
-                                .await;
+                        } else {
+                            let _ =
+                                tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "{}",
+                                        if use_cache {
+                                            format!(
+                                                "Bypassing cache for \"{}\" due to manual refresh",
+                                                query_label
+                                            )
+                                        } else {
+                                            format!(
+                                                "Debug mode: cache disabled; fetching from network",
+                                            )
+                                        }
+                                    )))
+                                    .await;
                             debug_fetch_log(
                                 &debug_config,
                                 &format!(
@@ -1476,7 +1525,10 @@ pub async fn spawn_worker(
 
                         match fetch_result {
                             Ok(res) => {
-                                let next_page = res.metadata.as_ref().and_then(|metadata| metadata.next_page.clone());
+                                let next_page = res
+                                    .metadata
+                                    .as_ref()
+                                    .and_then(|metadata| metadata.next_page.clone());
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
@@ -1485,10 +1537,12 @@ pub async fn spawn_worker(
                                         res.items.len(),
                                         has_more_from_metadata(res.metadata.as_ref()),
                                         next_page.as_deref().unwrap_or("<none>"),
-                                        res
-                                            .metadata
+                                        res.metadata
                                             .as_ref()
-                                            .map(|metadata| metadata.total_items.clone().unwrap_or_else(|| "unknown".to_string()))
+                                            .map(|metadata| metadata
+                                                .total_items
+                                                .clone()
+                                                .unwrap_or_else(|| "unknown".to_string()))
                                             .unwrap_or_else(|| "unknown".to_string()),
                                     ),
                                 );
@@ -1548,7 +1602,10 @@ pub async fn spawn_worker(
                                 let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                                 if let Some(version_id) = preferred_version_id {
                                     let _ = cover_cmd_tx
-                                        .send(CoverQueueCommand::Prioritize(version_id, preferred_url))
+                                        .send(CoverQueueCommand::Prioritize(
+                                            version_id,
+                                            preferred_url,
+                                        ))
                                         .await;
                                 }
 
@@ -1564,12 +1621,14 @@ pub async fn spawn_worker(
                                     );
                                     let mut cache = search_cache.lock().await;
                                     let cache_key = cache_key.clone();
-                                    let entry = cache.entry(cache_key.clone()).or_insert(CachedSearchResult {
-                                        cache_key: cache_key.clone(),
-                                        models: Vec::new(),
-                                        metadata: None,
-                                        cached_at_unix_secs: now_unix_secs(),
-                                    });
+                                    let entry = cache.entry(cache_key.clone()).or_insert(
+                                        CachedSearchResult {
+                                            cache_key: cache_key.clone(),
+                                            models: Vec::new(),
+                                            metadata: None,
+                                            cached_at_unix_secs: now_unix_secs(),
+                                        },
+                                    );
                                     if append {
                                         entry.models.extend(models);
                                     } else {
@@ -1585,8 +1644,7 @@ pub async fn spawn_worker(
                                     &debug_config,
                                     &format!(
                                         "SearchModels: network fetch failed query=\"{}\", err={}",
-                                        query_label,
-                                        e
+                                        query_label, e
                                     ),
                                 );
                                 let _ = tx_msg_clone
@@ -1639,103 +1697,107 @@ pub async fn spawn_worker(
                 WorkerCommand::UpdateConfig(new_cfg) => {
                     let new_key = new_cfg.api_key.clone();
                     match CivitaiClient::new(new_key) {
-                        Ok(_) => {
-                            match DownloadManager::new(new_cfg.clone()) {
-                                Ok(_) => {
-                                    downloader_config = new_cfg;
-                                    let ttl_hours = downloader_config.model_search_cache_ttl_hours;
-                                    let image_search_ttl_minutes_value =
-                                        downloader_config.image_search_cache_ttl_minutes;
-                                    let image_cache_ttl_minutes_value =
-                                        downloader_config.image_cache_ttl_minutes;
-                                    {
-                                        let mut ttl_hours_ref = search_cache_ttl_hours.lock().await;
-                                        *ttl_hours_ref = ttl_hours;
-                                    }
-                                    {
-                                        let mut ttl_ref =
-                                            image_search_cache_ttl_minutes.lock().await;
-                                        *ttl_ref = image_search_ttl_minutes_value;
-                                    }
-                                    {
-                                        let mut ttl_ref = image_cache_ttl_minutes.lock().await;
-                                        *ttl_ref = image_cache_ttl_minutes_value;
-                                    }
+                        Ok(_) => match DownloadManager::new(new_cfg.clone()) {
+                            Ok(_) => {
+                                downloader_config = new_cfg;
+                                let ttl_hours = downloader_config.model_search_cache_ttl_hours;
+                                let image_search_ttl_minutes_value =
+                                    downloader_config.image_search_cache_ttl_minutes;
+                                let image_cache_ttl_minutes_value =
+                                    downloader_config.image_cache_ttl_minutes;
+                                {
+                                    let mut ttl_hours_ref = search_cache_ttl_hours.lock().await;
+                                    *ttl_hours_ref = ttl_hours;
+                                }
+                                {
+                                    let mut ttl_ref = image_search_cache_ttl_minutes.lock().await;
+                                    *ttl_ref = image_search_ttl_minutes_value;
+                                }
+                                {
+                                    let mut ttl_ref = image_cache_ttl_minutes.lock().await;
+                                    *ttl_ref = image_cache_ttl_minutes_value;
+                                }
 
-                                    let new_cache_path = model_search_cache_path(&downloader_config);
-                                    let new_image_search_cache_path =
-                                        image_search_cache_root(&downloader_config);
-                                    let new_cover_cache_path = model_cover_cache_root(&downloader_config);
-                                    let new_image_bytes_cache_path =
-                                        image_bytes_cache_root(&downloader_config);
-                                    {
-                                        let mut cache_path = search_cache_path.lock().await;
-                                        let mut cache = search_cache.lock().await;
-                                        let mut image_cache_path = image_search_cache_path.lock().await;
-                                        let mut image_cache = image_search_cache.lock().await;
-                                        if *cache_path != new_cache_path {
-                                            *cache_path = new_cache_path.clone();
-                                            if use_search_cache() {
-                                                *cache =
-                                                    load_search_cache(new_cache_path.as_deref(), ttl_hours);
-                                            } else {
-                                                cache.clear();
-                                            }
-                                        } else {
-                                            if use_search_cache() {
-                                                let _ = prune_search_cache(&mut cache, ttl_hours);
-                                                save_search_cache(cache_path.as_deref(), &cache, ttl_hours);
-                                            } else {
-                                                cache.clear();
-                                            }
-                                        }
-
-                                        if *image_cache_path != new_image_search_cache_path {
-                                            *image_cache_path = new_image_search_cache_path.clone();
-                                            if use_search_cache() {
-                                                *image_cache = load_image_search_cache(
-                                                    new_image_search_cache_path.as_deref(),
-                                                    image_search_ttl_minutes_value,
-                                                );
-                                            } else {
-                                                image_cache.clear();
-                                            }
-                                        } else if use_search_cache() {
-                                            let _ = prune_image_search_cache(
-                                                &mut image_cache,
-                                                image_search_ttl_minutes_value,
+                                let new_cache_path = model_search_cache_path(&downloader_config);
+                                let new_image_search_cache_path =
+                                    image_search_cache_root(&downloader_config);
+                                let new_cover_cache_path =
+                                    model_cover_cache_root(&downloader_config);
+                                let new_image_bytes_cache_path =
+                                    image_bytes_cache_root(&downloader_config);
+                                {
+                                    let mut cache_path = search_cache_path.lock().await;
+                                    let mut cache = search_cache.lock().await;
+                                    let mut image_cache_path = image_search_cache_path.lock().await;
+                                    let mut image_cache = image_search_cache.lock().await;
+                                    if *cache_path != new_cache_path {
+                                        *cache_path = new_cache_path.clone();
+                                        if use_search_cache() {
+                                            *cache = load_search_cache(
+                                                new_cache_path.as_deref(),
+                                                ttl_hours,
                                             );
-                                            save_image_search_cache(
-                                                image_cache_path.as_deref(),
-                                                &image_cache,
+                                        } else {
+                                            cache.clear();
+                                        }
+                                    } else {
+                                        if use_search_cache() {
+                                            let _ = prune_search_cache(&mut cache, ttl_hours);
+                                            save_search_cache(
+                                                cache_path.as_deref(),
+                                                &cache,
+                                                ttl_hours,
+                                            );
+                                        } else {
+                                            cache.clear();
+                                        }
+                                    }
+
+                                    if *image_cache_path != new_image_search_cache_path {
+                                        *image_cache_path = new_image_search_cache_path.clone();
+                                        if use_search_cache() {
+                                            *image_cache = load_image_search_cache(
+                                                new_image_search_cache_path.as_deref(),
                                                 image_search_ttl_minutes_value,
                                             );
                                         } else {
                                             image_cache.clear();
                                         }
-
-                                        let mut cover_cache_path = model_cover_cache_path.lock().await;
-                                        *cover_cache_path = new_cover_cache_path;
-                                        let mut image_bytes_path = image_bytes_cache_path.lock().await;
-                                        *image_bytes_path = new_image_bytes_cache_path;
+                                    } else if use_search_cache() {
+                                        let _ = prune_image_search_cache(
+                                            &mut image_cache,
+                                            image_search_ttl_minutes_value,
+                                        );
+                                        save_image_search_cache(
+                                            image_cache_path.as_deref(),
+                                            &image_cache,
+                                            image_search_ttl_minutes_value,
+                                        );
+                                    } else {
+                                        image_cache.clear();
                                     }
 
-                                    let _ = tx_msg
-                                        .send(AppMessage::StatusUpdate(
-                                            "Configuration sync applied to worker".into(),
-                                        ))
-                                        .await;
+                                    let mut cover_cache_path = model_cover_cache_path.lock().await;
+                                    *cover_cache_path = new_cover_cache_path;
+                                    let mut image_bytes_path = image_bytes_cache_path.lock().await;
+                                    *image_bytes_path = new_image_bytes_cache_path;
                                 }
-                                Err(err) => {
-                                    let _ = tx_msg
-                                        .send(AppMessage::StatusUpdate(format!(
-                                            "Failed to update worker download config: {}",
-                                            err
-                                        )))
-                                        .await;
-                                }
+
+                                let _ = tx_msg
+                                    .send(AppMessage::StatusUpdate(
+                                        "Configuration sync applied to worker".into(),
+                                    ))
+                                    .await;
                             }
-                        }
+                            Err(err) => {
+                                let _ = tx_msg
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Failed to update worker download config: {}",
+                                        err
+                                    )))
+                                    .await;
+                            }
+                        },
                         Err(err) => {
                             let _ = tx_msg
                                 .send(AppMessage::StatusUpdate(format!(
@@ -1757,7 +1819,9 @@ pub async fn spawn_worker(
                             .await;
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate("Download finished (Placeholder)!".into()))
+                            .send(AppMessage::StatusUpdate(
+                                "Download finished (Placeholder)!".into(),
+                            ))
                             .await;
                     });
                 }
@@ -1767,7 +1831,8 @@ pub async fn spawn_worker(
                     let dl_clone = DownloadManager::new(downloader_config.clone()).unwrap();
                     let (control_tx, control_rx) = mpsc::channel(32);
                     {
-                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = download_controls.lock().await;
+                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                            download_controls.lock().await;
                         controls.insert(model_id, control_tx.clone());
                     }
                     let control_map = download_controls.clone();
@@ -1785,16 +1850,20 @@ pub async fn spawn_worker(
                             if let Some(version) =
                                 model.model_versions.iter().find(|v| v.id == version_id)
                             {
-                                let primary_file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first());
+                                let primary_file = version
+                                    .files
+                                    .iter()
+                                    .find(|f| f.primary)
+                                    .or_else(|| version.files.first());
                                 let filename = dl_clone.generate_smart_filename(
                                     &model,
                                     version,
                                     &primary_file.map(|f| f.name.as_str()).unwrap_or_default(),
                                 );
-                                let target_dir = dl_clone
-                                    .resolve_comfy_path(&model)
-                                    .unwrap_or_else(|| {
-                                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                let target_dir =
+                                    dl_clone.resolve_comfy_path(&model).unwrap_or_else(|| {
+                                        std::env::current_dir()
+                                            .unwrap_or_else(|_| std::path::PathBuf::from("."))
                                     });
                                 let target_path = target_dir.join(&filename);
                                 let estimated_size_bytes = primary_file
@@ -1833,17 +1902,17 @@ pub async fn spawn_worker(
                                     ))
                                     .await;
 
-                                    let result = dl_clone
-                                        .download_version_with_control(
-                                            &model,
-                                            version,
-                                            None,
-                                            Some(tx_msg_clone.clone()),
-                                            Some(control_rx),
-                                            None,
-                                            Some(estimated_size_bytes),
-                                        )
-                                        .await;
+                                let result = dl_clone
+                                    .download_version_with_control(
+                                        &model,
+                                        version,
+                                        None,
+                                        Some(tx_msg_clone.clone()),
+                                        Some(control_rx),
+                                        None,
+                                        Some(estimated_size_bytes),
+                                    )
+                                    .await;
                                 match result {
                                     Ok(_) => {
                                         let _ = tx_msg_clone
@@ -1853,11 +1922,10 @@ pub async fn spawn_worker(
                                     Err(err) => {
                                         if let Some(reason) = err.downcast_ref::<std::io::Error>() {
                                             let _ = tx_msg_clone
-                                                .send(AppMessage::DownloadFailed(model_id, format!(
-                                                    "{} ({})",
-                                                    reason,
-                                                    reason.kind()
-                                                )))
+                                                .send(AppMessage::DownloadFailed(
+                                                    model_id,
+                                                    format!("{} ({})", reason, reason.kind()),
+                                                ))
                                                 .await;
                                         } else if err.to_string().contains("cancelled") {
                                             let _ = tx_msg_clone
@@ -1865,7 +1933,10 @@ pub async fn spawn_worker(
                                                 .await;
                                         } else {
                                             let _ = tx_msg_clone
-                                                .send(AppMessage::DownloadFailed(model_id, err.to_string()))
+                                                .send(AppMessage::DownloadFailed(
+                                                    model_id,
+                                                    err.to_string(),
+                                                ))
                                                 .await;
                                         }
                                     }
@@ -1878,10 +1949,11 @@ pub async fn spawn_worker(
                                     &model_url,
                                     "request failed",
                                 )))
-                            .await;
+                                .await;
                         }
                         {
-                            let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = control_map.lock().await;
+                            let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                                control_map.lock().await;
                             controls.remove(&model_id);
                         }
                     });
@@ -1917,19 +1989,21 @@ pub async fn spawn_worker(
                             if let Some(version) =
                                 model.model_versions.iter().find(|v| v.id == version_id)
                             {
-                                let primary_file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first());
+                                let primary_file = version
+                                    .files
+                                    .iter()
+                                    .find(|f| f.primary)
+                                    .or_else(|| version.files.first());
                                 let filename = dl_clone.generate_smart_filename(
                                     &model,
                                     version,
                                     &primary_file.map(|f| f.name.as_str()).unwrap_or_default(),
                                 );
                                 let target_path = resume_file_path.clone().unwrap_or_else(|| {
-                                    let target_dir = dl_clone
-                                        .resolve_comfy_path(&model)
-                                        .unwrap_or_else(|| {
-                                            std::env::current_dir().unwrap_or_else(|_| {
-                                                std::path::PathBuf::from(".")
-                                            })
+                                    let target_dir =
+                                        dl_clone.resolve_comfy_path(&model).unwrap_or_else(|| {
+                                            std::env::current_dir()
+                                                .unwrap_or_else(|_| std::path::PathBuf::from("."))
                                         });
                                     target_dir.join(&filename)
                                 });
@@ -1957,14 +2031,19 @@ pub async fn spawn_worker(
                                         Some(target_path.clone()),
                                     ))
                                     .await;
-                                let initial_downloaded_bytes = resume_downloaded_bytes
-                                    .min(if total_bytes > 0 { total_bytes } else { resume_downloaded_bytes });
+                                let initial_downloaded_bytes =
+                                    resume_downloaded_bytes.min(if total_bytes > 0 {
+                                        total_bytes
+                                    } else {
+                                        resume_downloaded_bytes
+                                    });
                                 let _ = tx_msg_clone
                                     .send(AppMessage::DownloadProgress(
                                         model_id,
                                         filename.clone(),
                                         if total_bytes > 0 {
-                                            (initial_downloaded_bytes as f64 / total_bytes as f64) * 100.0
+                                            (initial_downloaded_bytes as f64 / total_bytes as f64)
+                                                * 100.0
                                         } else {
                                             0.0
                                         },
@@ -2040,38 +2119,35 @@ pub async fn spawn_worker(
                 }
                 WorkerCommand::PauseDownload(model_id) => {
                     let control = {
-                        let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = download_controls.lock().await;
+                        let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                            download_controls.lock().await;
                         controls.get(&model_id).cloned()
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Pause);
-                        let _ = tx_msg
-                            .send(AppMessage::DownloadPaused(model_id))
-                            .await;
+                        let _ = tx_msg.send(AppMessage::DownloadPaused(model_id)).await;
                     }
                 }
                 WorkerCommand::ResumeDownload(model_id) => {
                     let control = {
-                        let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = download_controls.lock().await;
+                        let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                            download_controls.lock().await;
                         controls.get(&model_id).cloned()
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Resume);
-                        let _ = tx_msg
-                            .send(AppMessage::DownloadResumed(model_id))
-                            .await;
+                        let _ = tx_msg.send(AppMessage::DownloadResumed(model_id)).await;
                     }
                 }
                 WorkerCommand::CancelDownload(model_id) => {
                     let control = {
-                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> = download_controls.lock().await;
+                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                            download_controls.lock().await;
                         controls.remove(&model_id)
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Cancel);
-                        let _ = tx_msg
-                            .send(AppMessage::DownloadCancelled(model_id))
-                            .await;
+                        let _ = tx_msg.send(AppMessage::DownloadCancelled(model_id)).await;
                     }
                 }
                 WorkerCommand::Quit => break,
@@ -2088,10 +2164,7 @@ async fn fetch_image_bytes_with_debug(
     debug_config: &AppConfig,
     context: &str,
 ) -> Result<bytes::Bytes> {
-    debug_fetch_log(
-        debug_config,
-        &format!("{} request -> {}", context, url),
-    );
+    debug_fetch_log(debug_config, &format!("{} request -> {}", context, url));
     let start = Instant::now();
     let response = match client.get(url).send().await {
         Ok(response) => response,
@@ -2154,14 +2227,7 @@ async fn load_model_cover_result(
         }
     }
 
-    match fetch_image_bytes_with_debug(
-        &client,
-        &image_url,
-        &debug_config,
-        "Model cover",
-    )
-    .await
-    {
+    match fetch_image_bytes_with_debug(&client, &image_url, &debug_config, "Model cover").await {
         Ok(bytes) => {
             debug_fetch_log(
                 &debug_config,
@@ -2220,11 +2286,16 @@ async fn load_feed_image(
             if let Some(bytes) = load_cached_feed_image(&cache_path, ttl_minutes) {
                 debug_fetch_log(
                     &debug_config,
-                    &format!("Image feed loaded from cache: id={}, url={}", image_id, image_url),
+                    &format!(
+                        "Image feed loaded from cache: id={}, url={}",
+                        image_id, image_url
+                    ),
                 );
                 if let Ok(dyn_img) = image::load_from_memory(&bytes) {
                     let protocol = picker.new_resize_protocol(dyn_img);
-                    let _ = tx_msg.send(AppMessage::ImageDecoded(image_id, protocol)).await;
+                    let _ = tx_msg
+                        .send(AppMessage::ImageDecoded(image_id, protocol))
+                        .await;
                     return;
                 }
                 let _ = std::fs::remove_file(cache_path);
@@ -2237,14 +2308,7 @@ async fn load_feed_image(
         Err(_) => return,
     };
 
-    match fetch_image_bytes_with_debug(
-        &client,
-        &image_url,
-        &debug_config,
-        "Image feed",
-    )
-    .await
-    {
+    match fetch_image_bytes_with_debug(&client, &image_url, &debug_config, "Image feed").await {
         Ok(bytes) => {
             debug_fetch_log(
                 &debug_config,

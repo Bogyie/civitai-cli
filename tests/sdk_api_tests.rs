@@ -1,7 +1,7 @@
 use civitai_cli::sdk::{
-    build_api_images_search_url, build_api_model_url, build_api_model_version_by_hash_url,
-    build_api_models_search_url, ApiClient, ApiImageResponse, ApiImageSearchOptions, ApiModel,
-    ApiModelSearchOptions, ApiModelVersion, SearchSdkConfig,
+    ApiClient, ApiImageResponse, ApiImageSearchOptions, ApiModel, ApiModelSearchOptions,
+    ApiModelVersion, SearchSdkConfig, build_api_images_search_url, build_api_model_url,
+    build_api_model_version_by_hash_url, build_api_models_search_url,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -154,7 +154,9 @@ fn builds_api_urls() {
     let images_url = images_url.to_string();
     assert!(images_url.contains("/api/v1/images?"));
     assert!(images_url.contains("limit=25"));
-    assert!(images_url.contains("sort=Most+Reactions") || images_url.contains("sort=Most%20Reactions"));
+    assert!(
+        images_url.contains("sort=Most+Reactions") || images_url.contains("sort=Most%20Reactions")
+    );
     assert!(images_url.contains("modelVersionId=55"));
     assert!(images_url.contains("tags=77"));
 }
@@ -229,12 +231,7 @@ async fn fetch_live_civitai_api_model_search_sample() -> Result<(), Box<dyn std:
         let tag_count = item.tags.len();
         println!(
             "api_model_item[{idx}] id={}, name={}, type={}, nsfw={}, versions={}, tags={}",
-            item.id,
-            item.name,
-            item.r#type,
-            item.nsfw,
-            version_count,
-            tag_count
+            item.id, item.name, item.r#type, item.nsfw, version_count, tag_count
         );
 
         if let Some(version) = item.model_versions.first() {

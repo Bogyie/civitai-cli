@@ -198,7 +198,9 @@ fn file_name_from_url(url: &str) -> Option<String> {
     Some(segment.to_string())
 }
 
-pub(crate) fn file_name_from_content_disposition(value: Option<&reqwest::header::HeaderValue>) -> Option<String> {
+pub(crate) fn file_name_from_content_disposition(
+    value: Option<&reqwest::header::HeaderValue>,
+) -> Option<String> {
     let raw = value?.to_str().ok()?;
     for part in raw.split(';') {
         let trimmed = part.trim();
@@ -236,7 +238,9 @@ pub(crate) fn authorization_header_value(token: &str) -> Result<reqwest::header:
         .context("Failed to build authorization header")
 }
 
-pub(crate) fn content_disposition_file_name(headers: &reqwest::header::HeaderMap) -> Option<String> {
+pub(crate) fn content_disposition_file_name(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<String> {
     file_name_from_content_disposition(headers.get(CONTENT_DISPOSITION))
 }
 

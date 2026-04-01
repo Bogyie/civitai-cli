@@ -58,8 +58,16 @@ pub fn build_api_models_search_url(base_url: &str, opts: &ApiModelSearchOptions)
     push_optional_string(&mut pairs, "query", opts.query.as_deref());
     push_optional_string(&mut pairs, "tag", opts.tag.as_deref());
     push_optional_string(&mut pairs, "username", opts.username.as_deref());
-    push_optional_string(&mut pairs, "sort", opts.sort.as_deref().filter(|v| *v != "All"));
-    push_optional_string(&mut pairs, "types", opts.types.as_deref().filter(|v| *v != "All"));
+    push_optional_string(
+        &mut pairs,
+        "sort",
+        opts.sort.as_deref().filter(|v| *v != "All"),
+    );
+    push_optional_string(
+        &mut pairs,
+        "types",
+        opts.types.as_deref().filter(|v| *v != "All"),
+    );
     push_optional_string(&mut pairs, "period", opts.period.as_deref());
 
     if let Some(value) = opts.rating {
@@ -95,7 +103,11 @@ pub fn build_api_models_search_url(base_url: &str, opts: &ApiModelSearchOptions)
         pairs.push(("supportsGeneration".to_string(), value.to_string()));
     }
     if let Some(ids) = opts.ids.as_ref().filter(|ids| !ids.is_empty()) {
-        let joined = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+        let joined = ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
         pairs.push(("ids".to_string(), joined));
     }
     push_optional_string(

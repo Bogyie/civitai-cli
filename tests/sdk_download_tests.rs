@@ -1,7 +1,6 @@
 use civitai_cli::sdk::{
-    DownloadClient, DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec,
-    ImageSearchState, ModelDownloadAuth, ModelSearchState, SearchImageHit, SearchModelHit,
-    WebSearchClient,
+    DownloadClient, DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec, ImageSearchState,
+    ModelDownloadAuth, ModelSearchState, SearchImageHit, SearchModelHit, WebSearchClient,
 };
 use civitai_cli::sdk::{DownloadDestination, SearchSdkConfig};
 use futures_util::StreamExt;
@@ -40,10 +39,7 @@ async fn spawn_server() -> std::io::Result<String> {
                 let req_lower = req.to_ascii_lowercase();
                 let mut lines = req.lines();
                 let request_line = lines.next().unwrap_or_default();
-                let path = request_line
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("/");
+                let path = request_line.split_whitespace().nth(1).unwrap_or("/");
                 let has_bearer = req_lower.contains("authorization: bearer secret-token");
                 let range_start = req_lower
                     .lines()
@@ -218,8 +214,14 @@ fn builds_download_specs_from_hits() {
         )
         .unwrap();
     assert_eq!(model_spec.kind, DownloadKind::Model);
-    assert_eq!(model_spec.file_name.as_deref(), Some("My _ Fancy Model-v999"));
-    assert_eq!(model_spec.url, "https://download.test/models/999?token=secret-token");
+    assert_eq!(
+        model_spec.file_name.as_deref(),
+        Some("My _ Fancy Model-v999")
+    );
+    assert_eq!(
+        model_spec.url,
+        "https://download.test/models/999?token=secret-token"
+    );
 }
 
 #[tokio::test]
@@ -231,12 +233,7 @@ async fn downloads_to_explicit_file_path() -> Result<(), Box<dyn std::error::Err
     let spec = DownloadSpec::new(format!("{base_url}/file.bin"), DownloadKind::Other)
         .with_file_name("ignored.bin");
     let result = client
-        .download(
-            &spec,
-            &DownloadOptions::to_file(&target),
-            None,
-            None,
-        )
+        .download(&spec, &DownloadOptions::to_file(&target), None, None)
         .await?;
 
     assert_eq!(result.path, target);
@@ -246,7 +243,8 @@ async fn downloads_to_explicit_file_path() -> Result<(), Box<dyn std::error::Err
 }
 
 #[tokio::test]
-async fn downloads_to_directory_and_uses_server_filename() -> Result<(), Box<dyn std::error::Error>> {
+async fn downloads_to_directory_and_uses_server_filename() -> Result<(), Box<dyn std::error::Error>>
+{
     let base_url = spawn_server().await?;
     let client = DownloadClient::new()?;
     let target_dir = temp_path("downloads-dir");
@@ -310,22 +308,21 @@ async fn downloads_with_query_and_bearer_auth() -> Result<(), Box<dyn std::error
     let client = DownloadClient::new()?;
 
     let query_target = temp_path("query-auth.bin");
-    let query_spec = DownloadSpec::new(
-        format!("{base_url}/auth-query"),
-        DownloadKind::Model,
-    )
-    .with_auth(ModelDownloadAuth::QueryToken("secret-token".to_string()));
+    let query_spec = DownloadSpec::new(format!("{base_url}/auth-query"), DownloadKind::Model)
+        .with_auth(ModelDownloadAuth::QueryToken("secret-token".to_string()));
     client
-        .download(&query_spec, &DownloadOptions::to_file(&query_target), None, None)
+        .download(
+            &query_spec,
+            &DownloadOptions::to_file(&query_target),
+            None,
+            None,
+        )
         .await?;
     assert_eq!(tokio::fs::read(&query_target).await?, b"auth query ok");
 
     let bearer_target = temp_path("bearer-auth.bin");
-    let bearer_spec = DownloadSpec::new(
-        format!("{base_url}/auth-bearer"),
-        DownloadKind::Model,
-    )
-    .with_auth(ModelDownloadAuth::BearerToken("secret-token".to_string()));
+    let bearer_spec = DownloadSpec::new(format!("{base_url}/auth-bearer"), DownloadKind::Model)
+        .with_auth(ModelDownloadAuth::BearerToken("secret-token".to_string()));
     client
         .download(
             &bearer_spec,
@@ -350,10 +347,7 @@ async fn download_first_chunk_to_temp(
         .error_for_status()?;
 
     let mut stream = response.bytes_stream();
-    let first_chunk = stream
-        .next()
-        .await
-        .ok_or("empty download response")??;
+    let first_chunk = stream.next().await.ok_or("empty download response")??;
 
     let target = temp_path(name);
     tokio::fs::write(&target, &first_chunk).await?;
