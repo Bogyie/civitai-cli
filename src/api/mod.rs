@@ -1,5 +1,1 @@
-pub mod client;
-pub mod types;
-
-pub use client::CivitaiClient;
-pub use types::*;
+pub(crate) mod types;

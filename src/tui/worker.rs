@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use crate::api::CivitaiClient;
 use crate::config::{AppConfig, MediaQualityPreference};
 use civitai_cli::sdk::{
     ApiImageSearchOptions, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
@@ -2448,8 +2447,14 @@ pub async fn spawn_worker(
                         .await;
                 }
                 WorkerCommand::UpdateConfig(new_cfg) => {
-                    let new_key = new_cfg.api_key.clone();
-                    match CivitaiClient::new(new_key) {
+                    let builder = if let Some(api_key) =
+                        new_cfg.api_key.clone().filter(|value| !value.trim().is_empty())
+                    {
+                        SdkClientBuilder::new().api_key(api_key)
+                    } else {
+                        SdkClientBuilder::new()
+                    };
+                    match builder.build_api() {
                         Ok(_) => {
                             downloader_config = new_cfg;
                             let ttl_hours = downloader_config.model_search_cache_ttl_hours;

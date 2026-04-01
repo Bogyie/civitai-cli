@@ -1,4 +1,3 @@
-mod api;
 mod cli;
 mod config;
 mod download;
@@ -6,12 +5,22 @@ mod tui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use civitai_cli::sdk::{ApiClient, SdkClientBuilder};
 use std::path::PathBuf;
 
-use api::CivitaiClient;
 use cli::{Cli, Commands};
 use config::AppConfig;
 use download::DownloadManager;
+
+fn build_api_client(api_key: Option<&str>) -> Result<ApiClient> {
+    let builder = if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
+        SdkClientBuilder::new().api_key(api_key.to_string())
+    } else {
+        SdkClientBuilder::new()
+    };
+
+    builder.build_api()
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -34,7 +43,7 @@ async fn main() -> Result<()> {
             app_config.save().context("Failed to save config")?;
         }
         Some(Commands::Download { id, hash }) => {
-            let client = CivitaiClient::new(app_config.api_key.clone())?;
+            let client = build_api_client(app_config.api_key.as_deref())?;
             let manager = DownloadManager::new(app_config)?;
 
             if let Some(model_id) = id {
