@@ -56,17 +56,22 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
 
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: verify-ubuntu
+          shared-key: release-x86_64-unknown-linux-gnu
+          key: verify
+          add-job-id-key: "false"
+          cache-workspace-crates: "true"
 
       - name: Run tests
         shell: bash
         run: |
           set -euo pipefail
-          cargo test --locked
+          cargo test --locked --lib --tests
 
       - name: Run release build smoke check
         shell: bash
@@ -85,10 +90,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x86_64-gnu
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            use_cross: false
           - name: linux-aarch64-gnu
             runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
@@ -118,7 +119,9 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ matrix.target }}
+          shared-key: release-${{ matrix.target }}
+          add-job-id-key: "false"
+          cache-workspace-crates: "true"
 
       - name: Install cross
         if: matrix.use_cross
@@ -187,7 +190,10 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: packages-x86_64-unknown-linux-gnu
+          shared-key: release-x86_64-unknown-linux-gnu
+          key: linux-packages
+          add-job-id-key: "false"
+          cache-workspace-crates: "true"
 
       - name: Install packaging tools
         shell: bash
@@ -201,6 +207,21 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --locked --release --target x86_64-unknown-linux-gnu
+
+      - name: Package linux x86_64 release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          TARGET="x86_64-unknown-linux-gnu"
+          ARTIFACT_DIR="dist"
+          STAGE_DIR="${BIN_NAME}-${VERSION}-${TARGET}"
+
+          mkdir -p "${ARTIFACT_DIR}" "${STAGE_DIR}"
+          cp "target/${TARGET}/release/${BIN_NAME}" "${STAGE_DIR}/"
+          cp README.md LICENSE "${STAGE_DIR}/"
+          tar -czf "${ARTIFACT_DIR}/${BIN_NAME}-v${VERSION}-${TARGET}.tar.gz" "${STAGE_DIR}"
 
       - name: Build .deb package
         shell: bash
@@ -227,6 +248,12 @@ jobs:
         with:
           name: linux-packages
           path: dist/*
+
+      - name: Upload linux x86_64 artifact to workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-gnu
+          path: dist/${{ env.BIN_NAME }}-v${{ needs.validate-release.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
 
   publish-release:
     name: Create release and upload assets
