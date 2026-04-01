@@ -1,4 +1,10 @@
+mod downloads;
+mod footer;
 mod helpers;
+mod images;
+mod modals;
+mod models;
+mod tabs;
 
 use self::helpers::{
     ImageFilterBoxProps, TextFilterBoxProps, build_horizontal_item_window,
@@ -100,172 +106,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     f.render_widget(tabs, chunks[0]);
 
-    match app.active_tab {
-        MainTab::Models => {
-            let model_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Min(0)])
-                .split(chunks[1]);
-
-            draw_model_search_summary(f, app, model_chunks[0]);
-            let selected_model = app.selected_model_in_active_view().cloned();
-            let bookmarked_ids: Vec<u64> = app.bookmarks.iter().map(|model| model.id).collect();
-
-            if app.show_model_details {
-                let split = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-                    .split(model_chunks[1]);
-
-                draw_model_list(
-                    app,
-                    f,
-                    split[0],
-                    &app.models,
-                    &app.model_list_state,
-                    &bookmarked_ids,
-                    enable_name_rolling,
-                );
-                draw_model_sidebar(f, app, split[1], selected_model.as_ref());
-            } else {
-                draw_model_list(
-                    app,
-                    f,
-                    model_chunks[1],
-                    &app.models,
-                    &app.model_list_state,
-                    &bookmarked_ids,
-                    enable_name_rolling,
-                );
-            }
-
-            if app.mode == AppMode::SearchForm {
-                draw_search_popup(f, &app.search_form, "Search Builder", "Quick Search");
-            }
-        }
-        MainTab::Bookmarks => {
-            let bookmark_items = app.visible_bookmarks();
-            let bookmark_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Min(0)])
-                .split(chunks[1]);
-            let selected_bookmark_model = app.selected_model_in_active_view().cloned();
-
-            draw_bookmark_search_summary(f, app, bookmark_chunks[0]);
-            if app.show_model_details {
-                let split = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-                    .split(bookmark_chunks[1]);
-
-                draw_model_list(
-                    app,
-                    f,
-                    split[0],
-                    bookmark_items,
-                    &app.bookmark_list_state,
-                    &[],
-                    enable_name_rolling,
-                );
-                draw_model_sidebar(f, app, split[1], selected_bookmark_model.as_ref());
-            } else {
-                draw_model_list(
-                    app,
-                    f,
-                    bookmark_chunks[1],
-                    bookmark_items,
-                    &app.bookmark_list_state,
-                    &[],
-                    enable_name_rolling,
-                );
-            }
-
-            if app.mode == AppMode::SearchBookmarks {
-                draw_search_popup(
-                    f,
-                    &app.bookmark_search_form_draft,
-                    "Bookmark Filters",
-                    "Bookmark Search",
-                );
-            }
-            if app.mode == AppMode::BookmarkPathPrompt {
-                draw_bookmark_path_prompt(f, app);
-            }
-        }
-        MainTab::Images => {
-            f.render_widget(Clear, chunks[1]);
-            let image_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(2), Constraint::Min(0)])
-                .split(chunks[1]);
-            let main_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(image_chunks[1]);
-            draw_image_search_summary(f, app, image_chunks[0]);
-            draw_image_panel(f, app, main_chunks[0]);
-            draw_image_sidebar(f, app, main_chunks[1]);
-            if app.mode == AppMode::SearchImages {
-                draw_image_search_popup(f, app);
-            }
-        }
-        MainTab::ImageBookmarks => {
-            f.render_widget(Clear, chunks[1]);
-            let image_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Length(2), Constraint::Min(0)])
-                .split(chunks[1]);
-            let main_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(image_chunks[1]);
-            draw_image_bookmark_search_summary(f, app, image_chunks[0]);
-            draw_image_panel(f, app, main_chunks[0]);
-            draw_image_sidebar(f, app, main_chunks[1]);
-            if app.mode == AppMode::SearchImageBookmarks {
-                draw_image_bookmark_search_popup(f, app);
-            }
-        }
-        MainTab::Downloads => {
-            draw_downloads_tab(f, app, chunks[1]);
-        }
-        MainTab::Settings => {
-            draw_settings_tab(f, app, chunks[1]);
-        }
-    }
-
-    draw_footer(f, app, chunks[2]);
-
-    if app.show_status_modal {
-        draw_status_modal(f, app);
-    }
-
-    if app.show_help_modal {
-        draw_help_modal(f, app);
-    }
-
-    if app.show_image_prompt_modal {
-        draw_image_prompt_modal(f, app);
-    }
-
-    if app.show_image_model_detail_modal {
-        draw_image_model_detail_modal(f, app);
-    }
-
-    if app.show_bookmark_confirm_modal {
-        draw_bookmark_confirm_modal(f, app);
-    }
-
-    if app.show_exit_confirm_modal {
-        draw_exit_confirm_modal(f, app);
-    }
-
-    if app.show_resume_download_modal {
-        draw_resume_download_modal(f, app);
-    }
+    tabs::draw_active_tab(f, app, chunks[1], enable_name_rolling);
+    footer::draw_footer_section(f, app, chunks[2]);
+    modals::draw_active_modals(f, app);
 }
 
-fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
     let has_active = !app.active_downloads.is_empty();
     let has_history = !app.download_history.is_empty();
     let title = format!(
@@ -608,7 +454,7 @@ fn format_time_ago(ts: SystemTime) -> String {
     }
 }
 
-fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     let outer = Block::default()
         .borders(Borders::ALL)
         .title(" Settings Control Panel ");
@@ -814,7 +660,7 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help, sections[3]);
 }
 
-fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Image View ");
     let items = app.active_image_items();
     let selected_index = app.active_image_selected_index();
@@ -848,7 +694,7 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(img) = app.selected_image_in_active_view() else {
         f.render_widget(
             Paragraph::new("No metadata available.")
@@ -1068,7 +914,7 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
     let Some(img) = app.selected_image_in_active_view() else {
         return;
     };
@@ -1112,7 +958,7 @@ fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
     f.render_widget(help, sections[1]);
 }
 
-fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
+pub(super) fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(84, 86, f.area());
     f.render_widget(Clear, area);
 
@@ -1143,7 +989,7 @@ fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     let model_query = if app.search_form.query.is_empty() {
         "<empty>"
     } else {
@@ -1203,7 +1049,7 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
     let query = if app.bookmark_search_form.query.is_empty() {
         "<all>"
     } else {
@@ -1264,7 +1110,7 @@ fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
     let query = if app.image_bookmark_query.is_empty() {
         "<all>"
     } else {
@@ -1287,7 +1133,7 @@ fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     let query = if app.image_search_form.query.trim().is_empty() {
         "<all>"
     } else {
@@ -1358,7 +1204,7 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_model_list(
+pub(super) fn draw_model_list(
     app: &App,
     f: &mut Frame,
     area: Rect,
@@ -1495,7 +1341,7 @@ fn draw_model_list(
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_model_sidebar(
+pub(super) fn draw_model_sidebar(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
@@ -1853,7 +1699,12 @@ fn draw_model_sidebar(
     }
 }
 
-fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, quick_title: &str) {
+pub(super) fn draw_search_popup(
+    f: &mut Frame,
+    fm: &SearchFormState,
+    builder_title: &str,
+    quick_title: &str,
+) {
     if fm.mode == SearchFormMode::Quick {
         let block = Block::default()
             .borders(Borders::ALL)
@@ -2107,7 +1958,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
     f.render_widget(help, sections[6]);
 }
 
-fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
+pub(super) fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
     let visible_count = app.visible_image_bookmarks().len();
     let lines = vec![
         Line::from(vec![
@@ -2136,7 +1987,7 @@ fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
+pub(super) fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Bookmark File Path ");
@@ -2167,7 +2018,7 @@ fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_image_search_popup(f: &mut Frame, app: &App) {
+pub(super) fn draw_image_search_popup(f: &mut Frame, app: &App) {
     let form = &app.image_search_form;
     let area = centered_rect(84, 82, f.area());
     f.render_widget(Clear, area);
@@ -2465,7 +2316,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_status_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_status_modal(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Full Status Message ");
@@ -2494,7 +2345,7 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_help_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(72, 60, f.area());
     let block = Block::default()
         .borders(Borders::ALL)
@@ -2655,7 +2506,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(footer, sections[4]);
 }
 
-fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     let name = app
         .pending_bookmark_remove_id
         .and_then(|model_id| app.bookmarks.iter().find(|model| model.id == model_id))
@@ -2681,7 +2532,7 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_exit_confirm_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_exit_confirm_modal(f: &mut Frame, app: &App) {
     let active_download_count = app.active_downloads.len();
     let block = Block::default()
         .borders(Borders::ALL)
@@ -2707,7 +2558,7 @@ fn draw_exit_confirm_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_resume_download_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_resume_download_modal(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Resume Interrupted Downloads ");
@@ -2734,7 +2585,7 @@ fn draw_resume_download_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(2)])
