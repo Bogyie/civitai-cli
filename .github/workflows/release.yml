@@ -204,8 +204,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/x86_64-unknown-linux-gnu/debian/*.deb dist/
-          cp target/generate-rpm/*.rpm dist/
+          find target/x86_64-unknown-linux-gnu/debian -maxdepth 1 -name '*.deb' -exec cp {} dist/ \;
+          find target/x86_64-unknown-linux-gnu/generate-rpm -maxdepth 1 -name '*.rpm' -exec cp {} dist/ \;
           printf 'files<<EOF\n' >> "${GITHUB_OUTPUT}"
           find dist -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' \) | sort >> "${GITHUB_OUTPUT}"
           printf 'EOF\n' >> "${GITHUB_OUTPUT}"
