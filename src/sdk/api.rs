@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::Url;
 
-pub use crate::api::types::{
+pub use super::api_types::{
     FileMetadata, ImageItem as ApiImageItem, ImageResponse as ApiImageResponse,
     ImageStats as ApiImageStats, Model as ApiModel, ModelCreator as ApiModelCreator,
     ModelFile as ApiModelFile, ModelImage as ApiModelImage, ModelStats as ApiModelStats,
