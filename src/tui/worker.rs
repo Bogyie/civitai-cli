@@ -333,6 +333,29 @@ fn estimated_file_size_bytes(file: &ParsedModelFile) -> Option<u64> {
     })
 }
 
+fn collect_model_cover_jobs(
+    models: &[Model],
+    preferred_model_id: Option<u64>,
+    preferred_version_id: Option<u64>,
+) -> (Vec<(u64, String)>, Option<String>) {
+    let mut jobs = Vec::new();
+    let mut preferred_url = None;
+
+    for model in models {
+        for version in model_versions(model) {
+            if let Some(image_url) = version.images.first().map(|image| image.url.clone()) {
+                jobs.push((version.id, image_url.clone()));
+                if Some(model.id) == preferred_model_id && Some(version.id) == preferred_version_id
+                {
+                    preferred_url = Some(image_url);
+                }
+            }
+        }
+    }
+
+    (jobs, preferred_url)
+}
+
 async fn forward_download_events(
     mut progress_rx: mpsc::Receiver<DownloadEvent>,
     tx_msg: mpsc::Sender<AppMessage>,
@@ -2047,43 +2070,31 @@ pub async fn spawn_worker(
                         }
 
                         if let Some(cached) = cached_slice {
+                            let cached_len = cached.len();
                             debug_fetch_log(
                                 &debug_config,
                                 &format!(
                                     "SearchModels: emitting cached chunk append={} count={} has_more={} preferred_model={:?} preferred_version={:?}",
                                     append,
-                                    cached.len(),
+                                    cached_len,
                                     cached_has_more,
                                     preferred_model_id,
                                     preferred_version_id
                                 ),
                             );
+                            let (jobs, preferred_url) = collect_model_cover_jobs(
+                                &cached,
+                                preferred_model_id,
+                                preferred_version_id,
+                            );
                             let _ = tx_msg_clone
                                 .send(AppMessage::ModelsSearchedChunk(
-                                    cached.clone(),
+                                    cached,
                                     append,
                                     cached_has_more,
                                     cached_next_page,
                                 ))
                                 .await;
-
-                            let mut jobs = Vec::new();
-                            let mut preferred_url = None;
-
-                            for model in &cached {
-                                for version in model_versions(model) {
-                                    if let Some(image_url) =
-                                        version.images.first().map(|image| image.url.clone())
-                                    {
-                                        jobs.push((version.id, image_url.clone()));
-                                        if Some(model.id) == preferred_model_id
-                                            && Some(version.id) == preferred_version_id
-                                        {
-                                            preferred_url = Some(image_url);
-                                        }
-                                    }
-                                }
-                            }
 
                             let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                             if let Some(version_id) = preferred_version_id {
@@ -2103,7 +2114,7 @@ pub async fn spawn_worker(
                             let _ = tx_msg_clone
                                 .send(AppMessage::StatusUpdate(format!(
                                     "Loaded {} cached models",
-                                    cached.len()
+                                    cached_len
                                 )))
                                 .await;
                             return;
@@ -2175,55 +2186,55 @@ pub async fn spawn_worker(
                                             .unwrap_or_else(|| "unknown".to_string()),
                                     ),
                                 );
-                                let models = res.hits.clone();
+                                let mut models = res.hits;
+                                let model_count = models.len();
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
                                         "SearchModels: emitting network chunk append={} count={} has_more={} next_page={:?} preferred_model={:?} preferred_version={:?}",
                                         append,
-                                        models.len(),
+                                        model_count,
                                         has_more,
                                         next_page,
                                         preferred_model_id,
                                         preferred_version_id
                                     ),
                                 );
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::ModelsSearchedChunk(
-                                        models.clone(),
-                                        append,
-                                        has_more,
-                                        next_page,
-                                    ))
-                                    .await;
+                                let (jobs, preferred_url) = collect_model_cover_jobs(
+                                    &models,
+                                    preferred_model_id,
+                                    preferred_version_id,
+                                );
+                                if ttl_hours > 0 && use_cache {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::ModelsSearchedChunk(
+                                            models.clone(),
+                                            append,
+                                            has_more,
+                                            next_page,
+                                        ))
+                                        .await;
+                                } else {
+                                    let app_models = std::mem::take(&mut models);
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::ModelsSearchedChunk(
+                                            app_models,
+                                            append,
+                                            has_more,
+                                            next_page,
+                                        ))
+                                        .await;
+                                }
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(status_with_url(
                                         &format!(
                                             "Fetched {} models for \"{}\"",
-                                            models.len(),
+                                            model_count,
                                             query_label
                                         ),
                                         &request_url,
                                     )))
                                     .await;
-
-                                let mut jobs = Vec::new();
-                                let mut preferred_url = None;
-
-                                for model in &models {
-                                    for version in model_versions(model) {
-                                        if let Some(image_url) =
-                                            version.images.first().map(|image| image.url.clone())
-                                        {
-                                            jobs.push((version.id, image_url.clone()));
-                                            if Some(model.id) == preferred_model_id
-                                                && Some(version.id) == preferred_version_id
-                                            {
-                                                preferred_url = Some(image_url);
-                                            }
-                                        }
-                                    }
-                                }
 
                                 let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                                 if let Some(version_id) = preferred_version_id {
@@ -2247,7 +2258,7 @@ pub async fn spawn_worker(
                                             "SearchModels: persist cache query=\"{}\" append={} count={}",
                                             query_label,
                                             append,
-                                            models.len()
+                                            model_count
                                         ),
                                     );
                                     let mut cache = search_cache.lock().await;
