@@ -111,16 +111,10 @@ pub fn image_used_model_entries(hit: &SearchImageHit) -> Vec<ParsedUsedModel> {
         );
     }
 
-    if let Some(data) = generation_data(hit) {
-        for resource in data.resources {
-            if let Some(item) = parsed_used_model_from_generation_resource(&resource) {
-                push_used_model(&mut values, &mut seen_labels, item);
-            }
+    for resource in structured_generation_resources(hit) {
+        if let Some(item) = parsed_used_model_from_generation_resource(&resource) {
+            push_used_model(&mut values, &mut seen_labels, item);
         }
-    }
-
-    if let Some(metadata) = hit.metadata.as_ref() {
-        collect_model_artifacts(metadata, None, &mut values, &mut seen_labels);
     }
 
     values
@@ -394,20 +388,41 @@ fn value_u64(value: Option<&Value>) -> u64 {
     }
 }
 
-fn value_u64_opt(value: &Value) -> Option<u64> {
-    match value {
-        Value::Number(raw) => raw.as_u64(),
-        Value::String(raw) => raw.parse::<u64>().ok(),
-        _ => None,
-    }
-}
-
 fn generation_data(hit: &SearchImageHit) -> Option<ImageGenerationData> {
     let metadata = hit.metadata.as_ref()?;
     metadata
         .get("_generationData")
         .cloned()
         .and_then(|value| serde_json::from_value::<ImageGenerationData>(value).ok())
+}
+
+fn structured_generation_resources(
+    hit: &SearchImageHit,
+) -> Vec<civitai_cli::sdk::ImageGenerationResource> {
+    if let Some(data) = generation_data(hit)
+        && !data.resources.is_empty()
+    {
+        return data.resources;
+    }
+
+    hit.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("resources"))
+        .cloned()
+        .and_then(parse_generation_resources_value)
+        .unwrap_or_default()
+}
+
+fn parse_generation_resources_value(
+    value: Value,
+) -> Option<Vec<civitai_cli::sdk::ImageGenerationResource>> {
+    match value {
+        Value::String(raw) => serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(parse_generation_resources_value),
+        other => serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(other)
+            .ok(),
+    }
 }
 
 fn push_used_model(
@@ -440,156 +455,6 @@ fn parsed_used_model_from_generation_resource(
         version_id: resource.version_id.or(resource.model_version_id),
         navigable: true,
     })
-}
-
-fn collect_model_artifacts(
-    value: &Value,
-    key_hint: Option<&str>,
-    values: &mut Vec<ParsedUsedModel>,
-    seen_labels: &mut HashSet<String>,
-) {
-    match value {
-        Value::Object(map) => {
-            if let Some(model_name) = map.get("modelName").and_then(value_string) {
-                let model_type = map
-                    .get("modelType")
-                    .and_then(value_string)
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| "Model".to_string());
-                if !is_supported_model_label(&model_type) {
-                    for (key, nested) in map {
-                        collect_model_artifacts(nested, Some(key), values, seen_labels);
-                    }
-                    return;
-                }
-                push_used_model(
-                    values,
-                    seen_labels,
-                    ParsedUsedModel {
-                        label: format!("{model_type}: {model_name}"),
-                        query_name: Some(model_name),
-                        model_id: map.get("modelId").and_then(value_u64_opt),
-                        version_id: map.get("versionId").and_then(value_u64_opt),
-                        navigable: true,
-                    },
-                );
-                return;
-            }
-            if let Some(resource_name) = map.get("name").and_then(value_string) {
-                let resource_type = map
-                    .get("type")
-                    .and_then(value_string)
-                    .filter(|value| !value.trim().is_empty());
-                let weight = map
-                    .get("weight")
-                    .and_then(value_string)
-                    .filter(|value| !value.trim().is_empty());
-                if let Some(resource_type) = resource_type
-                    && is_supported_model_label(&resource_type)
-                {
-                    let mut label = format!("{}: {}", resource_type.to_uppercase(), resource_name);
-                    if let Some(weight) = weight {
-                        label.push_str(&format!(" x{weight}"));
-                    }
-                    push_used_model(
-                        values,
-                        seen_labels,
-                        ParsedUsedModel {
-                            label,
-                            navigable: false,
-                            ..ParsedUsedModel::default()
-                        },
-                    );
-                }
-            }
-            for (key, nested) in map {
-                collect_model_artifacts(nested, Some(key), values, seen_labels);
-            }
-        }
-        Value::Array(items) => {
-            for nested in items {
-                collect_model_artifacts(nested, key_hint, values, seen_labels);
-            }
-        }
-        Value::String(raw) => {
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return;
-            }
-
-            if let Ok(parsed) = serde_json::from_str::<Value>(trimmed) {
-                collect_model_artifacts(&parsed, key_hint, values, seen_labels);
-                return;
-            }
-
-            let lower = trimmed.to_ascii_lowercase();
-            let key = key_hint.unwrap_or_default().to_ascii_lowercase();
-            let is_generic_model_label = matches!(
-                lower.as_str(),
-                "model"
-                    | "checkpoint"
-                    | "lora"
-                    | "lycoris"
-                    | "textualinversion"
-                    | "textual inversion"
-                    | "embedding"
-                    | "hypernetwork"
-                    | "controlnet"
-                    | "vae"
-                    | "unet"
-                    | "clip"
-                    | "other"
-            );
-            let looks_like_model_file = lower.ends_with(".safetensors")
-                || lower.ends_with(".ckpt")
-                || lower.ends_with(".pt");
-            let key_suggests_named_model = key.contains("lora")
-                || key.contains("ckpt_name")
-                || key.contains("checkpoint")
-                || key.contains("unet")
-                || key.contains("vae")
-                || key.contains("clip");
-
-            if !is_generic_model_label && (looks_like_model_file || key_suggests_named_model) {
-                let label = match key.as_str() {
-                    key if key.contains("lora") => "LoRA",
-                    key if key.contains("vae") => "VAE",
-                    key if key.contains("clip") => "CLIP",
-                    key if key.contains("unet") => "UNet",
-                    key if key.contains("checkpoint") || key.contains("ckpt") => "Checkpoint",
-                    _ => "Model",
-                };
-                push_used_model(
-                    values,
-                    seen_labels,
-                    ParsedUsedModel {
-                        label: format!("{label}: {trimmed}"),
-                        navigable: false,
-                        ..ParsedUsedModel::default()
-                    },
-                );
-            }
-        }
-        _ => {}
-    }
-}
-
-fn is_supported_model_label(value: &str) -> bool {
-    matches!(
-        value.trim().to_ascii_lowercase().as_str(),
-        "model"
-            | "checkpoint"
-            | "lora"
-            | "lycoris"
-            | "textualinversion"
-            | "textual inversion"
-            | "embedding"
-            | "hypernetwork"
-            | "controlnet"
-            | "vae"
-            | "unet"
-            | "clip"
-    )
 }
 
 fn is_supported_generation_resource_type(value: &str) -> bool {
