@@ -16,6 +16,7 @@ use crate::tui::app::{
     MainTab, MediaRenderRequest, SearchFormMode, SearchFormSection, WorkerCommand,
 };
 use crate::tui::image::comfy_workflow_json;
+use crate::tui::model::{model_versions, preview_image_info};
 use crate::tui::ui;
 
 fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
@@ -212,6 +213,94 @@ pub async fn run_event_loop(
         }
     };
 
+    let send_image_model_detail_cover_priority = |app: &mut App| {
+        if !app.show_image_model_detail_modal {
+            return;
+        }
+        let Some(model) = app.image_model_detail_model.clone() else {
+            return;
+        };
+        let versions = model_versions(&model);
+        if versions.is_empty() {
+            return;
+        }
+        let selected_index = app
+            .selected_version_index
+            .get(&model.id)
+            .copied()
+            .unwrap_or(0)
+            .min(versions.len().saturating_sub(1));
+        let version = &versions[selected_index];
+        let request = current_model_cover_render_request();
+        let request_key = render_request_key(request, app.config.media_quality);
+        if app.has_cached_model_cover_request(version.id, &request_key) {
+            return;
+        }
+        let preview = preview_image_info(&model, selected_index);
+        let cover_url = preview.as_ref().map(|image| image.url.clone());
+        let source_dims = preview.and_then(|image| image.width.zip(image.height));
+        if let Some(tx) = &app.tx {
+            let _ = tx.try_send(WorkerCommand::PrioritizeModelCover(
+                version.id,
+                cover_url,
+                source_dims,
+                request,
+            ));
+        }
+    };
+
+    let send_image_model_detail_cover_prefetch = |app: &mut App| {
+        if !app.show_image_model_detail_modal {
+            return;
+        }
+        let Some(model) = app.image_model_detail_model.clone() else {
+            return;
+        };
+        let versions = model_versions(&model);
+        if versions.is_empty() {
+            return;
+        }
+        let selected_index = app
+            .selected_version_index
+            .get(&model.id)
+            .copied()
+            .unwrap_or(0)
+            .min(versions.len().saturating_sub(1));
+        let request = current_model_cover_render_request();
+        let request_key = render_request_key(request, app.config.media_quality);
+        let mut jobs = Vec::new();
+
+        for offset in 1..=2 {
+            for neighbor_index in [
+                selected_index.checked_sub(offset),
+                (selected_index + offset < versions.len()).then_some(selected_index + offset),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let version = &versions[neighbor_index];
+                if app.has_cached_model_cover_request(version.id, &request_key)
+                    || app.model_version_image_failed.contains(&version.id)
+                {
+                    continue;
+                }
+                let preview = preview_image_info(&model, neighbor_index);
+                jobs.push((
+                    version.id,
+                    preview.as_ref().map(|image| image.url.clone()),
+                    preview.and_then(|image| image.width.zip(image.height)),
+                ));
+            }
+        }
+
+        if jobs.is_empty() {
+            return;
+        }
+        if let Some(tx) = &app.tx {
+            let _ = tx.try_send(WorkerCommand::PrefetchModelCovers(jobs, request));
+        }
+    };
+
     let refresh_visible_media = |app: &mut App| {
         app.image_cache.clear();
         app.image_request_keys.clear();
@@ -284,6 +373,10 @@ pub async fn run_event_loop(
                  if let Ok(Ok(true)) = event_res {
                      if let Ok(evt) = event::read() {
                         if let Event::Resize(_, _) = evt {
+                            if app.show_image_model_detail_modal {
+                                send_image_model_detail_cover_priority(app);
+                                send_image_model_detail_cover_prefetch(app);
+                            }
                             match app.active_tab {
                                 MainTab::Models | MainTab::Bookmarks => {
                                     reload_selected_model_cover(app);
@@ -300,6 +393,86 @@ pub async fn run_event_loop(
                         if let Event::Key(key) = evt {
                         let is_ctrl_c_exit = matches!(key.code, KeyCode::Char('c'))
                             && key.modifiers.contains(KeyModifiers::CONTROL);
+                        let switch_tab = |target: MainTab, app: &mut App| {
+                            let prev_tab = app.active_tab;
+                            app.active_tab = target;
+                            app.mode = AppMode::Browsing;
+                            match app.active_tab {
+                                MainTab::Bookmarks => app.clamp_bookmark_selection(),
+                                MainTab::Images => {
+                                    if prev_tab != MainTab::Images {
+                                        request_image_feed_if_needed(app, None);
+                                    }
+                                    ensure_selected_image_loaded(app);
+                                }
+                                MainTab::ImageBookmarks => {
+                                    app.clamp_image_bookmark_selection();
+                                    ensure_selected_image_loaded(app);
+                                }
+                                _ => {}
+                            }
+                        };
+
+                        if !app.show_status_modal
+                            && !app.show_help_modal
+                            && !app.show_image_prompt_modal
+                            && !app.show_image_model_detail_modal
+                            && !app.show_bookmark_confirm_modal
+                            && !app.show_exit_confirm_modal
+                        {
+                            match key.code {
+                                KeyCode::Char('1') => {
+                                    switch_tab(MainTab::Models, app);
+                                    continue;
+                                }
+                                KeyCode::Char('2') => {
+                                    switch_tab(MainTab::Bookmarks, app);
+                                    continue;
+                                }
+                                KeyCode::Char('3') => {
+                                    switch_tab(MainTab::Images, app);
+                                    continue;
+                                }
+                                KeyCode::Char('4') => {
+                                    switch_tab(MainTab::ImageBookmarks, app);
+                                    continue;
+                                }
+                                KeyCode::Char('5') => {
+                                    switch_tab(MainTab::Downloads, app);
+                                    continue;
+                                }
+                                KeyCode::Char('6') => {
+                                    switch_tab(MainTab::Settings, app);
+                                    continue;
+                                }
+                                KeyCode::Tab => {
+                                    let next = match app.active_tab {
+                                        MainTab::Models => MainTab::Bookmarks,
+                                        MainTab::Bookmarks => MainTab::Images,
+                                        MainTab::Images => MainTab::ImageBookmarks,
+                                        MainTab::ImageBookmarks => MainTab::Downloads,
+                                        MainTab::Downloads => MainTab::Settings,
+                                        MainTab::Settings => MainTab::Models,
+                                    };
+                                    switch_tab(next, app);
+                                    continue;
+                                }
+                                KeyCode::BackTab => {
+                                    let prev = match app.active_tab {
+                                        MainTab::Models => MainTab::Settings,
+                                        MainTab::Bookmarks => MainTab::Models,
+                                        MainTab::Images => MainTab::Bookmarks,
+                                        MainTab::ImageBookmarks => MainTab::Images,
+                                        MainTab::Downloads => MainTab::ImageBookmarks,
+                                        MainTab::Settings => MainTab::Downloads,
+                                    };
+                                    switch_tab(prev, app);
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                        }
+
                         if app.mode == AppMode::SearchForm {
                             match key.code {
                                 KeyCode::Esc => {
@@ -888,6 +1061,76 @@ pub async fn run_event_loop(
                             continue;
                         }
 
+                        if app.show_image_prompt_modal {
+                            match key.code {
+                                KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter => {
+                                    app.show_image_prompt_modal = false;
+                                }
+                                KeyCode::Char('j') | KeyCode::Down => {
+                                    app.image_prompt_scroll = app.image_prompt_scroll.saturating_add(1);
+                                }
+                                KeyCode::Char('k') | KeyCode::Up => {
+                                    app.image_prompt_scroll = app.image_prompt_scroll.saturating_sub(1);
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
+                        if app.show_image_model_detail_modal {
+                            match key.code {
+                                KeyCode::Esc | KeyCode::Enter => {
+                                    app.close_image_model_detail_modal();
+                                }
+                                KeyCode::Char('b') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.toggle_bookmark_for_selected_model(&model);
+                                    }
+                                }
+                                KeyCode::Char('d') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.request_download_for_model(&model);
+                                    }
+                                }
+                                KeyCode::Left | KeyCode::Char('h') | KeyCode::Char('[') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_previous_version_for_model(&model);
+                                        send_image_model_detail_cover_priority(app);
+                                        send_image_model_detail_cover_prefetch(app);
+                                    }
+                                }
+                                KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(']') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_next_version_for_model(&model);
+                                        send_image_model_detail_cover_priority(app);
+                                        send_image_model_detail_cover_prefetch(app);
+                                    }
+                                }
+                                KeyCode::Char('K') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_previous_file_for_model(&model);
+                                    }
+                                }
+                                KeyCode::Char('J') => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_next_file_for_model(&model);
+                                    }
+                                }
+                                KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_previous_file_for_model(&model);
+                                    }
+                                }
+                                KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                    if let Some(model) = app.image_model_detail_model.clone() {
+                                        app.select_next_file_for_model(&model);
+                                    }
+                                }
+                                _ => {}
+                            }
+                            continue;
+                        }
+
                         if app.show_bookmark_confirm_modal {
                             match key.code {
                                 KeyCode::Char('y') | KeyCode::Char('Y') => {
@@ -1160,6 +1403,22 @@ pub async fn run_event_loop(
                                     _ => {}
                                 }
                             }
+                        } else if app.active_tab == MainTab::Images
+                            || app.active_tab == MainTab::ImageBookmarks
+                        {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                match key.code {
+                                    KeyCode::Up => {
+                                        app.select_previous_image_model();
+                                        continue;
+                                    }
+                                    KeyCode::Down => {
+                                        app.select_next_image_model();
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
 
                         match key.code {
@@ -1206,7 +1465,61 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Enter => {
-                                if app.active_tab == MainTab::Settings {
+                                if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
+                                    if let Some(selected_model) = app.selected_image_used_model() {
+                                        if selected_model.navigable {
+                                            if let Some(model_id) = selected_model.model_id {
+                                                app.begin_image_model_detail_modal_loading();
+                                                if let Some(tx) = &app.tx {
+                                                    let _ = tx.try_send(WorkerCommand::FetchModelDetail(
+                                                        model_id,
+                                                        selected_model.version_id,
+                                                        selected_model
+                                                            .query_name
+                                                            .clone()
+                                                            .unwrap_or_else(|| selected_model.label.clone()),
+                                                    ));
+                                                }
+                                                app.status = format!(
+                                                    "Opening model details: {}",
+                                                    selected_model.label
+                                                );
+                                            } else {
+                                                app.status =
+                                                    "Selected model item has no model id.".to_string();
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                } else if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    if let Some((_, version_id)) = app.selected_model_version() {
+                                        app.image_search_form.set_linked_model_version(Some(version_id));
+                                        app.active_tab = MainTab::Images;
+                                        app.images.clear();
+                                        app.image_cache.clear();
+                                        app.image_bytes_cache.clear();
+                                        app.selected_index = 0;
+                                        app.image_feed_loaded = false;
+                                        app.image_feed_loading = false;
+                                        app.image_feed_next_page = None;
+                                        app.image_feed_has_more = true;
+                                        if let Some(tx) = &app.tx {
+                                            let _ = tx.try_send(WorkerCommand::FetchImages(
+                                                app.image_search_form.build_options(),
+                                                None,
+                                                current_image_render_request(),
+                                            ));
+                                            app.image_feed_loading = true;
+                                            app.status =
+                                                format!("Opening images for model version {version_id}...");
+                                        }
+                                        continue;
+                                    } else {
+                                        app.status =
+                                            "Selected model has no model version id to open images.".into();
+                                        continue;
+                                    }
+                                } else if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field == 9 {
                                         app.config.media_quality = app.config.media_quality.next();
                                         refresh_visible_media(app);
@@ -1291,7 +1604,14 @@ pub async fn run_event_loop(
                                     continue;
                                 }
 
-                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                if app.active_tab == MainTab::Images
+                                    || app.active_tab == MainTab::ImageBookmarks
+                                {
+                                    app.select_previous();
+                                    ensure_selected_image_loaded(app);
+                                } else if app.active_tab == MainTab::Models
+                                    || app.active_tab == MainTab::Bookmarks
+                                {
                                     app.select_previous_version();
                                     send_cover_priority(app);
                                     send_cover_prefetch(app);
@@ -1313,7 +1633,19 @@ pub async fn run_event_loop(
                                     continue;
                                 }
 
-                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                if app.active_tab == MainTab::Images
+                                    || app.active_tab == MainTab::ImageBookmarks
+                                {
+                                    app.select_next();
+                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5) {
+                                        if let Some(next_page) = app.next_image_feed_page() {
+                                            request_image_feed_if_needed(app, Some(next_page));
+                                        }
+                                    }
+                                    ensure_selected_image_loaded(app);
+                                } else if app.active_tab == MainTab::Models
+                                    || app.active_tab == MainTab::Bookmarks
+                                {
                                     app.select_next_version();
                                     send_cover_priority(app);
                                     send_cover_prefetch(app);
@@ -1332,7 +1664,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
+                            KeyCode::Char('j') => {
                                 if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field < 11 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
@@ -1389,7 +1721,7 @@ pub async fn run_event_loop(
                                     }
                                 }
                             }
-                            KeyCode::Char('k') | KeyCode::Up => {
+                            KeyCode::Char('k') => {
                                 if app.active_tab == MainTab::Settings {
                                     if app.settings_form.focused_field > 0 { app.settings_form.focused_field -= 1; }
                                 } else if app.active_tab == MainTab::Downloads {
@@ -1404,6 +1736,32 @@ pub async fn run_event_loop(
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
                                         send_cover_prefetch(app);
+                                    }
+                                }
+                            }
+                            KeyCode::Down => {
+                                if app.active_tab == MainTab::Settings {
+                                    if app.settings_form.focused_field < 11 {
+                                        app.settings_form.focused_field += 1;
+                                    }
+                                } else if app.active_tab == MainTab::Downloads {
+                                    if app.active_downloads.is_empty() {
+                                        app.select_next_history();
+                                    } else {
+                                        app.select_next_download();
+                                    }
+                                }
+                            }
+                            KeyCode::Up => {
+                                if app.active_tab == MainTab::Settings {
+                                    if app.settings_form.focused_field > 0 {
+                                        app.settings_form.focused_field -= 1;
+                                    }
+                                } else if app.active_tab == MainTab::Downloads {
+                                    if app.active_downloads.is_empty() {
+                                        app.select_previous_history();
+                                    } else {
+                                        app.select_previous_download();
                                     }
                                 }
                             }
@@ -1424,6 +1782,8 @@ pub async fn run_event_loop(
                             KeyCode::Char('J') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_next_file();
+                                } else if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
+                                    app.select_next_image_model();
                                 } else if app.active_tab == MainTab::Downloads {
                                     app.select_next_history();
                                 }
@@ -1431,6 +1791,8 @@ pub async fn run_event_loop(
                             KeyCode::Char('K') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_previous_file();
+                                } else if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
+                                    app.select_previous_image_model();
                                 } else if app.active_tab == MainTab::Downloads {
                                     app.select_previous_history();
                                 }
@@ -1535,6 +1897,21 @@ pub async fn run_event_loop(
                                         let _ = tx.try_send(WorkerCommand::ClearSearchCache);
                                         app.status = "Clearing cached search results...".into();
                                     }
+                                } else if (app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks)
+                                    && let Some(image) = app.selected_image_in_active_view()
+                                {
+                                    if let Some(json) = comfy_workflow_json(image) {
+                                        match copy_to_clipboard(&json) {
+                                            Ok(()) => app.status = format!("Copied Comfy workflow for image {}", image.id),
+                                            Err(err) => {
+                                                app.last_error = Some(err.to_string());
+                                                app.show_status_modal = true;
+                                                app.status = "Failed to copy workflow".into();
+                                            }
+                                        }
+                                    } else {
+                                        app.status = "No Comfy workflow metadata for current image".into();
+                                    }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if let Some(download_id) = app.selected_download_id() {
                                         if let Some(tx) = &app.tx {
@@ -1545,12 +1922,9 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('m') => {
                                 if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
-                                    app.image_detail_expanded = !app.image_detail_expanded;
-                                    app.status = if app.image_detail_expanded {
-                                        "Expanded image prompt/details".into()
-                                    } else {
-                                        "Collapsed image prompt/details".into()
-                                    };
+                                    app.show_image_prompt_modal = true;
+                                    app.image_prompt_scroll = 0;
+                                    app.status = "Prompt viewer opened".into();
                                 } else {
                                     app.show_status_modal = true;
                                 }
@@ -1880,6 +2254,16 @@ pub async fn run_event_loop(
                              send_cover_prefetch(app);
                              app.status = format!("Found {} models", app.models.len());
                          }
+                     }
+                     AppMessage::ModelDetailLoaded(model, version_id) => {
+                         app.open_image_model_detail_modal(model, version_id);
+                         send_image_model_detail_cover_priority(app);
+                         send_image_model_detail_cover_prefetch(app);
+                         app.status = if let Some(model) = app.image_model_detail_model.as_ref() {
+                             format!("Loaded model details: {}", crate::tui::model::model_name(model))
+                         } else {
+                             "Loaded model details".to_string()
+                         };
                      }
                      AppMessage::StatusUpdate(status) => {
                          app.status = status;

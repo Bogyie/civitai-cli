@@ -7,7 +7,7 @@ use crate::tui::model::{
     default_base_model, model_metrics, model_name, model_versions, preview_image_info,
     selected_version,
 };
-use crate::tui::image::image_tags;
+use crate::tui::image::{image_tags, image_used_model_entries, image_used_models, ParsedUsedModel};
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
@@ -145,6 +145,7 @@ pub struct ImageSearchFormState {
     pub aspect_ratio_options: Vec<ImageAspectRatio>,
     pub aspect_ratio_cursor: usize,
     pub selected_aspect_ratios: BTreeSet<String>,
+    pub linked_model_version_id: Option<u64>,
 }
 
 impl SettingsFormState {
@@ -181,6 +182,7 @@ impl ImageSearchFormState {
             aspect_ratio_options: ImageAspectRatio::all(),
             aspect_ratio_cursor: 0,
             selected_aspect_ratios: BTreeSet::new(),
+            linked_model_version_id: None,
         }
     }
 
@@ -219,6 +221,10 @@ impl ImageSearchFormState {
                 .get(self.selected_period)
                 .and_then(|period| period_to_created_at(period.label())),
             limit: Some(50),
+            extras: self
+                .linked_model_version_id
+                .map(|id| vec![("modelVersionId".to_string(), id.to_string())])
+                .unwrap_or_default(),
             ..Default::default()
         }
     }
@@ -233,6 +239,10 @@ impl ImageSearchFormState {
         if self.focused_section == ImageSearchFormSection::Query {
             self.focused_section = ImageSearchFormSection::Sort;
         }
+    }
+
+    pub fn set_linked_model_version(&mut self, version_id: Option<u64>) {
+        self.linked_model_version_id = version_id;
     }
 }
 
@@ -303,6 +313,7 @@ pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
     ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
+    ModelDetailLoaded(Model, Option<u64>),
     ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String), // version_id, protocol, bytes, request_key
     ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String), // version_id, protocols+bytes, request_key
     ModelCoverLoadFailed(u64),
@@ -380,6 +391,7 @@ pub enum WorkerCommand {
         bool,
         Option<u32>,
     ),
+    FetchModelDetail(u64, Option<u64>, String),
     ClearSearchCache,
     ClearAllCaches,
     PrioritizeModelCover(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
@@ -442,12 +454,16 @@ pub struct App {
     pub image_cache: HashMap<u64, StatefulProtocol>,
     pub image_bytes_cache: HashMap<u64, Vec<u8>>,
     pub image_request_keys: HashMap<u64, String>,
+    pub selected_image_model_index: HashMap<u64, usize>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
     pub image_feed_next_page: Option<u32>,
     pub image_feed_has_more: bool,
-    pub image_detail_expanded: bool,
     pub image_advanced_visible: bool,
+    pub show_image_prompt_modal: bool,
+    pub show_image_model_detail_modal: bool,
+    pub image_model_detail_model: Option<Model>,
+    pub image_prompt_scroll: u16,
 
     pub active_downloads: HashMap<u64, DownloadTracker>,
     pub active_download_order: Vec<u64>,
@@ -557,12 +573,16 @@ impl App {
             image_cache: HashMap::new(),
             image_bytes_cache: HashMap::new(),
             image_request_keys: HashMap::new(),
+            selected_image_model_index: HashMap::new(),
             image_feed_loaded: false,
             image_feed_loading: false,
             image_feed_next_page: None,
             image_feed_has_more: true,
-            image_detail_expanded: false,
             image_advanced_visible: false,
+            show_image_prompt_modal: false,
+            show_image_model_detail_modal: false,
+            image_model_detail_model: None,
+            image_prompt_scroll: 0,
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,
@@ -707,6 +727,8 @@ impl App {
         self.image_cache.retain(|id, _| new_ids.contains(id));
         self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
         self.image_request_keys.retain(|id, _| new_ids.contains(id));
+        self.selected_image_model_index
+            .retain(|id, _| new_ids.contains(id));
         self.image_feed_next_page = next_page;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loaded = true;
@@ -1001,7 +1023,7 @@ impl App {
 
     pub fn append_models_results(
         &mut self,
-        new_models: Vec<Model>,
+        mut new_models: Vec<Model>,
         has_more: bool,
         next_page: Option<u32>,
     ) {
@@ -1012,6 +1034,7 @@ impl App {
             return;
         }
 
+        new_models.sort_by_key(|model| !has_displayable_model_version(model));
         let mut seen_ids = self.models.iter().map(|model| model.id).collect::<HashSet<_>>();
         for model in new_models {
             if seen_ids.insert(model.id) {
@@ -1025,10 +1048,11 @@ impl App {
 
     pub fn set_models_results(
         &mut self,
-        models: Vec<Model>,
+        mut models: Vec<Model>,
         has_more: bool,
         next_page: Option<u32>,
     ) {
+        models.sort_by_key(|model| !has_displayable_model_version(model));
         let known_version_ids = models
             .iter()
             .flat_map(model_versions)
@@ -1052,15 +1076,7 @@ impl App {
     pub fn select_next_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view().cloned() {
-                let model_id = model.id;
-                let version_len = model_versions(&model).len();
-                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-                if *v_idx < version_len.saturating_sub(1) {
-                    *v_idx += 1;
-                    if let Some(version) = selected_version(&model, *v_idx) {
-                        self.selected_file_index.entry(version.id).or_insert(0);
-                    }
-                }
+                self.select_next_version_for_model(&model);
             }
         }
     }
@@ -1068,45 +1084,23 @@ impl App {
     pub fn select_previous_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view().cloned() {
-                let model_id = model.id;
-                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-                if *v_idx > 0 {
-                    *v_idx -= 1;
-                    if let Some(version) = selected_version(&model, *v_idx) {
-                        self.selected_file_index.entry(version.id).or_insert(0);
-                    }
-                }
+                self.select_previous_version_for_model(&model);
             }
         }
     }
 
     pub fn select_next_file(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
-                let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                if let Some(version) = selected_version(model, version_index) {
-                    let file_len = version.files.len();
-                    if file_len > 0 {
-                        let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
-                        if *file_idx < file_len.saturating_sub(1) {
-                            *file_idx += 1;
-                        }
-                    }
-                }
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_next_file_for_model(&model);
             }
         }
     }
 
     pub fn select_previous_file(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
-                let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                if let Some(version) = selected_version(model, version_index) {
-                    let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
-                    if *file_idx > 0 {
-                        *file_idx -= 1;
-                    }
-                }
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_previous_file_for_model(&model);
             }
         }
     }
@@ -1121,25 +1115,137 @@ impl App {
             }
         } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
-                let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                if let Some(version) = selected_version(&model, v_idx) {
-                    let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
-                    if let Some(tx) = &self.tx {
-                        let _ = tx.try_send(WorkerCommand::DownloadModel(
-                            model.clone(),
-                            version.id,
-                            file_idx,
-                        ));
-                        self.status = format!(
-                            "Initiated download for {} (v: {}, file: {})",
-                            model_name(&model),
-                            version.name,
-                            file_idx + 1
-                        );
-                    }
+                self.request_download_for_model(&model);
+            }
+        }
+    }
+
+    pub fn select_next_version_for_model(&mut self, model: &Model) {
+        let model_id = model.id;
+        let version_len = model_versions(model).len();
+        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
+        if *v_idx < version_len.saturating_sub(1) {
+            *v_idx += 1;
+            if let Some(version) = selected_version(model, *v_idx) {
+                self.selected_file_index.entry(version.id).or_insert(0);
+            }
+        }
+    }
+
+    pub fn select_previous_version_for_model(&mut self, model: &Model) {
+        let model_id = model.id;
+        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
+        if *v_idx > 0 {
+            *v_idx -= 1;
+            if let Some(version) = selected_version(model, *v_idx) {
+                self.selected_file_index.entry(version.id).or_insert(0);
+            }
+        }
+    }
+
+    pub fn select_next_file_for_model(&mut self, model: &Model) {
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, version_index) {
+            let file_len = version.files.len();
+            if file_len > 0 {
+                let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+                if *file_idx < file_len.saturating_sub(1) {
+                    *file_idx += 1;
                 }
             }
         }
+    }
+
+    pub fn select_previous_file_for_model(&mut self, model: &Model) {
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, version_index) {
+            let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+            if *file_idx > 0 {
+                *file_idx -= 1;
+            }
+        }
+    }
+
+    pub fn request_download_for_model(&mut self, model: &Model) {
+        let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, v_idx) {
+            let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
+            if let Some(tx) = &self.tx {
+                let _ = tx.try_send(WorkerCommand::DownloadModel(
+                    model.clone(),
+                    version.id,
+                    file_idx,
+                ));
+                self.status = format!(
+                    "Initiated download for {} (v: {}, file: {})",
+                    model_name(model),
+                    version.name,
+                    file_idx + 1
+                );
+            }
+        }
+    }
+
+    pub fn begin_image_model_detail_modal_loading(&mut self) {
+        self.show_image_model_detail_modal = true;
+        self.image_model_detail_model = None;
+    }
+
+    pub fn select_next_image_model(&mut self) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = self.selected_image_in_active_view() {
+            let items = image_used_models(image);
+            if items.is_empty() {
+                return;
+            }
+            let index = self.selected_image_model_index.entry(image.id).or_insert(0);
+            if *index < items.len().saturating_sub(1) {
+                *index += 1;
+            }
+        }
+    }
+
+    pub fn select_previous_image_model(&mut self) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = self.selected_image_in_active_view() {
+            let index = self.selected_image_model_index.entry(image.id).or_insert(0);
+            if *index > 0 {
+                *index -= 1;
+            }
+        }
+    }
+
+    pub fn selected_image_used_model(&self) -> Option<ParsedUsedModel> {
+        let image = self.selected_image_in_active_view()?;
+        let entries = image_used_model_entries(image);
+        let index = self
+            .selected_image_model_index
+            .get(&image.id)
+            .copied()
+            .unwrap_or(0)
+            .min(entries.len().saturating_sub(1));
+        entries.get(index).cloned()
+    }
+
+    pub fn open_image_model_detail_modal(&mut self, model: Model, version_id: Option<u64>) {
+        if let Some(version_id) = version_id
+            && let Some(index) = model_versions(&model)
+                .iter()
+                .position(|version| version.id == version_id)
+        {
+            self.selected_version_index.insert(model.id, index);
+        }
+        self.image_model_detail_model = Some(model);
+        self.show_image_model_detail_modal = true;
+    }
+
+    pub fn close_image_model_detail_modal(&mut self) {
+        self.show_image_model_detail_modal = false;
+        self.image_model_detail_model = None;
     }
 
     pub fn select_next_download(&mut self) {
@@ -1254,8 +1360,11 @@ impl App {
     pub fn selected_model_version(&self) -> Option<(u64, u64)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = selected_version(model, version_index)?;
-        Some((model.id, version.id))
+        if let Some(version) = selected_version(model, version_index) {
+            Some((model.id, version.id))
+        } else {
+            model.primary_model_version_id().map(|version_id| (model.id, version_id))
+        }
     }
 
     pub fn selected_model_version_with_cover_url(
@@ -1814,6 +1923,10 @@ impl App {
             }
         }
     }
+}
+
+fn has_displayable_model_version(model: &Model) -> bool {
+    !model_versions(model).is_empty() || model.primary_model_version_id().is_some()
 }
 
 fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {

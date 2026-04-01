@@ -491,3 +491,186 @@ pub struct SearchImageResponse {
     #[serde(flatten, default)]
     pub extras: Value,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationData {
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub on_site: Option<bool>,
+    #[serde(default)]
+    pub process: Option<String>,
+    #[serde(default)]
+    pub meta: Option<ImageGenerationMeta>,
+    #[serde(default)]
+    pub resources: Vec<ImageGenerationResource>,
+    #[serde(default)]
+    pub tools: Vec<ImageGenerationTool>,
+    #[serde(default)]
+    pub techniques: Vec<ImageGenerationTechnique>,
+    #[serde(default)]
+    pub external: Option<Value>,
+    #[serde(default)]
+    pub can_remix: Option<bool>,
+    #[serde(default)]
+    pub remix_of_id: Option<u64>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationMeta {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub cfg_scale: Option<f64>,
+    #[serde(default)]
+    pub steps: Option<u64>,
+    #[serde(default)]
+    pub sampler: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub scheduler: Option<String>,
+    #[serde(default)]
+    pub denoise: Option<f64>,
+    #[serde(default, rename = "Model")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Option<Value>,
+    #[serde(default)]
+    pub upscalers: Option<Value>,
+    #[serde(default)]
+    pub width: Option<Value>,
+    #[serde(default)]
+    pub height: Option<Value>,
+    #[serde(default)]
+    pub comfy: Option<ImageGenerationComfy>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationComfy {
+    #[serde(default)]
+    pub prompt: Option<Value>,
+    #[serde(default)]
+    pub workflow: Option<Value>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationResource {
+    #[serde(default)]
+    pub image_id: Option<u64>,
+    #[serde(default)]
+    pub model_version_id: Option<u64>,
+    #[serde(default)]
+    pub strength: Option<Value>,
+    #[serde(default)]
+    pub model_id: Option<u64>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub model_type: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<u64>,
+    #[serde(default)]
+    pub version_name: Option<String>,
+    #[serde(default)]
+    pub base_model: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationTool {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationTechnique {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+impl ImageGenerationData {
+    pub fn as_metadata_attachment(&self) -> Value {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "_generationData".to_string(),
+            serde_json::to_value(self).unwrap_or(Value::Null),
+        );
+
+        if let Some(process) = self.process.as_ref() {
+            object.insert("process".to_string(), Value::String(process.clone()));
+        }
+        if let Some(meta) = self.meta.as_ref() {
+            let meta_value = serde_json::to_value(meta).unwrap_or(Value::Null);
+            if let Some(meta_object) = meta_value.as_object() {
+                for (key, value) in meta_object {
+                    object.insert(key.clone(), value.clone());
+                }
+            } else {
+                object.insert("meta".to_string(), meta_value);
+            }
+        }
+        if !self.resources.is_empty() {
+            object.insert(
+                "resources".to_string(),
+                serde_json::to_value(&self.resources).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if !self.tools.is_empty() {
+            object.insert(
+                "tools".to_string(),
+                serde_json::to_value(&self.tools).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if !self.techniques.is_empty() {
+            object.insert(
+                "techniques".to_string(),
+                serde_json::to_value(&self.techniques).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if let Some(external) = self.external.as_ref() {
+            object.insert("external".to_string(), external.clone());
+        }
+        if let Some(can_remix) = self.can_remix {
+            object.insert("canRemix".to_string(), Value::Bool(can_remix));
+        }
+        if let Some(remix_of_id) = self.remix_of_id {
+            object.insert("remixOfId".to_string(), Value::Number(remix_of_id.into()));
+        }
+
+        Value::Object(object)
+    }
+}

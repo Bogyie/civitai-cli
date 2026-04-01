@@ -33,7 +33,9 @@ pub use download::{
 };
 #[allow(unused_imports)]
 pub use image_search::{
-    ImageHitUser, ImageSearchState, MediaUrlOptions, SearchImageHit, SearchImageResponse,
+    ImageGenerationComfy, ImageGenerationData, ImageGenerationMeta, ImageGenerationResource,
+    ImageGenerationTechnique, ImageGenerationTool, ImageHitUser, ImageSearchState,
+    MediaUrlOptions, SearchImageHit, SearchImageResponse,
     media_url_from_raw_with_options,
 };
 #[allow(unused_imports)]

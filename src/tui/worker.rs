@@ -1,7 +1,9 @@
 use anyhow::Result;
+use futures_util::stream::{self, StreamExt};
 use ratatui_image::picker::Picker;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
@@ -927,8 +929,11 @@ fn fill_image_detail_from_cache(mut image: ImageItem, cached: &ImageItem) -> Ima
     if image.sort_at_unix.is_none() {
         image.sort_at_unix = cached.sort_at_unix;
     }
-    if image.metadata.is_none() {
-        image.metadata = cached.metadata.clone();
+    if let Some(cached_metadata) = cached.metadata.clone() {
+        image.metadata = Some(match image.metadata.take() {
+            Some(existing) => merge_json_objects(existing, cached_metadata),
+            None => cached_metadata,
+        });
     }
     if image.generation_process.is_none() {
         image.generation_process = cached.generation_process.clone();
@@ -945,23 +950,65 @@ fn fill_image_detail_from_cache(mut image: ImageItem, cached: &ImageItem) -> Ima
     image
 }
 
-fn enrich_image_detail(cache_root: Option<&Path>, image: ImageItem, ttl_minutes: u64) -> ImageItem {
-    let Some(cache_root) = cache_root else {
-        return image;
+fn merge_json_objects(base: Value, overlay: Value) -> Value {
+    match (base, overlay) {
+        (Value::Object(mut base_map), Value::Object(overlay_map)) => {
+            for (key, overlay_value) in overlay_map {
+                match base_map.remove(&key) {
+                    Some(base_value) => {
+                        base_map.insert(key, merge_json_objects(base_value, overlay_value));
+                    }
+                    None => {
+                        base_map.insert(key, overlay_value);
+                    }
+                }
+            }
+            Value::Object(base_map)
+        }
+        (_, overlay) => overlay,
+    }
+}
+
+fn attach_generation_data(image: &mut ImageItem, generation: &civitai_cli::sdk::ImageGenerationData) {
+    if image.generation_process.is_none() {
+        image.generation_process = generation.process.clone();
+    }
+
+    let attachment = generation.as_metadata_attachment();
+    image.metadata = Some(match image.metadata.take() {
+        Some(existing) => merge_json_objects(existing, attachment),
+        None => attachment,
+    });
+}
+
+async fn enrich_image_detail(
+    sdk: &civitai_cli::sdk::WebSearchClient,
+    cache_root: Option<&Path>,
+    image: ImageItem,
+    ttl_minutes: u64,
+) -> ImageItem {
+    let mut image = if let Some(cache_root) = cache_root {
+        match load_cached_image_detail(cache_root, image.id) {
+            Some(entry) if is_cache_valid_minutes(entry.cached_at_unix_secs, ttl_minutes) => {
+                fill_image_detail_from_cache(image, &entry.image)
+            }
+            Some(_) => {
+                let _ = std::fs::remove_file(image_detail_cache_path(cache_root, image.id));
+                image
+            }
+            None => image,
+        }
+    } else {
+        image
     };
 
-    let image = match load_cached_image_detail(cache_root, image.id) {
-        Some(entry) if is_cache_valid_minutes(entry.cached_at_unix_secs, ttl_minutes) => {
-            fill_image_detail_from_cache(image, &entry.image)
-        }
-        Some(_) => {
-            let _ = std::fs::remove_file(image_detail_cache_path(cache_root, image.id));
-            image
-        }
-        None => image,
-    };
+    if let Ok(generation) = sdk.get_generation_data(image.id).await {
+        attach_generation_data(&mut image, &generation);
+    }
 
-    persist_cached_image_detail(cache_root, &image);
+    if let Some(cache_root) = cache_root {
+        persist_cached_image_detail(cache_root, &image);
+    }
     image
 }
 
@@ -1657,16 +1704,22 @@ pub async fn spawn_worker(
                             Ok((items, next_page)) => {
                                 let total_items = items.len();
                                 let detail_cache_root = image_detail_cache_path.lock().await.clone();
-                                let hydrated_items = items
-                                    .into_iter()
-                                    .map(|item| {
+                                let hydrated_items = stream::iter(items.into_iter().map(|item| {
+                                    let sdk_clone = sdk_clone.clone();
+                                    let detail_cache_root = detail_cache_root.clone();
+                                    async move {
                                         enrich_image_detail(
+                                            &sdk_clone,
                                             detail_cache_root.as_deref(),
                                             item,
                                             image_detail_ttl_minutes,
                                         )
-                                    })
-                                    .collect::<Vec<_>>();
+                                        .await
+                                    }
+                                }))
+                                .buffered(6)
+                                .collect::<Vec<_>>()
+                                .await;
                                 let visible_items = hydrated_items
                                     .clone()
                                     .into_iter()
@@ -2286,6 +2339,59 @@ pub async fn spawn_worker(
                                         "Search failed",
                                         &request_url,
                                         &e.to_string(),
+                                    )))
+                                    .await;
+                            }
+                        }
+                    });
+                }
+                WorkerCommand::FetchModelDetail(model_id, preferred_version_id, model_query) => {
+                    let tx_msg_clone = tx_msg.clone();
+                    let sdk_clone = {
+                        let builder = if let Some(api_key) = downloader_config.api_key.clone() {
+                            SdkClientBuilder::new().api_key(api_key)
+                        } else {
+                            SdkClientBuilder::new()
+                        };
+                        builder.build_web().unwrap()
+                    };
+
+                    tokio::spawn(async move {
+                        let _ = tx_msg_clone
+                            .send(AppMessage::StatusUpdate(format!(
+                                "Loading model details for {}...",
+                                model_id
+                            )))
+                            .await;
+
+                        let state = ModelSearchState {
+                            query: Some(model_query.clone()),
+                            limit: Some(50),
+                            ..Default::default()
+                        };
+
+                        match sdk_clone.search_models(&state).await {
+                            Ok(response) => {
+                                if let Some(model) = response.hits.into_iter().find(|hit| hit.id == model_id) {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::ModelDetailLoaded(
+                                            model,
+                                            preferred_version_id,
+                                        ))
+                                        .await;
+                                } else {
+                                    let _ = tx_msg_clone
+                                        .send(AppMessage::StatusUpdate(
+                                            format!("Model details not found for {}.", model_query),
+                                        ))
+                                        .await;
+                                }
+                            }
+                            Err(err) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Error loading model details: {}",
+                                        err
                                     )))
                                     .await;
                             }

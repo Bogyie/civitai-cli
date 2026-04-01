@@ -22,8 +22,8 @@ use crate::tui::app::{
     SearchFormMode, SearchFormSection, SearchFormState,
 };
 use crate::tui::image::{
-    comfy_workflow_json, comfy_workflow_node_count, image_prompt, image_stats, image_tags,
-    image_used_models, image_username,
+    comfy_workflow_json, comfy_workflow_node_count, image_generation_info, image_negative_prompt,
+    image_prompt, image_stats, image_tags, image_used_models, image_username,
 };
 use crate::tui::model::{
     build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
@@ -238,6 +238,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.show_help_modal {
         draw_help_modal(f, app);
+    }
+
+    if app.show_image_prompt_modal {
+        draw_image_prompt_modal(f, app);
+    }
+
+    if app.show_image_model_detail_modal {
+        draw_image_model_detail_modal(f, app);
     }
 
     if app.show_bookmark_confirm_modal {
@@ -808,11 +816,10 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5),
-            Constraint::Length(4),
-            Constraint::Length(if app.image_detail_expanded { 8 } else { 5 }),
+            Constraint::Length(6),
             Constraint::Length(4),
             Constraint::Length(6),
+            Constraint::Length(12),
             Constraint::Min(6),
         ])
         .split(area);
@@ -823,13 +830,6 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let username = image_username(img).unwrap_or_else(|| "<unknown>".to_string());
     let stats = image_stats(img);
-    let prompt = image_prompt(img).unwrap_or_else(|| {
-        if img.hide_meta.unwrap_or(false) {
-            "Metadata hidden by source".to_string()
-        } else {
-            "<no prompt>".to_string()
-        }
-    });
     let image_meta_value = format!(
         "{} | {} | nsfw {}",
         img.r#type.as_deref().unwrap_or("image"),
@@ -852,33 +852,65 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         compact_number(stats.buzz)
     );
     let workflow_json = comfy_workflow_json(img);
+    let generation = image_generation_info(img);
     let workflow_label = workflow_json
         .as_ref()
-        .map(|_| {
-            format!(
-                "Workflow available | nodes {}",
-                comfy_workflow_node_count(img).unwrap_or(0)
-            )
-        })
-        .unwrap_or_else(|| "No Comfy workflow metadata".to_string());
+        .map(|_| format!("nodes {}", comfy_workflow_node_count(img).unwrap_or(0)))
+        .unwrap_or_else(|| "<none>".to_string());
     let used_models = image_used_models(img);
     let tags = image_tags(img);
     let tag_lines = if tags.is_empty() {
         vec![Line::from("<none>")]
     } else {
-        wrap_joined_tags(&tags, sections[5].width.saturating_sub(2) as usize, 2)
+        wrap_joined_tags(&tags, sections[4].width.saturating_sub(2) as usize, 2)
     };
-    let tag_count_value = format!("{} tag(s)", tags.len());
+    let selected_model_idx = app
+        .selected_image_model_index
+        .get(&img.id)
+        .copied()
+        .unwrap_or(0)
+        .min(used_models.len().saturating_sub(1));
     let used_model_lines = if used_models.is_empty() {
         vec![Line::from("<none>")]
     } else {
-        wrap_text_lines(
-            &used_models.join("\n"),
-            sections[4].width.saturating_sub(2) as usize,
-            sections[4].height.saturating_sub(2) as usize,
-        )
+        let visible_rows = sections[3].height.saturating_sub(2) as usize;
+        let start_idx = if visible_rows == 0 || selected_model_idx < visible_rows {
+            0
+        } else {
+            selected_model_idx + 1 - visible_rows
+        };
+        used_models
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows.max(1))
+            .map(|(idx, item)| {
+                let prefix = if idx == selected_model_idx { "> " } else { "  " };
+                let available_width = sections[3].width.saturating_sub(4) as usize;
+                let display_item = if idx == selected_model_idx
+                    && item.chars().count() > available_width.max(1)
+                {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_else(|_| Duration::from_millis(0))
+                        .as_millis();
+                    let shift = ((now_ms / 260) as usize) % item.chars().count().max(1);
+                    rotate_left_chars(item, shift)
+                } else {
+                    item.clone()
+                };
+                let style = if idx == selected_model_idx {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                Line::from(vec![Span::styled(
+                    format!("{prefix}{display_item}"),
+                    style,
+                )])
+            })
+            .collect::<Vec<_>>()
     };
-    let used_model_count = format!("{} item(s)", used_models.len());
     let image_link = img.image_page_url();
     let advanced_json = img
         .metadata
@@ -896,10 +928,7 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             "Image",
             &image_meta_value,
         )),
-        Line::from(model_key_value_spans(
-            "Base",
-            img.base_model.as_deref().unwrap_or("<none>"),
-        )),
+        Line::from(model_key_value_spans("Link", &image_link)),
     ];
     let stats_lines = vec![
         Line::from(model_key_value_spans(
@@ -911,16 +940,29 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             &stats_secondary_value,
         )),
     ];
-    let prompt_lines = wrap_text_lines(
-        &prompt,
-        sections[2].width.saturating_sub(2) as usize,
-        if app.image_detail_expanded { 6 } else { 3 },
-    );
+    let generation_lines = vec![
+        Line::from(model_key_value_spans(
+            "CFG",
+            generation.cfg_scale.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Steps",
+            generation.steps.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Sampler",
+            generation.sampler.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Seed",
+            generation.seed.as_deref().unwrap_or("<none>"),
+        )),
+    ];
     let comfy_lines = vec![
         Line::from(model_key_value_spans("Comfy", &workflow_label)),
         Line::from(model_key_value_spans(
-            "Actions",
-            "[w] Copy workflow | [W] Save workflow | [o] Copy image link",
+            "Copy",
+            if workflow_json.is_some() { "[c]" } else { "<none>" },
         )),
     ];
 
@@ -936,41 +978,38 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             .wrap(Wrap { trim: true }),
         sections[1],
     );
+    let mut tag_block_lines = tag_lines;
+    let generation_block = Block::default().borders(Borders::ALL).title(" Generation ");
+    let generation_inner = generation_block.inner(sections[2]);
+    let generation_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(generation_inner);
+    f.render_widget(generation_block, sections[2]);
     f.render_widget(
-        Paragraph::new(prompt_lines)
-            .block(Block::default().borders(Borders::ALL).title(" Prompt "))
+        Paragraph::new(generation_lines)
+            .block(Block::default().borders(Borders::RIGHT).title(" Params "))
             .wrap(Wrap { trim: true }),
-        sections[2],
+        generation_split[0],
     );
-    let mut tag_block_lines = vec![Line::from(model_key_value_spans(
-        "Tags",
-        &tag_count_value,
-    ))];
-    tag_block_lines.extend(tag_lines);
-    tag_block_lines.push(Line::from(model_key_value_spans("Link", &image_link)));
     f.render_widget(
         Paragraph::new(comfy_lines)
-            .block(Block::default().borders(Borders::ALL).title(" Comfy "))
+            .block(Block::default().title(" Comfy "))
             .wrap(Wrap { trim: true }),
-        sections[3],
+        generation_split[1],
     );
     f.render_widget(
-        Paragraph::new({
-            let mut lines = vec![Line::from(model_key_value_spans("Used", &used_model_count))];
-            lines.extend(used_model_lines);
-            lines
-        })
-        .block(Block::default().borders(Borders::ALL).title(" Models "))
-        .wrap(Wrap { trim: true }),
-        sections[4],
+        Paragraph::new(used_model_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Models ")),
+        sections[3],
     );
 
     if app.image_advanced_visible {
         tag_block_lines.push(Line::from(""));
         tag_block_lines.extend(wrap_text_lines(
             &advanced_json,
-            sections[5].width.saturating_sub(2) as usize,
-            sections[5].height.saturating_sub(5) as usize,
+            sections[4].width.saturating_sub(2) as usize,
+            sections[4].height.saturating_sub(3) as usize,
         ));
     }
     f.render_widget(
@@ -981,8 +1020,79 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 " Tags "
             }))
             .wrap(Wrap { trim: false }),
-        sections[5],
+        sections[4],
     );
+}
+
+fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
+    let Some(img) = app.selected_image_in_active_view() else {
+        return;
+    };
+
+    let positive = image_prompt(img).unwrap_or_else(|| {
+        if img.hide_meta.unwrap_or(false) {
+            "Metadata hidden by source".to_string()
+        } else {
+            "<no prompt>".to_string()
+        }
+    });
+    let negative = image_negative_prompt(img).unwrap_or_else(|| "<no negative prompt>".to_string());
+
+    let content = format!(
+        "Positive Prompt\n{}\n\nNegative Prompt\n{}",
+        positive, negative
+    );
+
+    let area = centered_rect(78, 82, f.area());
+    let block = Block::default().borders(Borders::ALL).title(" Prompt Viewer ");
+    f.render_widget(Clear, area);
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+
+    let prompt = Paragraph::new(content)
+        .wrap(Wrap { trim: false })
+        .scroll((app.image_prompt_scroll, 0));
+    f.render_widget(prompt, sections[0]);
+
+    let help = Paragraph::new(Line::from(Span::styled(
+        " [j/k or ↑/↓] Scroll  [m] Close  [Esc] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(help, sections[1]);
+}
+
+fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(84, 86, f.area());
+    f.render_widget(Clear, area);
+
+    let title = if let Some(model) = app.image_model_detail_model.as_ref() {
+        let bookmark_label = if app.is_model_bookmarked(model.id) {
+            "Bookmarked"
+        } else {
+            "b: Bookmark"
+        };
+        format!(" Model Details | [←/→] Version | [J/K] Files | [d] Download | [{bookmark_label}] | [Esc] Close ")
+    } else {
+        " Model Details | Loading... | [Esc] Close ".to_string()
+    };
+
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if let Some(model) = app.image_model_detail_model.clone() {
+        draw_model_sidebar(f, app, inner, Some(&model));
+    } else {
+        let loading = Paragraph::new("Loading model details...")
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title(" Model "));
+        f.render_widget(loading, inner);
+    }
 }
 
 fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1232,10 +1342,10 @@ fn draw_model_list(
     for (idx, model) in models.iter().enumerate() {
         let is_selected = idx == selected_idx;
         let metrics = model_metrics(model);
-        let base_model = default_base_model(model).unwrap_or_else(|| "Unknown".to_string());
         let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
         let mut display_name = model_name(model);
         let is_bookmarked = bookmarked_ids.contains(&model.id);
+        let has_version_id = !model_versions(model).is_empty();
 
         if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
@@ -1248,13 +1358,14 @@ fn draw_model_list(
 
         let title_style = if is_bookmarked {
             Style::default().fg(Color::Green)
+        } else if !has_version_id {
+            Style::default().fg(Color::DarkGray)
         } else {
             Style::default().fg(Color::White)
         };
         let mut line_two = format!(
-            "{} | {} | dl {} like {} cmt {} | by {}",
+            "{} | dl {} like {} cmt {} | by {}",
             model.r#type.as_deref().unwrap_or("Model"),
-            base_model,
             compact_number(metrics.download_count),
             compact_number(metrics.thumbs_up_count),
             compact_number(metrics.comment_count),
@@ -1269,7 +1380,11 @@ fn draw_model_list(
             Line::from(vec![
                 Span::styled(
                     compact_cell_text(safe_prefix, name_width.saturating_sub(7)),
-                    Style::default().fg(Color::DarkGray),
+                    if has_version_id {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Rgb(90, 90, 90))
+                    },
                 ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled("NSFW", Style::default().fg(Color::Red)),
@@ -1277,7 +1392,11 @@ fn draw_model_list(
         } else {
             Line::from(Span::styled(
                 compact_cell_text(line_two, name_width),
-                Style::default().fg(Color::DarkGray),
+                if has_version_id {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Rgb(90, 90, 90))
+                },
             ))
         };
 
@@ -2382,20 +2501,26 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [e] Export bookmarks  [i] Import bookmarks"),
         ],
         MainTab::Images => vec![
+            Line::from(" [←/→] Change image"),
             Line::from(" [d] Download current image"),
             Line::from(" [b] Bookmark current image"),
-            Line::from(" [m] Expand prompt/details"),
+            Line::from(" [m] Open full prompt viewer"),
             Line::from(" [a] Toggle advanced metadata"),
             Line::from(" [o] Copy image page link"),
-            Line::from(" [w] Copy workflow  [W] Save workflow JSON"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change used model"),
+            Line::from(" [Enter] Open selected model details"),
+            Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
         ],
         MainTab::ImageBookmarks => vec![
+            Line::from(" [←/→] Change image"),
             Line::from(" [d] Download current image"),
             Line::from(" [b] Remove current bookmark"),
-            Line::from(" [m] Expand prompt/details"),
+            Line::from(" [m] Open full prompt viewer"),
             Line::from(" [a] Toggle advanced metadata"),
             Line::from(" [o] Copy image page link"),
-            Line::from(" [w] Copy workflow  [W] Save workflow JSON"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change used model"),
+            Line::from(" [Enter] Open selected model details"),
+            Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
         ],
         MainTab::Downloads => vec![
             Line::from(" [p] Pause / resume active download"),
@@ -2521,8 +2646,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let shortcuts = match app.active_tab {
         MainTab::Models => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download",
         MainTab::Bookmarks => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove",
-        MainTab::Images => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [d] Download  [w] Workflow  [b] Bookmark",
-        MainTab::ImageBookmarks => "[?] Help  [j/k] Move  [/] Search  [d] Download  [w] Workflow  [b] Remove  [m] Expand",
+        MainTab::Images => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
+        MainTab::ImageBookmarks => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
         MainTab::Downloads => "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove",
         MainTab::Settings => "[?] Help  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel",
     };
