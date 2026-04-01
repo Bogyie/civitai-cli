@@ -5,69 +5,13 @@ use serde_json::Value;
 
 use super::constants::{
     CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL, CIVITAI_WEB_URL,
-    DEFAULT_IMAGE_SORTS,
+};
+use super::image_search_types::{
+    ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageTechnique, ImageTool,
 };
 use super::shared::{
     append_csv_pair, normalize_search_url, parse_query_map, split_multi, split_multi_keys,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ImageSearchSortBy {
-    #[default]
-    Relevance,
-    MostReactions,
-    MostDiscussed,
-    MostCollected,
-    MostBuzz,
-    Newest,
-}
-
-impl ImageSearchSortBy {
-    pub fn as_query_value(&self) -> &'static str {
-        match self {
-            Self::Relevance => DEFAULT_IMAGE_SORTS[0],
-            Self::MostReactions => DEFAULT_IMAGE_SORTS[1],
-            Self::MostDiscussed => DEFAULT_IMAGE_SORTS[2],
-            Self::MostCollected => DEFAULT_IMAGE_SORTS[3],
-            Self::MostBuzz => DEFAULT_IMAGE_SORTS[4],
-            Self::Newest => DEFAULT_IMAGE_SORTS[5],
-        }
-    }
-
-    pub fn from_query_value(value: &str) -> Self {
-        if value == DEFAULT_IMAGE_SORTS[0] {
-            return Self::Relevance;
-        }
-        if value == DEFAULT_IMAGE_SORTS[1] {
-            return Self::MostReactions;
-        }
-        if value == DEFAULT_IMAGE_SORTS[2] {
-            return Self::MostDiscussed;
-        }
-        if value == DEFAULT_IMAGE_SORTS[3] {
-            return Self::MostCollected;
-        }
-        if value == DEFAULT_IMAGE_SORTS[4] {
-            return Self::MostBuzz;
-        }
-        if value == DEFAULT_IMAGE_SORTS[5] {
-            return Self::Newest;
-        }
-        Self::Relevance
-    }
-
-    pub fn to_meili_sort_value(&self) -> Option<&'static str> {
-        match self {
-            Self::Relevance => None,
-            Self::MostReactions => Some("stats.reactionCountAllTime:desc"),
-            Self::MostDiscussed => Some("stats.commentCountAllTime:desc"),
-            Self::MostCollected => Some("stats.collectedCountAllTime:desc"),
-            Self::MostBuzz => Some("stats.tippedAmountCountAllTime:desc"),
-            Self::Newest => Some("createdAt:desc"),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -75,13 +19,13 @@ impl ImageSearchSortBy {
 pub struct ImageSearchState {
     pub query: Option<String>,
     pub sort_by: ImageSearchSortBy,
-    pub media_types: Vec<String>,
+    pub media_types: Vec<ImageMediaType>,
     pub tags: Vec<String>,
-    pub tools: Vec<String>,
-    pub techniques: Vec<String>,
+    pub tools: Vec<ImageTool>,
+    pub techniques: Vec<ImageTechnique>,
     pub users: Vec<String>,
-    pub base_models: Vec<String>,
-    pub aspect_ratios: Vec<String>,
+    pub base_models: Vec<ImageBaseModel>,
+    pub aspect_ratios: Vec<ImageAspectRatio>,
     pub created_at: Option<String>,
     pub image_id: Option<u64>,
     pub page: Option<u32>,
@@ -93,7 +37,10 @@ impl ImageSearchState {
     pub fn to_query_pairs(&self) -> Vec<(String, String)> {
         let mut pairs = Vec::new();
 
-        pairs.push(("sortBy".to_string(), self.sort_by.as_query_value().to_string()));
+        pairs.push((
+            "sortBy".to_string(),
+            self.sort_by.to_query_value().into_owned(),
+        ));
 
         if let Some(query) = self.query.as_ref().filter(|q| !q.is_empty()) {
             pairs.push(("query".to_string(), query.to_string()));
@@ -107,13 +54,53 @@ impl ImageSearchState {
             pairs.push(("imageId".to_string(), image_id.to_string()));
         }
 
-        append_csv_pair(&mut pairs, "type", &self.media_types);
+        append_csv_pair(
+            &mut pairs,
+            "type",
+            &self
+                .media_types
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
         append_csv_pair(&mut pairs, "tags", &self.tags);
-        append_csv_pair(&mut pairs, "tools", &self.tools);
-        append_csv_pair(&mut pairs, "techniques", &self.techniques);
+        append_csv_pair(
+            &mut pairs,
+            "tools",
+            &self
+                .tools
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "techniques",
+            &self
+                .techniques
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
         append_csv_pair(&mut pairs, "users", &self.users);
-        append_csv_pair(&mut pairs, "baseModel", &self.base_models);
-        append_csv_pair(&mut pairs, "aspectRatio", &self.aspect_ratios);
+        append_csv_pair(
+            &mut pairs,
+            "baseModel",
+            &self
+                .base_models
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "aspectRatio",
+            &self
+                .aspect_ratios
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
 
         if let Some(page) = self.page {
             pairs.push(("page".to_string(), page.to_string()));
@@ -129,8 +116,11 @@ impl ImageSearchState {
 
     pub fn to_web_url(&self, base_url: &str) -> Result<Url> {
         let pairs = self.to_query_pairs();
-        let url = Url::parse_with_params(base_url, pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .context("Failed to build Civitai image search URL")?;
+        let url = Url::parse_with_params(
+            base_url,
+            pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+        )
+        .context("Failed to build Civitai image search URL")?;
         Ok(url)
     }
 
@@ -153,13 +143,28 @@ impl ImageSearchState {
             query.sort_by = ImageSearchSortBy::from_query_value(v);
         }
 
-        query.media_types = split_multi_keys(&map, &["type", "types"]);
+        query.media_types = split_multi_keys(&map, &["type", "types"])
+            .into_iter()
+            .map(|value| ImageMediaType::from_query_value(&value))
+            .collect();
         query.tags = split_multi(map.get("tags"));
-        query.tools = split_multi(map.get("tools"));
-        query.techniques = split_multi(map.get("techniques"));
+        query.tools = split_multi(map.get("tools"))
+            .into_iter()
+            .map(|value| ImageTool::from_query_value(&value))
+            .collect();
+        query.techniques = split_multi(map.get("techniques"))
+            .into_iter()
+            .map(|value| ImageTechnique::from_query_value(&value))
+            .collect();
         query.users = split_multi(map.get("users"));
-        query.base_models = split_multi(map.get("baseModel"));
-        query.aspect_ratios = split_multi(map.get("aspectRatio"));
+        query.base_models = split_multi(map.get("baseModel"))
+            .into_iter()
+            .map(|value| ImageBaseModel::from_query_value(&value))
+            .collect();
+        query.aspect_ratios = split_multi(map.get("aspectRatio"))
+            .into_iter()
+            .map(|value| ImageAspectRatio::from_query_value(&value))
+            .collect();
 
         if let Some(values) = map.get("createdAt")
             && let Some(v) = values.first()
