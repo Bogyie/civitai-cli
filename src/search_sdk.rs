@@ -6,11 +6,12 @@ use serde_json::Value;
 
 /// Constant used by Civitai image search pages.
 pub const IMAGES_SEARCH_INDEX: &str = "images_v6";
-/// Human-facing image search endpoint used by the web UI.
-pub const CIVITAI_IMAGE_SEARCH_WEB_URL: &str = "https://civitai.com/search/images";
 pub const CIVITAI_IMAGE_SEARCH_MEILI_URL: &str = "https://search-new.civitai.com";
 pub const CIVITAI_IMAGE_SEARCH_CLIENT_KEY: &str =
     "8c46eb2508e21db1e9828a97968d91ab1ca1caa5f70a00e88a2ba1e286603b61";
+pub const CIVITAI_WEB_URL: &str = "https://civitai.com";
+pub const CIVITAI_MEDIA_DELIVERY_URL: &str = "https://image.civitai.com";
+pub const CIVITAI_MEDIA_DELIVERY_NAMESPACE: &str = "xG1nkqKTMzGDvpLrqFT7WA";
 
 const DEFAULT_SORTS: [&str; 6] = [
     IMAGES_SEARCH_INDEX,
@@ -78,17 +79,6 @@ impl ImageSearchSortBy {
         Self::Relevance
     }
 
-    pub fn to_api_sort_value(&self) -> Option<&'static str> {
-        match self {
-            Self::Relevance => None,
-            Self::MostReactions => Some("Most Reactions"),
-            Self::MostDiscussed => Some("Most Discussed"),
-            Self::MostCollected => Some("Most Collected"),
-            Self::MostBuzz => Some("Most Buzz"),
-            Self::Newest => Some("Newest"),
-        }
-    }
-
     pub fn to_meili_sort_value(&self) -> Option<&'static str> {
         match self {
             Self::Relevance => None,
@@ -113,44 +103,6 @@ impl SearchSdkClient {
             .build()
             .context("Failed to build HTTP client")?;
         Ok(Self { client })
-    }
-
-    fn build_web_query_pairs(state: &ImageSearchState) -> Vec<(String, String)> {
-        let mut pairs = Vec::new();
-
-        if let Some(query) = state.query.as_ref().filter(|q| !q.is_empty()) {
-            pairs.push(("query".to_string(), query.to_string()));
-        }
-
-        if let Some(limit) = state.limit {
-            pairs.push(("limit".to_string(), limit.to_string()));
-        }
-
-        if let Some(page) = state.page {
-            pairs.push(("page".to_string(), page.to_string()));
-        }
-
-        if let Some(sort) = state.sort_by.to_api_sort_value() {
-            pairs.push(("sort".to_string(), sort.to_string()));
-        }
-
-        if let Some(created_at) = state.created_at.as_ref().filter(|value| !value.is_empty()) {
-            pairs.push(("createdAt".to_string(), created_at.to_string()));
-        }
-
-        if let Some(image_id) = state.image_id {
-            pairs.push(("imageId".to_string(), image_id.to_string()));
-        }
-
-        pairs.extend(
-            state
-                .extras
-                .iter()
-                .filter(|(key, _)| key != "query")
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
-
-        pairs
     }
 
     fn escape_filter_value(value: &str) -> String {
@@ -525,6 +477,30 @@ pub struct SearchImageHit {
 impl SearchImageHit {
     pub fn has_public_metadata(&self) -> bool {
         !self.hide_meta.unwrap_or(false) && self.prompt.is_some()
+    }
+
+    pub fn media_token(&self) -> Option<&str> {
+        self.url.as_deref().filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn original_media_url(&self) -> Option<String> {
+        self.media_url_with_namespace(CIVITAI_MEDIA_DELIVERY_NAMESPACE)
+    }
+
+    pub fn image_page_url(&self) -> String {
+        format!("{CIVITAI_WEB_URL}/images/{}", self.id)
+    }
+
+    pub fn media_url_with_namespace(&self, namespace: &str) -> Option<String> {
+        let token = self.media_token()?;
+        let namespace = namespace.trim().trim_matches('/');
+        if namespace.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "{CIVITAI_MEDIA_DELIVERY_URL}/{namespace}/{token}/original=true"
+        ))
     }
 }
 

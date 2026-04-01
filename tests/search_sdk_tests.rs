@@ -88,17 +88,58 @@ fn has_public_metadata_check() {
     assert!(!hidden_meta.has_public_metadata());
 }
 
+#[test]
+fn builds_original_media_url_from_hit_url_token() {
+    let hit = SearchImageHit {
+        id: 1,
+        url: Some("abc123-token".to_string()),
+        width: None,
+        height: None,
+        r#type: Some("image".to_string()),
+        created_at: None,
+        prompt: None,
+        base_model: None,
+        hash: None,
+        hide_meta: Some(false),
+        user: None,
+        stats: None,
+        tag_names: vec![],
+        model_version_ids: vec![],
+        nsfw_level: None,
+        browsing_level: None,
+        sort_at: None,
+        sort_at_unix: None,
+        metadata: None,
+        generation_process: None,
+        ai_nsfw_level: None,
+        combined_nsfw_level: None,
+        thumbnail_url: None,
+    };
+
+    assert_eq!(hit.media_token(), Some("abc123-token"));
+    assert_eq!(hit.image_page_url(), "https://civitai.com/images/1");
+    assert_eq!(
+        hit.original_media_url().as_deref(),
+        Some("https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/abc123-token/original=true")
+    );
+    assert_eq!(
+        hit.media_url_with_namespace("custom-namespace").as_deref(),
+        Some("https://image.civitai.com/custom-namespace/abc123-token/original=true")
+    );
+}
+
 #[tokio::test]
 #[ignore]
 async fn fetch_live_civitai_web_api_sample() -> Result<(), Box<dyn std::error::Error>> {
     let sdk = SearchSdkClient::new()?;
     let state = ImageSearchState {
         query: Some("man".to_string()),
-        tags: vec!["pg".to_string()],
+        tags: vec!["xxx".to_string()],
         sort_by: ImageSearchSortBy::MostReactions,
-        limit: Some(3),
+        limit: Some(2),
         ..Default::default()
     };
+    let typed = sdk.search_images_web(&state).await?;
     let value: Value = sdk.search_images_raw(&state).await?;
 
     let items = value["hits"].as_array().cloned().unwrap_or_default();
@@ -112,6 +153,24 @@ async fn fetch_live_civitai_web_api_sample() -> Result<(), Box<dyn std::error::E
 
     println!("live_response_metadata = {}", metadata);
     println!("live_items_count = {}", items.len());
+    println!(
+        "typed_response_summary = {}",
+        serde_json::json!({
+            "hits": typed.hits.len(),
+            "estimatedTotalHits": typed.estimated_total_hits,
+            "processingTimeMs": typed.processing_time_ms,
+            "limit": typed.limit,
+            "offset": typed.offset,
+        })
+    );
+
+    for (idx, hit) in typed.hits.iter().take(3).enumerate() {
+        println!(
+            "typed_item[{idx}] page_url={}, media_url={}",
+            hit.image_page_url(),
+            hit.original_media_url().unwrap_or_else(|| "N/A".to_string())
+        );
+    }
 
     for (idx, item) in items.iter().take(3).enumerate() {
         let id = item.get("id").and_then(Value::as_u64).unwrap_or(0);
@@ -128,13 +187,20 @@ async fn fetch_live_civitai_web_api_sample() -> Result<(), Box<dyn std::error::E
             .get("prompt")
             .and_then(Value::as_str)
             .unwrap_or("N/A");
+        let page_url = format!("https://civitai.com/images/{id}");
+        let media_url = item
+            .get("url")
+            .and_then(Value::as_str)
+            .map(|token| format!("https://image.civitai.com/xG1nkqKTMzGDvpLrqFT7WA/{token}/original=true"))
+            .unwrap_or_else(|| "N/A".to_string());
         println!(
-            "item[{idx}] id={id}, username={username}, baseModel={base_model}, prompt_len={}",
+            "item[{idx}] id={id}, username={username}, baseModel={base_model}, prompt_len={}, page_url={page_url}, media_url={media_url}",
             prompt.len()
         );
     }
 
     assert!(!items.is_empty());
+    assert_eq!(typed.hits.len(), items.len());
     for (idx, item) in items.iter().take(3).enumerate() {
         let pretty = serde_json::to_string_pretty(item).unwrap_or_else(|_| "{}".to_string());
         println!("item[{idx}] full_json = {pretty}");
