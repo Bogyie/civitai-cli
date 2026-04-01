@@ -83,7 +83,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Civitai CLI | [1-6] Switch tab | Tab: cycle tabs "),
+                .title(" Civitai CLI | [1-6] Switch tab "),
         )
         .highlight_style(
             Style::default()
@@ -262,9 +262,30 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block.clone(), area);
     let inner_area = block.inner(area);
 
+    let layout_sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(inner_area);
+
+    let summary = Paragraph::new(Line::from(vec![
+        Span::styled(" Focus ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if has_active { "Active queue" } else { "History" },
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("Actions ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[p] pause/resume  [c] cancel  [r] resume  [d] remove  [D] purge file",
+            Style::default().fg(Color::Gray),
+        ),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).title(" Control Panel "));
+    f.render_widget(summary, layout_sections[0]);
+
     if !has_active && !has_history {
         let p = Paragraph::new("No active downloads or history.").alignment(Alignment::Center);
-        f.render_widget(p, inner_area);
+        f.render_widget(p, layout_sections[1]);
         return;
     }
 
@@ -285,12 +306,12 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
         sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
-            .split(inner_area)
+            .split(layout_sections[1])
             .to_vec();
     } else if has_active {
-        sections.push(inner_area);
+        sections.push(layout_sections[1]);
     } else {
-        sections.push(inner_area);
+        sections.push(layout_sections[1]);
     }
 
     let mut section_index = 0;
@@ -564,408 +585,178 @@ fn format_time_ago(ts: SystemTime) -> String {
 }
 
 fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Settings ");
+    let outer = Block::default().borders(Borders::ALL).title(" Settings Control Panel ");
+    f.render_widget(outer.clone(), area);
+    let inner = outer.inner(area);
     let fm = &app.settings_form;
 
-    let mut lines = vec![
+    let field_value = |idx: usize| -> String {
+        if fm.editing && fm.focused_field == idx {
+            return format!("{}█", fm.input_buffer);
+        }
+        match idx {
+            0 => app
+                .config
+                .api_key
+                .as_ref()
+                .map(|key| format!("Present ({})", key.chars().take(5).collect::<String>()))
+                .unwrap_or_else(|| "Not configured".to_string()),
+            1 => app
+                .config
+                .comfyui_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Not configured".to_string()),
+            2 => app
+                .config
+                .bookmark_file_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| crate::config::AppConfig::bookmark_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            3 => app
+                .config
+                .model_search_cache_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.search_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            4 => format!("{}h", app.config.model_search_cache_ttl_hours),
+            5 => app
+                .config
+                .image_cache_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.image_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            6 => format!("{}m", app.config.image_search_cache_ttl_minutes),
+            7 => format!("{}m", app.config.image_detail_cache_ttl_minutes),
+            8 => {
+                if app.config.image_cache_ttl_minutes == 0 {
+                    "Persistent".to_string()
+                } else {
+                    format!("{}m", app.config.image_cache_ttl_minutes)
+                }
+            }
+            9 => app.config.media_quality.label().to_string(),
+            10 => app
+                .config
+                .download_history_file_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.download_history_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            11 => "Delete search/detail/media caches".to_string(),
+            _ => String::new(),
+        }
+    };
+
+    let item_line = |idx: usize, label: &str| -> Line<'static> {
+        let focused = fm.focused_field == idx;
+        let label_style = if focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let value_style = if focused && fm.editing {
+            Style::default().fg(Color::Yellow)
+        } else if idx == 11 {
+            Style::default().fg(Color::LightRed)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        Line::from(vec![
+            Span::styled(if focused { "> " } else { "  " }, label_style),
+            Span::styled(format!("{label}: "), label_style),
+            Span::styled(field_value(idx), value_style),
+        ])
+    };
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(8),
+            Constraint::Length(5),
+            Constraint::Min(3),
+        ])
+        .split(inner);
+
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(sections[0]);
+    let middle = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(sections[1]);
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(sections[2]);
+
+    let access = Paragraph::new(vec![
+        item_line(0, "API Key"),
+        item_line(1, "ComfyUI"),
+        item_line(2, "Bookmark File"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Access & Paths "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(access, top[0]);
+
+    let media = Paragraph::new(vec![
+        item_line(9, "Media Quality"),
         Line::from(Span::styled(
-            "--- Civitai CLI Configuration ---",
-            Style::default().add_modifier(Modifier::BOLD),
+            "  Left/Right cycles render preference",
+            help_text_style(),
         )),
-        Line::from(""),
-    ];
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Media "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(media, top[1]);
 
-    let api_key_val = if fm.editing && fm.focused_field == 0 {
-        format!("{}█", fm.input_buffer)
-    } else if let Some(key) = &app.config.api_key {
-        format!(
-            "Present (starts with {})",
-            &key.chars().take(5).collect::<String>()
-        )
+    let model_cache = Paragraph::new(vec![
+        item_line(3, "Model Cache Folder"),
+        item_line(4, "Model Search TTL"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Model Cache "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(model_cache, middle[0]);
+
+    let image_cache = Paragraph::new(vec![
+        item_line(5, "Image Cache Folder"),
+        item_line(6, "Image Search TTL"),
+        item_line(7, "Image Detail TTL"),
+        item_line(8, "Image Binary TTL"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Image Cache "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(image_cache, middle[1]);
+
+    let storage = Paragraph::new(vec![item_line(10, "Download History File")])
+        .block(Block::default().borders(Borders::ALL).title(" Storage "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(storage, bottom[0]);
+
+    let actions = Paragraph::new(vec![
+        item_line(11, "Clear All Caches"),
+        Line::from(Span::styled(
+            "  Keeps settings, bookmarks, tags, and history",
+            help_text_style(),
+        )),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Actions "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(actions, bottom[1]);
+
+    let hints = if fm.editing {
+        " Type to edit the selected field. [Enter] Save  [Esc] Cancel "
     } else {
-        "None (Restricted search and downloads)".to_string()
+        " [j/k] Move  [Enter] Edit/Run  [h/l] Cycle selected enum/action "
     };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 0 {
-                "> API Key: "
-            } else {
-                "  API Key: "
-            },
-            Style::default().fg(if fm.focused_field == 0 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            api_key_val,
-            if fm.focused_field == 0 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let path_val = if fm.editing && fm.focused_field == 1 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .comfyui_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 1 {
-                "> ComfyUI Path: "
-            } else {
-                "  ComfyUI Path: "
-            },
-            Style::default().fg(if fm.focused_field == 1 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            path_val,
-            if fm.focused_field == 1 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let bookmark_path_val = if fm.editing && fm.focused_field == 2 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .bookmark_file_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                crate::config::AppConfig::bookmark_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 2 {
-                "> Bookmark File: "
-            } else {
-                "  Bookmark File: "
-            },
-            Style::default().fg(if fm.focused_field == 2 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            bookmark_path_val,
-            if fm.focused_field == 2 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let model_search_cache_path_val = if fm.editing && fm.focused_field == 3 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .model_search_cache_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .search_cache_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 3 {
-                "> Model Search Cache Folder: "
-            } else {
-                "  Model Search Cache Folder: "
-            },
-            Style::default().fg(if fm.focused_field == 3 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            model_search_cache_path_val,
-            if fm.focused_field == 3 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let cache_ttl_val = if fm.editing && fm.focused_field == 4 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.model_search_cache_ttl_hours.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 4 {
-                "> Model Search Cache TTL (hours): "
-            } else {
-                "  Model Search Cache TTL (hours): "
-            },
-            Style::default().fg(if fm.focused_field == 4 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            cache_ttl_val,
-            if fm.focused_field == 4 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_cache_path_val = if fm.editing && fm.focused_field == 5 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .image_cache_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .image_cache_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 5 {
-                "> Image Cache Folder: "
-            } else {
-                "  Image Cache Folder: "
-            },
-            Style::default().fg(if fm.focused_field == 5 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_cache_path_val,
-            if fm.focused_field == 5 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_search_ttl_val = if fm.editing && fm.focused_field == 6 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.image_search_cache_ttl_minutes.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 6 {
-                "> Image Search Cache TTL (minutes, Newest bypasses cache): "
-            } else {
-                "  Image Search Cache TTL (minutes, Newest bypasses cache): "
-            },
-            Style::default().fg(if fm.focused_field == 6 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_search_ttl_val,
-            if fm.focused_field == 6 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_cache_ttl_val = if fm.editing && fm.focused_field == 7 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.image_detail_cache_ttl_minutes.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 7 {
-                "> Image Detail Cache TTL (minutes): "
-            } else {
-                "  Image Detail Cache TTL (minutes): "
-            },
-            Style::default().fg(if fm.focused_field == 7 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_cache_ttl_val,
-            if fm.focused_field == 7 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_binary_cache_ttl_val = if fm.editing && fm.focused_field == 8 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.image_cache_ttl_minutes.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 8 {
-                "> Image Binary Cache TTL (minutes, 0 = persistent): "
-            } else {
-                "  Image Binary Cache TTL (minutes, 0 = persistent): "
-            },
-            Style::default().fg(if fm.focused_field == 8 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_binary_cache_ttl_val,
-            if fm.focused_field == 8 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let media_quality_val = app.config.media_quality.label().to_string();
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 9 {
-                "> Media Quality Preference: "
-            } else {
-                "  Media Quality Preference: "
-            },
-            Style::default().fg(if fm.focused_field == 9 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(media_quality_val, Style::default().fg(Color::Cyan)),
-    ]));
-
-    let download_history_path_val = if fm.editing && fm.focused_field == 10 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .download_history_file_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .download_history_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 10 {
-                "> Download History File: "
-            } else {
-                "  Download History File: "
-            },
-            Style::default().fg(if fm.focused_field == 10 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            download_history_path_val,
-            if fm.focused_field == 10 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 11 {
-                "> Clear All Caches: "
-            } else {
-                "  Clear All Caches: "
-            },
-            Style::default().fg(if fm.focused_field == 11 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            "Delete search/detail/media caches only",
-            Style::default().fg(Color::Cyan),
-        ),
-    ]));
-
-    lines.push(Line::from(""));
-    if fm.editing {
-        lines.push(Line::from(Span::styled(
-            " [Type to edit] | [Enter] Save | [Esc] Cancel",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            if fm.focused_field == 9 {
-                " [Up/Down] Highlight | [Enter] Cycle quality"
-            } else if fm.focused_field == 11 {
-                " [Up/Down] Highlight | [Enter] Clear caches"
-            } else {
-                " [Up/Down] Highlight | [Enter] Edit string"
-            },
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    let help = Paragraph::new(Line::from(Span::styled(hints, help_text_style())))
+        .block(Block::default().borders(Borders::TOP).title(" Input "));
+    f.render_widget(help, sections[3]);
 }
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -2562,18 +2353,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => {
-            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Bookmark | [r] Refresh | [c] Clear | [?] Help"
-        }
-        MainTab::Bookmarks => {
-            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Remove | [e] Export | [i] Import"
-        }
-        MainTab::Images => "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [d] Download | [w/W] Workflow | [o] Copy Link | [m] Expand | [a] Advanced | [b] Bookmark",
-        MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
-        MainTab::Downloads => {
-            "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel"
-        }
-        MainTab::Settings => "[Enter] Edit | [m] Status",
+        MainTab::Models => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download",
+        MainTab::Bookmarks => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove",
+        MainTab::Images => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [d] Download  [w] Workflow  [b] Bookmark",
+        MainTab::ImageBookmarks => "[?] Help  [j/k] Move  [/] Search  [d] Download  [w] Workflow  [b] Remove  [m] Expand",
+        MainTab::Downloads => "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove",
+        MainTab::Settings => "[?] Help  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel",
     };
 
     let shortcuts_row = Paragraph::new(Span::styled(

@@ -333,18 +333,6 @@ pub async fn run_event_loop(
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
                                     }
                                 }
-                                KeyCode::Tab => {
-                                    if app.search_form.mode == SearchFormMode::Builder {
-                                        app.search_form.focused_section = match app.search_form.focused_section {
-                                            SearchFormSection::Query => SearchFormSection::Sort,
-                                            SearchFormSection::Sort => SearchFormSection::Period,
-                                            SearchFormSection::Period => SearchFormSection::Type,
-                                            SearchFormSection::Type => SearchFormSection::Tag,
-                                            SearchFormSection::Tag => SearchFormSection::BaseModel,
-                                            SearchFormSection::BaseModel => SearchFormSection::Query,
-                                        };
-                                    }
-                                }
                                 KeyCode::Up => {
                                     if app.search_form.mode == SearchFormMode::Builder {
                                         app.search_form.focused_section = match app.search_form.focused_section {
@@ -1001,16 +989,6 @@ pub async fn run_event_loop(
 
                         if app.active_tab == MainTab::Settings && app.settings_form.editing {
                             match key.code {
-                                KeyCode::Up => {
-                                    if app.settings_form.focused_field > 0 {
-                                        app.settings_form.focused_field -= 1;
-                                    }
-                                }
-                                KeyCode::Down => {
-                                    if app.settings_form.focused_field < 11 {
-                                        app.settings_form.focused_field += 1;
-                                    }
-                                }
                                 KeyCode::Esc => {
                                     app.settings_form.editing = false;
                                 }
@@ -1159,31 +1137,22 @@ pub async fn run_event_loop(
                                     _ => {}
                                 }
                             }
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                match key.code {
+                                    KeyCode::Up => {
+                                        app.select_previous_file();
+                                        continue;
+                                    }
+                                    KeyCode::Down => {
+                                        app.select_next_file();
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
 
                         match key.code {
-                            KeyCode::Tab => {
-                                let next_tab = match app.active_tab {
-                                    MainTab::Models => MainTab::Bookmarks,
-                                    MainTab::Bookmarks => MainTab::Images,
-                                    MainTab::Images => MainTab::ImageBookmarks,
-                                    MainTab::ImageBookmarks => MainTab::Downloads,
-                                    MainTab::Downloads => MainTab::Settings,
-                                    MainTab::Settings => MainTab::Models,
-                                };
-                                let prev_tab = app.active_tab;
-                                app.active_tab = next_tab;
-                                if prev_tab != next_tab && next_tab == MainTab::Images {
-                                    request_image_feed_if_needed(app, None);
-                                    ensure_selected_image_loaded(app);
-                                }
-                                if app.active_tab == MainTab::Bookmarks {
-                                    app.clamp_bookmark_selection();
-                                } else if app.active_tab == MainTab::ImageBookmarks {
-                                    app.clamp_image_bookmark_selection();
-                                    ensure_selected_image_loaded(app);
-                                }
-                            }
                             KeyCode::Char('1') => {
                                 app.active_tab = MainTab::Models;
                             }
@@ -1296,6 +1265,50 @@ pub async fn run_event_loop(
                                     };
                                 }
                             }
+                            KeyCode::Left | KeyCode::Char('h') => {
+                                if app.active_tab == MainTab::Settings
+                                    && !app.settings_form.editing
+                                    && app.settings_form.focused_field == 9
+                                {
+                                    app.config.media_quality = app.config.media_quality.previous();
+                                    refresh_visible_media(app);
+                                    if let Err(e) = app.config.save() {
+                                        app.last_error = Some(format!("Failed to save config: {}", e));
+                                        app.show_status_modal = true;
+                                    } else if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
+                                    }
+                                    continue;
+                                }
+
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_previous_version();
+                                    send_cover_priority(app);
+                                    send_cover_prefetch(app);
+                                }
+                            }
+                            KeyCode::Right | KeyCode::Char('l') => {
+                                if app.active_tab == MainTab::Settings
+                                    && !app.settings_form.editing
+                                    && app.settings_form.focused_field == 9
+                                {
+                                    app.config.media_quality = app.config.media_quality.next();
+                                    refresh_visible_media(app);
+                                    if let Err(e) = app.config.save() {
+                                        app.last_error = Some(format!("Failed to save config: {}", e));
+                                        app.show_status_modal = true;
+                                    } else if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
+                                    }
+                                    continue;
+                                }
+
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_next_version();
+                                    send_cover_priority(app);
+                                    send_cover_prefetch(app);
+                                }
+                            }
                             KeyCode::Char('b') => {
                                 if app.active_tab == MainTab::Models {
                                     if let Some(model) = app.selected_model_in_active_view().cloned() {
@@ -1384,14 +1397,14 @@ pub async fn run_event_loop(
                                     }
                                 }
                             }
-                            KeyCode::Left | KeyCode::Char('[') => {
+                            KeyCode::Char('[') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_previous_version();
                                     send_cover_priority(app);
                                     send_cover_prefetch(app);
                                 }
                             },
-                            KeyCode::Right | KeyCode::Char(']') => {
+                            KeyCode::Char(']') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_next_version();
                                     send_cover_priority(app);
@@ -1521,7 +1534,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('m') => {
-                                if app.active_tab == MainTab::Images {
+                                if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
                                     app.image_detail_expanded = !app.image_detail_expanded;
                                     app.status = if app.image_detail_expanded {
                                         "Expanded image prompt/details".into()
@@ -1533,7 +1546,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('a') => {
-                                if app.active_tab == MainTab::Images {
+                                if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
                                     app.image_advanced_visible = !app.image_advanced_visible;
                                     app.status = if app.image_advanced_visible {
                                         "Advanced image metadata enabled".into()
@@ -1543,7 +1556,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('o') => {
-                                if app.active_tab == MainTab::Images
+                                if (app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks)
                                     && let Some(image) = app.selected_image_in_active_view()
                                 {
                                     match copy_to_clipboard(&image.image_page_url()) {
@@ -1559,7 +1572,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('w') => {
-                                if app.active_tab == MainTab::Images
+                                if (app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks)
                                     && let Some(image) = app.selected_image_in_active_view()
                                 {
                                     if let Some(json) = comfy_workflow_json(image) {
@@ -1577,7 +1590,7 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('W') => {
-                                if app.active_tab == MainTab::Images
+                                if (app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks)
                                     && let Some(image) = app.selected_image_in_active_view()
                                 {
                                     if let Some(json) = comfy_workflow_json(image) {
@@ -1693,15 +1706,15 @@ pub async fn run_event_loop(
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
                                     app.search_form.begin_builder();
-                                    app.status = "Search builder. Tab section, arrows move, Space toggle, Enter apply.".into();
+                                    app.status = "Search builder. Up/Down sections, Left/Right options, Space toggle, Enter apply.".into();
                                 } else if app.active_tab == MainTab::Images {
                                     app.mode = AppMode::SearchImages;
                                     app.image_search_form.begin_builder();
-                                    app.status = "Image filters. Arrows move, Space toggle, Enter apply.".into();
+                                    app.status = "Image filters. Up/Down sections, Left/Right options, Space toggle, Enter apply.".into();
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.begin_bookmark_search();
                                     app.bookmark_search_form_draft.begin_builder();
-                                    app.status = "Bookmark filters. Arrows move, Space toggle, Enter apply.".into();
+                                    app.status = "Bookmark filters. Up/Down sections, Left/Right options, Space toggle, Enter apply.".into();
                                 }
                             }
                             KeyCode::Char('g') => {

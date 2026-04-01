@@ -51,6 +51,15 @@ impl MediaQualityPreference {
             Self::Original => Self::Low,
         }
     }
+
+    pub fn previous(self) -> Self {
+        match self {
+            Self::Low => Self::Original,
+            Self::Medium => Self::Low,
+            Self::High => Self::Medium,
+            Self::Original => Self::High,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
