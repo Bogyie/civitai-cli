@@ -516,7 +516,7 @@ mod live_tests {
         let sdk = WebSearchClient::new()?;
         let state = ImageSearchState {
             query: Some("man".to_string()),
-            tags: vec!["xxx".to_string()],
+            tags: vec!["sg".to_string()],
             sort_by: ImageSearchSortBy::MostReactions,
             limit: Some(2),
             ..Default::default()

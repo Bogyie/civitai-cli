@@ -11,21 +11,16 @@ use super::shared::{
     append_csv_pair, normalize_search_url, parse_query_map, split_multi,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageSearchSortBy {
+    #[default]
     Relevance,
     MostReactions,
     MostDiscussed,
     MostCollected,
     MostBuzz,
     Newest,
-}
-
-impl Default for ImageSearchSortBy {
-    fn default() -> Self {
-        Self::Relevance
-    }
 }
 
 impl ImageSearchSortBy {

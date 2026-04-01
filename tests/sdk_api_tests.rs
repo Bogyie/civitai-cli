@@ -3,6 +3,7 @@ use civitai_cli::sdk::{
     build_api_models_search_url, ApiClient, ApiImageResponse, ApiImageSearchOptions, ApiModel,
     ApiModelSearchOptions, ApiModelVersion, SearchSdkConfig,
 };
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -195,5 +196,98 @@ async fn fetches_api_resources_through_sdk_client() -> Result<(), Box<dyn std::e
     assert_eq!(images.items.len(), 1);
     assert_eq!(images.items[0].id, 99);
 
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetch_live_civitai_api_model_search_sample() -> Result<(), Box<dyn std::error::Error>> {
+    let sdk = ApiClient::new()?;
+    let response = sdk
+        .search_models(&ApiModelSearchOptions {
+            query: Some("hello".to_string()),
+            tag: Some("anime".to_string()),
+            limit: Some(3),
+            ..Default::default()
+        })
+        .await?;
+    let metadata = response.metadata.clone();
+
+    println!(
+        "live_api_model_response_metadata = {}",
+        json!({
+            "items": response.items.len(),
+            "currentPage": metadata.as_ref().and_then(|m| m.current_page.clone()),
+            "pageSize": metadata.as_ref().and_then(|m| m.page_size.clone()),
+            "totalItems": metadata.as_ref().and_then(|m| m.total_items.clone()),
+            "totalPages": metadata.as_ref().and_then(|m| m.total_pages.clone()),
+        })
+    );
+
+    for (idx, item) in response.items.iter().take(3).enumerate() {
+        let version_count = item.model_versions.len();
+        let tag_count = item.tags.len();
+        println!(
+            "api_model_item[{idx}] id={}, name={}, type={}, nsfw={}, versions={}, tags={}",
+            item.id,
+            item.name,
+            item.r#type,
+            item.nsfw,
+            version_count,
+            tag_count
+        );
+
+        if let Some(version) = item.model_versions.first() {
+            println!(
+                "api_model_item[{idx}] first_version id={}, name={}, baseModel={}, files={}",
+                version.id,
+                version.name,
+                version.base_model,
+                version.files.len()
+            );
+        }
+    }
+
+    assert!(!response.items.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore]
+async fn fetch_live_civitai_api_image_search_sample() -> Result<(), Box<dyn std::error::Error>> {
+    let sdk = ApiClient::new()?;
+    let response: ApiImageResponse = sdk
+        .search_images(&ApiImageSearchOptions {
+            limit: Some(3),
+            sort: Some("Most Reactions".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let metadata = response.metadata.clone();
+
+    println!(
+        "live_api_image_response_metadata = {}",
+        json!({
+            "items": response.items.len(),
+            "currentPage": metadata.as_ref().and_then(|m| m.current_page.clone()),
+            "pageSize": metadata.as_ref().and_then(|m| m.page_size.clone()),
+            "totalItems": metadata.as_ref().and_then(|m| m.total_items.clone()),
+            "totalPages": metadata.as_ref().and_then(|m| m.total_pages.clone()),
+        })
+    );
+
+    for (idx, item) in response.items.iter().take(3).enumerate() {
+        println!(
+            "api_image_item[{idx}] id={}, type={}, url={}, width={:?}, height={:?}, modelVersionIds={:?}",
+            item.id,
+            item.r#type.as_deref().unwrap_or("N/A"),
+            item.url,
+            item.width,
+            item.height,
+            item.model_version_ids
+        );
+    }
+
+    assert!(!response.items.is_empty());
     Ok(())
 }

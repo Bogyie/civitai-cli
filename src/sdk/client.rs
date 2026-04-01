@@ -66,17 +66,9 @@ impl SearchSdkConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SdkClientBuilder {
     config: SearchSdkConfig,
-}
-
-impl Default for SdkClientBuilder {
-    fn default() -> Self {
-        Self {
-            config: SearchSdkConfig::default(),
-        }
-    }
 }
 
 impl SdkClientBuilder {
@@ -192,9 +184,10 @@ pub struct SdkClients {
 
 impl SdkClients {
     pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
-        let web = WebSearchClient::from_config(config.clone())?;
-        let api = ApiClient::from_config(config.clone())?;
-        let download = DownloadClient::from_config(config)?;
+        let client = build_http_client(&config)?;
+        let web = WebSearchClient::from_parts(client.clone(), config.clone());
+        let api = ApiClient::from_parts(client.clone(), config.clone());
+        let download = DownloadClient::from_parts(client, config);
         Ok(Self {
             web,
             api,
@@ -213,14 +206,16 @@ impl WebSearchClient {
     }
 
     pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
-        Ok(Self {
-            client: build_http_client(&config)?,
-            config,
-        })
+        let client = build_http_client(&config)?;
+        Ok(Self::from_parts(client, config))
     }
 
     pub fn config(&self) -> &SearchSdkConfig {
         &self.config
+    }
+
+    fn from_parts(client: Client, config: SearchSdkConfig) -> Self {
+        Self { client, config }
     }
 
     pub async fn search_images_raw(&self, state: &ImageSearchState) -> Result<Value> {
@@ -251,8 +246,30 @@ impl WebSearchClient {
     }
 
     pub async fn search_images(&self, state: &ImageSearchState) -> Result<SearchImageResponse> {
-        let value = self.search_images_raw(state).await?;
-        serde_json::from_value(value).context("Failed to decode typed web image search response")
+        let url = format!(
+            "{}/indexes/{}/search",
+            self.config.meili_base_url.trim_end_matches('/'),
+            self.config.images_index.trim_matches('/')
+        );
+        let payload = build_image_meili_payload(state);
+        let response = self
+            .client
+            .post(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.meili_client_key),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to send Civitai web image search request")?
+            .error_for_status()
+            .context("Civitai web image search endpoint returned error")?;
+
+        response
+            .json::<SearchImageResponse>()
+            .await
+            .context("Failed to decode typed web image search response")
     }
 
     pub async fn search_models_raw(&self, state: &ModelSearchState) -> Result<Value> {
@@ -283,8 +300,30 @@ impl WebSearchClient {
     }
 
     pub async fn search_models(&self, state: &ModelSearchState) -> Result<SearchModelResponse> {
-        let value = self.search_models_raw(state).await?;
-        serde_json::from_value(value).context("Failed to decode typed web model search response")
+        let url = format!(
+            "{}/indexes/{}/search",
+            self.config.meili_base_url.trim_end_matches('/'),
+            self.config.models_index.trim_matches('/')
+        );
+        let payload = build_model_meili_payload(state);
+        let response = self
+            .client
+            .post(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.config.meili_client_key),
+            )
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to send Civitai web model search request")?
+            .error_for_status()
+            .context("Civitai web model search endpoint returned error")?;
+
+        response
+            .json::<SearchModelResponse>()
+            .await
+            .context("Failed to decode typed web model search response")
     }
 }
 
@@ -298,14 +337,16 @@ impl ApiClient {
     }
 
     pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
-        Ok(Self {
-            client: build_http_client(&config)?,
-            config,
-        })
+        let client = build_http_client(&config)?;
+        Ok(Self::from_parts(client, config))
     }
 
     pub fn config(&self) -> &SearchSdkConfig {
         &self.config
+    }
+
+    fn from_parts(client: Client, config: SearchSdkConfig) -> Self {
+        Self { client, config }
     }
 
     pub async fn get_model(&self, model_id: u64) -> Result<ApiModel> {
@@ -377,14 +418,16 @@ impl DownloadClient {
     }
 
     pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
-        Ok(Self {
-            client: build_http_client(&config)?,
-            config,
-        })
+        let client = build_http_client(&config)?;
+        Ok(Self::from_parts(client, config))
     }
 
     pub fn config(&self) -> &SearchSdkConfig {
         &self.config
+    }
+
+    fn from_parts(client: Client, config: SearchSdkConfig) -> Self {
+        Self { client, config }
     }
 
     pub fn image_page_url(&self, hit: &SearchImageHit) -> String {
@@ -545,20 +588,32 @@ impl DownloadClient {
             ensure_parent_dir(&provisional_path).await?;
         }
 
-        let initial_response = self
-            .build_download_request(&spec.url, spec.auth.as_ref(), None)?
+        let mut existing_size = 0;
+        let range_start = match &options.destination {
+            DownloadDestination::File(_) if options.resume => {
+                existing_size = tokio::fs::metadata(&provisional_path)
+                    .await
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0);
+                (existing_size > 0).then_some(existing_size)
+            }
+            _ => None,
+        };
+
+        let response = self
+            .build_download_request(&spec.url, spec.auth.as_ref(), range_start)?
             .send()
             .await
             .context("Failed to send download request")?
             .error_for_status()
             .context("Download endpoint returned error")?;
 
-        let headers = initial_response.headers().clone();
+        let status = response.status();
+        let headers = response.headers().clone();
         let content_type = headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-
         let actual_target_path = match &options.destination {
             DownloadDestination::File(_) => provisional_path,
             DownloadDestination::Directory(path) => {
@@ -577,32 +632,13 @@ impl DownloadClient {
             ensure_parent_dir(&actual_target_path).await?;
         }
 
-        let existing_size = if options.resume {
-            tokio::fs::metadata(&actual_target_path)
-                .await
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        let should_resume = options.resume
-            && existing_size > 0
-            && matches!(&options.destination, DownloadDestination::File(_));
+        let can_resume = range_start.is_some();
+        let resumed = can_resume && status == StatusCode::PARTIAL_CONTENT;
+        if can_resume && !resumed {
+            existing_size = 0;
+        }
 
-        let response = if should_resume {
-            self.build_download_request(&spec.url, spec.auth.as_ref(), Some(existing_size))?
-                .send()
-                .await
-                .context("Failed to send resumable download request")?
-                .error_for_status()
-                .context("Download endpoint returned error")?
-        } else {
-            initial_response
-        };
-
-        let status = response.status();
-        let headers = response.headers().clone();
-        let total_bytes = if should_resume && status == StatusCode::PARTIAL_CONTENT {
+        let total_bytes = if resumed {
             content_range_total(&headers).or_else(|| {
                 response
                     .content_length()
@@ -611,7 +647,6 @@ impl DownloadClient {
         } else {
             response.content_length()
         };
-        let resumed = should_resume && status == StatusCode::PARTIAL_CONTENT;
 
         let mut downloaded_bytes = if resumed { existing_size } else { 0 };
         let mut file = if resumed {
