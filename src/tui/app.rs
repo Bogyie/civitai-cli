@@ -47,7 +47,9 @@ pub struct App {
     pub model_search_loading_more: bool,
     pub model_search_next_page: Option<u32>,
     pub bookmarks: Vec<Model>,
+    visible_bookmarks_cache: Vec<Model>,
     pub image_bookmarks: Vec<ImageItem>,
+    visible_image_bookmarks_cache: Vec<ImageItem>,
     pub image_tag_catalog: Vec<String>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
@@ -169,7 +171,9 @@ impl App {
             model_search_loading_more: false,
             model_search_next_page: None,
             bookmarks,
+            visible_bookmarks_cache: Vec::new(),
             image_bookmarks,
+            visible_image_bookmarks_cache: Vec::new(),
             image_tag_catalog,
             show_model_details: false,
             model_list_state,
@@ -224,6 +228,9 @@ impl App {
             tx: None,
         };
 
+        app.refresh_visible_bookmarks_cache();
+        app.refresh_visible_image_bookmarks_cache();
+
         if !interrupted_download_sessions.is_empty() {
             for session in interrupted_download_sessions.iter() {
                 let existing_paused = app.download_history.iter().any(|entry| {
@@ -264,9 +271,13 @@ impl App {
         self.image_feed_next_page.clone()
     }
 
-    pub fn visible_image_bookmarks(&self) -> Vec<ImageItem> {
+    pub fn visible_image_bookmarks(&self) -> &[ImageItem] {
+        &self.visible_image_bookmarks_cache
+    }
+
+    fn refresh_visible_image_bookmarks_cache(&mut self) {
         let query = self.image_bookmark_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
+        self.visible_image_bookmarks_cache = if query.is_empty() {
             self.image_bookmarks.clone()
         } else {
             self.image_bookmarks
@@ -294,7 +305,7 @@ impl App {
                 })
                 .cloned()
                 .collect()
-        }
+        };
     }
 
     pub fn clamp_image_bookmark_selection(&mut self) {
@@ -315,21 +326,18 @@ impl App {
     pub fn selected_image_in_active_view(&self) -> Option<&ImageItem> {
         match self.active_tab {
             MainTab::Images => self.images.get(self.selected_index),
-            MainTab::ImageBookmarks => {
-                let visible = self.visible_image_bookmarks();
-                let selected = self.selected_image_bookmark_index;
-                let id = visible.get(selected)?.id;
-                self.image_bookmarks.iter().find(|image| image.id == id)
-            }
+            MainTab::ImageBookmarks => self
+                .visible_image_bookmarks()
+                .get(self.selected_image_bookmark_index),
             _ => None,
         }
     }
 
-    pub fn active_image_items(&self) -> Vec<ImageItem> {
+    pub fn active_image_items(&self) -> &[ImageItem] {
         match self.active_tab {
-            MainTab::Images => self.images.clone(),
+            MainTab::Images => &self.images,
             MainTab::ImageBookmarks => self.visible_image_bookmarks(),
-            _ => Vec::new(),
+            _ => &[],
         }
     }
 
@@ -1054,7 +1062,11 @@ impl App {
             .collect()
     }
 
-    pub fn visible_bookmarks(&self) -> Vec<Model> {
+    pub fn visible_bookmarks(&self) -> &[Model] {
+        &self.visible_bookmarks_cache
+    }
+
+    fn refresh_visible_bookmarks_cache(&mut self) {
         let query = self.bookmark_search_form.query.trim().to_ascii_lowercase();
         let mut items = self
             .bookmarks
@@ -1083,22 +1095,11 @@ impl App {
                 .get(self.bookmark_search_form.selected_sort)
                 .unwrap_or(&ModelSearchSortBy::Relevance),
         );
-        items
-    }
-
-    pub fn visible_bookmark_indices(&self) -> Vec<usize> {
-        self.visible_bookmarks()
-            .into_iter()
-            .filter_map(|visible| {
-                self.bookmarks
-                    .iter()
-                    .position(|model| model.id == visible.id)
-            })
-            .collect()
+        self.visible_bookmarks_cache = items;
     }
 
     pub fn clamp_bookmark_selection(&mut self) {
-        let visible = self.visible_bookmark_indices();
+        let visible = self.visible_bookmarks();
         if visible.is_empty() {
             self.bookmark_list_state.select(None);
             return;
@@ -1115,11 +1116,9 @@ impl App {
             MainTab::Models => self
                 .models
                 .get(self.model_list_state.selected().unwrap_or(0)),
-            MainTab::Bookmarks => {
-                let visible = self.visible_bookmark_indices();
-                let selected = self.bookmark_list_state.selected().unwrap_or(0);
-                self.bookmarks.get(*visible.get(selected)?)
-            }
+            MainTab::Bookmarks => self
+                .visible_bookmarks()
+                .get(self.bookmark_list_state.selected().unwrap_or(0)),
             _ => None,
         }
     }
@@ -1142,6 +1141,7 @@ impl App {
             self.status = format!("Added image bookmark: {}", image.id);
         }
         self.deduplicate_image_bookmarks();
+        self.refresh_visible_image_bookmarks_cache();
         self.persist_image_bookmarks();
     }
 
@@ -1153,6 +1153,7 @@ impl App {
 
     pub fn apply_image_bookmark_query(&mut self) {
         self.image_bookmark_query = self.image_bookmark_query_draft.clone();
+        self.refresh_visible_image_bookmarks_cache();
         self.mode = AppMode::Browsing;
         self.clamp_image_bookmark_selection();
         self.status = format!(
@@ -1187,6 +1188,7 @@ impl App {
             self.status = format!("Added bookmark: {}", model_name(model));
         }
         self.deduplicate_bookmarks();
+        self.refresh_visible_bookmarks_cache();
         self.persist_bookmarks();
     }
 
@@ -1199,6 +1201,7 @@ impl App {
         if let Some(pos) = self.bookmarks.iter().position(|model| model.id == model_id) {
             let name = model_name(&self.bookmarks[pos]);
             self.bookmarks.remove(pos);
+            self.refresh_visible_bookmarks_cache();
             self.persist_bookmarks();
             self.clamp_bookmark_selection();
             self.status = format!("Removed bookmark: {}", name);
@@ -1434,6 +1437,7 @@ impl App {
         self.bookmark_search_form = self.bookmark_search_form_draft.clone();
         self.bookmark_query = self.bookmark_search_form.query.clone();
         self.bookmark_query_draft = self.bookmark_query.clone();
+        self.refresh_visible_bookmarks_cache();
         self.mode = AppMode::Browsing;
         self.clamp_bookmark_selection();
         self.status = format!(
@@ -1481,6 +1485,7 @@ impl App {
         let before = self.bookmarks.len();
         self.bookmarks.append(&mut imported);
         self.deduplicate_bookmarks();
+        self.refresh_visible_bookmarks_cache();
         self.clamp_bookmark_selection();
         self.persist_bookmarks();
 
@@ -1545,5 +1550,72 @@ impl App {
                 self.last_error = None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn isolated_config() -> AppConfig {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("civitai-cli-app-tests-{unique}"));
+        AppConfig {
+            bookmark_file_path: Some(root.join("bookmarks.json")),
+            image_bookmark_file_path: Some(root.join("image_bookmarks.json")),
+            download_history_file_path: Some(root.join("download_history.json")),
+            interrupted_download_file_path: Some(root.join("interrupted_downloads.json")),
+            ..AppConfig::default()
+        }
+    }
+
+    fn model(value: serde_json::Value) -> Model {
+        serde_json::from_value(value).expect("valid model fixture")
+    }
+
+    fn image(value: serde_json::Value) -> ImageItem {
+        serde_json::from_value(value).expect("valid image fixture")
+    }
+
+    #[test]
+    fn bookmark_visibility_cache_updates_when_query_is_applied() {
+        let mut app = App::new(isolated_config());
+        app.bookmarks = vec![
+            model(json!({ "id": 1, "name": "Flux Portrait" })),
+            model(json!({ "id": 2, "name": "Anime Landscape" })),
+        ];
+        app.refresh_visible_bookmarks_cache();
+
+        assert_eq!(app.visible_bookmarks().len(), 2);
+
+        app.bookmark_search_form_draft.query = "flux".to_string();
+        app.apply_bookmark_query();
+
+        assert_eq!(app.visible_bookmarks().len(), 1);
+        assert_eq!(app.visible_bookmarks()[0].id, 1);
+    }
+
+    #[test]
+    fn image_bookmark_visibility_cache_updates_when_query_changes() {
+        let mut app = App::new(isolated_config());
+        app.image_bookmarks = vec![
+            image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
+            image(json!({ "id": 20, "baseModel": "SDXL" })),
+        ];
+        app.refresh_visible_image_bookmarks_cache();
+
+        assert_eq!(app.visible_image_bookmarks().len(), 2);
+
+        app.image_bookmark_query_draft = "flux".to_string();
+        app.apply_image_bookmark_query();
+
+        assert_eq!(app.visible_image_bookmarks().len(), 1);
+        assert_eq!(app.visible_image_bookmarks()[0].id, 10);
     }
 }

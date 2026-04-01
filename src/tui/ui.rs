@@ -796,7 +796,9 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let Some(img) = items.get(selected_index) else {
+    let item_count = items.len();
+    let selected_image_id = items.get(selected_index).map(|img| img.id);
+    let Some(image_id) = selected_image_id else {
         f.render_widget(Paragraph::new("No image selected").block(block), area);
         return;
     };
@@ -804,11 +806,11 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     f.render_widget(Clear, inner_area);
 
-    if let Some(protocol) = app.image_cache.get_mut(&img.id) {
+    if let Some(protocol) = app.image_cache.get_mut(&image_id) {
         let image_widget = StatefulImage::new();
         f.render_stateful_widget(image_widget, inner_area, protocol);
     } else {
-        let text = format!("Loading image {}/{}...", selected_index + 1, items.len());
+        let text = format!("Loading image {}/{}...", selected_index + 1, item_count);
         f.render_widget(Paragraph::new(text), inner_area);
     }
 }
