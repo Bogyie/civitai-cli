@@ -299,6 +299,8 @@ pub struct SearchModelHit {
     pub nsfw: Option<bool>,
     #[serde(default)]
     pub nsfw_level: Option<Vec<u64>>,
+    #[serde(flatten, default)]
+    pub extras: Value,
 }
 
 impl SearchModelHit {

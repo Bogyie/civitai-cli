@@ -1,4 +1,8 @@
-use crate::api::{ImageItem, Model};
+use crate::api::ImageItem;
+use civitai_cli::sdk::{
+    ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType, SearchModelHit as Model,
+};
+use crate::tui::model::{model_name, model_versions, preview_image_url, selected_version};
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
@@ -210,27 +214,32 @@ impl SearchFormState {
         }
     }
 
-    pub fn build_options(&self) -> crate::api::client::SearchOptions {
-        crate::api::client::SearchOptions {
-            query: self.query.clone(),
-            limit: 50,
-            tag: None,
-            username: None,
-            types: Some(self.types[self.selected_type].clone()),
-            sort: Some(self.sorts[self.selected_sort].clone()),
-            period: Some(self.periods[self.selected_period].clone()),
-            rating: None,
-            favorites: None,
-            hidden: None,
-            primary_file_only: None,
-            allow_no_credit: None,
-            allow_derivatives: None,
-            allow_different_licenses: None,
-            allow_commercial_use: None,
-            nsfw: None,
-            supports_generation: None,
-            ids: None,
-            base_models: Some(self.bases[self.selected_base].clone()),
+    pub fn build_options(&self) -> ModelSearchState {
+        let selected_type = self.types[self.selected_type].trim();
+        let selected_base = self.bases[self.selected_base].trim();
+        let selected_period = self.periods[self.selected_period].trim();
+
+        ModelSearchState {
+            query: (!self.query.trim().is_empty()).then(|| self.query.trim().to_string()),
+            sort_by: match self.sorts[self.selected_sort].as_str() {
+                "Highest Rated" => ModelSearchSortBy::HighestRated,
+                "Most Downloaded" => ModelSearchSortBy::MostDownloaded,
+                "Newest" => ModelSearchSortBy::Newest,
+                value => ModelSearchSortBy::Custom(value.to_string()),
+            },
+            base_models: if selected_base.eq_ignore_ascii_case("all") {
+                Vec::new()
+            } else {
+                vec![ModelBaseModel::from_query_value(selected_base)]
+            },
+            types: if selected_type.eq_ignore_ascii_case("all") {
+                Vec::new()
+            } else {
+                vec![ModelType::from_query_value(selected_type)]
+            },
+            created_at: period_to_created_at(selected_period),
+            limit: Some(50),
+            ..Default::default()
         }
     }
 }
@@ -279,8 +288,9 @@ fn image_tag_to_id(value: &str) -> Option<u64> {
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<String>),
     ImageDecoded(u64, StatefulProtocol),
-    ModelsSearchedChunk(Vec<Model>, bool, bool, Option<String>),
+    ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
+    ModelCoversDecoded(u64, Vec<StatefulProtocol>), // version_id, protocols
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
     DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>), // model_id, filename, version_id, model_name, total_bytes, file_path
@@ -346,17 +356,17 @@ pub struct InterruptedDownloadSession {
 pub enum WorkerCommand {
     FetchImages(crate::api::client::ImageSearchOptions, Option<String>),
     SearchModels(
-        crate::api::client::SearchOptions,
+        ModelSearchState,
         Option<u64>,
         Option<u64>,
         bool,
         bool,
-        Option<String>,
+        Option<u32>,
     ),
     ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
     DownloadModelForImage(u64),
-    DownloadModel(u64, u64), // model_id, version_id
+    DownloadModel(Model, u64), // selected model hit, version_id
     PauseDownload(u64),      // model_id
     ResumeDownload(u64),     // model_id
     CancelDownload(u64),     // model_id
@@ -376,7 +386,7 @@ pub struct App {
     pub models: Vec<Model>,
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
-    pub model_search_next_page: Option<String>,
+    pub model_search_next_page: Option<u32>,
     pub bookmarks: Vec<Model>,
     pub image_bookmarks: Vec<ImageItem>,
     pub show_model_details: bool,
@@ -395,7 +405,7 @@ pub struct App {
     pub interrupted_download_file_path: Option<PathBuf>,
     pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
     pub selected_version_index: HashMap<u64, usize>,
-    pub model_version_image_cache: HashMap<u64, StatefulProtocol>,
+    pub model_version_image_cache: HashMap<u64, Vec<StatefulProtocol>>,
     pub model_version_image_failed: HashSet<u64>,
 
     pub images: Vec<ImageItem>,
@@ -680,7 +690,7 @@ impl App {
 
     pub fn next_model_search_options_if_needed(
         &mut self,
-    ) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
+    ) -> Option<(ModelSearchState, Option<u32>)> {
         if !self.can_request_more_models() {
             return None;
         }
@@ -749,9 +759,9 @@ impl App {
 
     pub fn append_models_results(
         &mut self,
-        mut new_models: Vec<Model>,
+        new_models: Vec<Model>,
         has_more: bool,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         if new_models.is_empty() {
             self.model_search_has_more = has_more;
@@ -760,7 +770,12 @@ impl App {
             return;
         }
 
-        self.models.append(&mut new_models);
+        let mut seen_ids = self.models.iter().map(|model| model.id).collect::<HashSet<_>>();
+        for model in new_models {
+            if seen_ids.insert(model.id) {
+                self.models.push(model);
+            }
+        }
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
         self.model_search_next_page = next_page;
@@ -770,7 +785,7 @@ impl App {
         &mut self,
         models: Vec<Model>,
         has_more: bool,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         self.models = models;
         self.model_search_has_more = has_more;
@@ -783,7 +798,7 @@ impl App {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view() {
                 let model_id = model.id;
-                let version_len = model.model_versions.len();
+                let version_len = model_versions(model).len();
                 let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
                 if *v_idx < version_len.saturating_sub(1) {
                     *v_idx += 1;
@@ -815,12 +830,12 @@ impl App {
         } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
                 let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                if let Some(version) = model.model_versions.get(v_idx) {
+                if let Some(version) = selected_version(&model, v_idx) {
                     if let Some(tx) = &self.tx {
-                        let _ = tx.try_send(WorkerCommand::DownloadModel(model.id, version.id));
+                        let _ = tx.try_send(WorkerCommand::DownloadModel(model.clone(), version.id));
                         self.status = format!(
                             "Initiated download for {} (v: {})",
-                            model.name, version.name
+                            model_name(&model), version.name
                         );
                     }
                 }
@@ -940,18 +955,18 @@ impl App {
     pub fn selected_model_version(&self) -> Option<(u64, u64)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = model.model_versions.get(version_index)?;
+        let version = selected_version(model, version_index)?;
         Some((model.id, version.id))
     }
 
     pub fn selected_model_version_with_cover_url(&self) -> Option<(u64, u64, Option<String>)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = model.model_versions.get(version_index)?;
+        let version = selected_version(model, version_index)?;
         Some((
             model.id,
             version.id,
-            version.images.first().map(|image| image.url.clone()),
+            preview_image_url(model, version_index),
         ))
     }
 
@@ -962,7 +977,7 @@ impl App {
         } else {
             self.bookmarks
                 .iter()
-                .filter(|model| model.name.to_ascii_lowercase().contains(&query))
+                .filter(|model| model_name(model).to_ascii_lowercase().contains(&query))
                 .cloned()
                 .collect()
         }
@@ -977,7 +992,7 @@ impl App {
                 .iter()
                 .enumerate()
                 .filter_map(|(idx, model)| {
-                    if model.name.to_ascii_lowercase().contains(&query) {
+                    if model_name(model).to_ascii_lowercase().contains(&query) {
                         Some(idx)
                     } else {
                         None
@@ -1068,13 +1083,13 @@ impl App {
     pub fn toggle_bookmark_for_selected_model(&mut self, model: &Model) {
         if self.is_model_bookmarked(model.id) {
             self.bookmarks.retain(|item| item.id != model.id);
-            self.status = format!("Removed bookmark: {}", model.name);
+            self.status = format!("Removed bookmark: {}", model_name(model));
             if self.active_tab == MainTab::Bookmarks {
                 self.clamp_bookmark_selection();
             }
         } else {
             self.bookmarks.push(model.clone());
-            self.status = format!("Added bookmark: {}", model.name);
+            self.status = format!("Added bookmark: {}", model_name(model));
         }
         self.deduplicate_bookmarks();
         self.persist_bookmarks();
@@ -1087,7 +1102,7 @@ impl App {
         };
 
         if let Some(pos) = self.bookmarks.iter().position(|model| model.id == model_id) {
-            let name = self.bookmarks[pos].name.clone();
+            let name = model_name(&self.bookmarks[pos]);
             self.bookmarks.remove(pos);
             self.persist_bookmarks();
             self.clamp_bookmark_selection();
@@ -1440,6 +1455,23 @@ fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
     let mut seen = HashSet::new();
     models.retain(|model| seen.insert(model.id));
     models
+}
+
+fn period_to_created_at(period: &str) -> Option<String> {
+    let end = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs();
+
+    let start = match period {
+        "Day" => end.saturating_sub(24 * 60 * 60),
+        "Week" => end.saturating_sub(7 * 24 * 60 * 60),
+        "Month" => end.saturating_sub(30 * 24 * 60 * 60),
+        "Year" => end.saturating_sub(365 * 24 * 60 * 60),
+        _ => return None,
+    };
+
+    Some(format!("{start}-{end}"))
 }
 
 fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {

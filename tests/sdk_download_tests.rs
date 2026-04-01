@@ -176,6 +176,7 @@ fn sample_model_hit() -> SearchModelHit {
         can_generate: None,
         nsfw: None,
         nsfw_level: None,
+        extras: serde_json::json!({}),
     }
 }
 

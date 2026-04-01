@@ -10,7 +10,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap,
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap,
     },
 };
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
@@ -18,6 +18,10 @@ use std::io::{self, Stdout};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::tui::app::{App, AppMode, DownloadHistoryStatus, DownloadState, MainTab};
+use crate::tui::model::{
+    build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
+    model_versions, tag_names,
+};
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = io::stdout();
@@ -1194,9 +1198,9 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
 fn draw_model_list(
     f: &mut Frame,
     area: Rect,
-    models: &[crate::api::Model],
+    models: &[civitai_cli::sdk::SearchModelHit],
     list_state: &ListState,
-    show_model_details: bool,
+    _show_model_details: bool,
     bookmarked_ids: &[u64],
     enable_name_rolling: bool,
 ) {
@@ -1216,72 +1220,17 @@ fn draw_model_list(
         .selected()
         .unwrap_or(0)
         .min(models.len().saturating_sub(1));
-    let show_metadata = !show_model_details;
-    let mut rows_cache: Vec<(String, String, String, bool, bool)> =
-        Vec::with_capacity(models.len());
-    let mut down_width = "⬇".chars().count();
-    let mut thumbs_width = "👍".chars().count();
-
-    for model in models.iter() {
-        let downloads = model.stats.as_ref().map(|s| s.download_count).unwrap_or(0);
-        let thumbs_up = model.stats.as_ref().map(|s| s.thumbs_up_count).unwrap_or(0);
-        let down_text = if show_metadata {
-            format!("⬇ {}", compact_number(downloads))
-        } else {
-            String::new()
-        };
-        let rate_text = if show_metadata {
-            format!("👍 {}", compact_number(thumbs_up))
-        } else {
-            String::new()
-        };
-
-        down_width = down_width.max(down_text.chars().count());
-        thumbs_width = thumbs_width.max(rate_text.chars().count());
-        let is_bookmarked = bookmarked_ids.contains(&model.id);
-        rows_cache.push((
-            down_text,
-            rate_text,
-            model.name.clone(),
-            model.nsfw,
-            is_bookmarked,
-        ));
-    }
-
-    if down_width < 6 {
-        down_width = 6;
-    }
-    if thumbs_width < 3 {
-        thumbs_width = 3;
-    }
-
     let inner_width = area.width.saturating_sub(2) as usize;
-    if inner_width <= down_width.saturating_add(thumbs_width) + 2 {
-        down_width = down_width.min(inner_width / 2).max(4);
-        thumbs_width = thumbs_width.min(inner_width / 2).max(3);
-    }
+    let name_width = inner_width.max(1);
 
-    let name_width = if show_metadata {
-        inner_width
-            .saturating_sub(down_width.saturating_add(thumbs_width))
-            .saturating_sub(4)
-            .max(1)
-    } else {
-        inner_width.max(1)
-    };
-
-    let mut items: Vec<ListItem> = Vec::with_capacity(rows_cache.len());
-    for (idx, (down_text, rate_text, name, is_nsfw, is_bookmarked)) in
-        rows_cache.into_iter().enumerate()
-    {
+    let mut items: Vec<ListItem> = Vec::with_capacity(models.len());
+    for (idx, model) in models.iter().enumerate() {
         let is_selected = idx == selected_idx;
-        let down_text = compact_cell_text(down_text, down_width);
-        let rate_text = compact_cell_text(rate_text, thumbs_width);
-        let mut display_name = if is_bookmarked {
-            format!("★ {}", name)
-        } else {
-            name
-        };
+        let metrics = model_metrics(model);
+        let base_model = default_base_model(model).unwrap_or_else(|| "Unknown".to_string());
+        let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
+        let mut display_name = model_name(model);
+        let is_bookmarked = bookmarked_ids.contains(&model.id);
 
         if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
@@ -1292,47 +1241,52 @@ fn draw_model_list(
             display_name = rotate_left_chars(&display_name, shift);
         }
 
-        if show_metadata {
-            let style = if is_bookmarked {
-                Style::default().fg(Color::Green)
-            } else if is_nsfw {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let spans = vec![
-                Span::styled(
-                    format!("{:>width$}", down_text, width = down_width),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:>width$}", rate_text, width = thumbs_width),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(compact_cell_text(display_name.clone(), name_width), style),
-            ];
-            let item = ListItem::new(Line::from(spans));
-            items.push(item);
+        let title_style = if is_bookmarked {
+            Style::default().fg(Color::Green)
         } else {
-            let style = if is_bookmarked {
-                Style::default().fg(Color::Green)
-            } else if is_nsfw {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let item = ListItem::new(Line::from(Span::styled(
-                compact_cell_text(display_name, name_width),
-                style,
-            )));
-            items.push(item);
+            Style::default().fg(Color::White)
+        };
+        let mut line_two = format!(
+            "{} | {} | dl {} like {} cmt {} | by {}",
+            model.r#type.as_deref().unwrap_or("Model"),
+            base_model,
+            compact_number(metrics.download_count),
+            compact_number(metrics.thumbs_up_count),
+            compact_number(metrics.comment_count),
+            creator
+        );
+        if model.nsfw.unwrap_or(false) {
+            line_two.push_str(" | NSFW");
         }
+
+        let second_line = if model.nsfw.unwrap_or(false) {
+            let safe_prefix = line_two.trim_end_matches(" | NSFW").to_string();
+            Line::from(vec![
+                Span::styled(
+                    compact_cell_text(safe_prefix, name_width.saturating_sub(7)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled("NSFW", Style::default().fg(Color::Red)),
+            ])
+        } else {
+            Line::from(Span::styled(
+                compact_cell_text(line_two, name_width),
+                Style::default().fg(Color::DarkGray),
+            ))
+        };
+
+        items.push(ListItem::new(vec![
+            Line::from(Span::styled(
+                compact_cell_text(display_name, name_width),
+                title_style,
+            )),
+            second_line,
+        ]));
     }
 
     let inner_area = block.inner(area);
-    let visible_rows = inner_area.height.max(1) as usize;
+    let visible_rows = (inner_area.height.max(2) as usize / 2).max(1);
     let total = items.len();
     let start_idx = if total <= visible_rows {
         0
@@ -1373,45 +1327,78 @@ fn draw_model_sidebar(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
-    selected_model: Option<&crate::api::Model>,
+    selected_model: Option<&civitai_cli::sdk::SearchModelHit>,
 ) {
     let split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(6),
             Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Length(7),
             Constraint::Min(0),
         ])
         .split(area);
 
     if let Some(model) = selected_model {
+        let versions = model_versions(model);
         let v_idx = *app.selected_version_index.get(&model.id).unwrap_or(&0);
-        let safe_v_idx = v_idx.min(model.model_versions.len().saturating_sub(1));
-        let selected_version = model.model_versions.get(safe_v_idx);
+        let safe_v_idx = v_idx.min(versions.len().saturating_sub(1));
+        let selected_version = versions.get(safe_v_idx);
+        let metrics = selected_version
+            .map(|version| version.stats.clone())
+            .unwrap_or_else(|| model_metrics(model));
+        let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
+        let model_title = model_name(model);
+        let model_url = build_model_url(model, selected_version.map(|version| version.id));
+        let mut header_lines = vec![
+            Line::from(Span::styled(
+                compact_cell_text(model_title, split[0].width.saturating_sub(2) as usize),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                compact_cell_text(
+                    format!(
+                        "{} | by {}{}",
+                        model.r#type.as_deref().unwrap_or("Model"),
+                        creator,
+                        if model.nsfw.unwrap_or(false) {
+                            " | NSFW"
+                        } else {
+                            ""
+                        }
+                    ),
+                    split[0].width.saturating_sub(2) as usize,
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                compact_cell_text(
+                    model_url,
+                    split[0].width.saturating_sub(2) as usize,
+                ),
+                Style::default().fg(Color::Cyan),
+            )),
+        ];
+        if let Some(version) = selected_version {
+            let meta_line = format!(
+                "Selected: {} | {}",
+                version.name,
+                version.base_model.as_deref().unwrap_or("Unknown base")
+            );
+            header_lines.push(Line::from(Span::styled(
+                compact_cell_text(meta_line, split[0].width.saturating_sub(2) as usize),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        let header = Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Model "));
+        f.render_widget(header, split[0]);
 
-        let model_url = if let Some(version) = selected_version {
-            format!(
-                "https://civitai.com/models/{}?modelVersionId={}",
-                model.id, version.id
-            )
-        } else {
-            format!("https://civitai.com/models/{}", model.id)
-        };
-        let url_line = Paragraph::new(format!("URL: {}", model_url))
-            .alignment(Alignment::Left)
-            .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).title(" Model URL "));
-        f.render_widget(url_line, split[0]);
-
-        let version_data: Vec<(String, bool)> = model
-            .model_versions
+        let version_data: Vec<(String, bool)> = versions
             .iter()
             .enumerate()
-            .map(|(idx, version)| {
-                let is_selected = idx == safe_v_idx;
-                (version.name.clone(), is_selected)
-            })
+            .map(|(idx, version)| (version.name.clone(), idx == safe_v_idx))
             .collect();
         let version_total = version_data.len();
         let version_position = if version_total > 0 {
@@ -1455,127 +1442,149 @@ fn draw_model_sidebar(
             );
         f.render_widget(version_row, split[1]);
 
-        let stats = selected_version.and_then(|version| version.stats.as_ref());
-        let down_val = compact_number(stats.map(|s| s.download_count).unwrap_or(0));
-        let rate_val = normalized_version_rating(stats);
-        let thumbs_up_val = compact_number(stats.map(|s| s.thumbs_up_count).unwrap_or(0));
         let active_file = selected_version.and_then(|version| {
             version
                 .files
                 .iter()
-                .find(|f| f.primary)
+                .find(|file| file.primary)
                 .or_else(|| version.files.first())
         });
-        let format_value = active_file
-            .and_then(|file| file.metadata.as_ref())
-            .and_then(|meta| meta.format.as_deref())
-            .unwrap_or("N/A");
-        let file_size = active_file
-            .map(|file| compact_file_size(file.size_kb))
-            .unwrap_or_else(|| "N/A".to_string());
-        let base_model = selected_version
-            .map(|version| version.base_model.clone())
-            .unwrap_or_else(|| "N/A".to_string());
-
         let detail_row = vec![
-            down_val,
-            format!("{:.1}", rate_val),
-            thumbs_up_val,
-            model.r#type.clone(),
-            format_value.to_string(),
-            base_model,
-            file_size,
+            format!(
+                "{:<10} {}",
+                "Type",
+                model.r#type.as_deref().unwrap_or("Model")
+            ),
+            format!(
+                "{:<10} {}",
+                "Base",
+                selected_version
+                    .and_then(|version| version.base_model.clone())
+                    .or_else(|| default_base_model(model))
+                    .unwrap_or_else(|| "Unknown".to_string())
+            ),
+            format!(
+                "{:<10} {}",
+                "Down",
+                compact_number(metrics.download_count)
+            ),
+            format!(
+                "{:<10} {}",
+                "Likes",
+                compact_number(metrics.thumbs_up_count)
+            ),
+            format!(
+                "{:<10} {}",
+                "Comments",
+                compact_number(metrics.comment_count)
+            ),
+            format!(
+                "{:<10} {:.1}",
+                "Rating",
+                metrics.rating
+            ),
+            format!(
+                "{:<10} {}",
+                "Format",
+                active_file
+                    .and_then(|file| file.format.clone())
+                    .unwrap_or_else(|| "N/A".to_string())
+            ),
+            format!(
+                "{:<10} {}",
+                "Size",
+                active_file
+                    .and_then(|file| file.size_kb)
+                    .map(compact_file_size)
+                    .unwrap_or_else(|| "N/A".to_string())
+            ),
         ];
-        let headers = [
-            "Down",
-            "Rate",
-            "Thumbs Up",
-            "Type",
-            "Format",
-            "Base Model",
-            "File Size",
-        ];
-        let mut widths = [5usize; 7];
-        for i in 0..7 {
-            widths[i] = widths[i]
-                .max(detail_row[i].chars().count())
-                .max(headers[i].chars().count())
-                .saturating_add(1);
-        }
-
-        let total_with_separators = widths.iter().sum::<usize>() + widths.len();
-        let max_width = split[2].width as usize;
-        if total_with_separators > max_width {
-            for i in (3..7).rev() {
-                while widths.iter().sum::<usize>() + widths.len() > max_width && widths[i] > 5 {
-                    widths[i] -= 1;
-                }
-            }
-        }
-
-        let detail_cells: Vec<Cell> = detail_row
-            .into_iter()
-            .enumerate()
-            .map(|(i, value)| {
-                Cell::from(center_text(compact_cell_text(value, widths[i]), widths[i]))
-            })
-            .collect();
-
-        let header_cells: Vec<Cell> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, value)| Cell::from(center_text(value.to_string(), widths[i])))
-            .collect();
-
-        let metadata_block = Block::default().borders(Borders::ALL).title(" Metadata ");
-        f.render_widget(&metadata_block, split[2]);
-        let metadata_inner = metadata_block.inner(split[2]);
-        let metadata_center_v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(2),
-                Constraint::Min(0),
-            ])
-            .split(metadata_inner);
-        let metadata_center_h = Layout::default()
+        let metadata_split = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(5),
-                Constraint::Min(0),
-                Constraint::Percentage(5),
-            ])
-            .split(metadata_center_v[1]);
-        let down_rate_table = Table::new(
-            vec![Row::new(detail_cells)],
-            [
-                Constraint::Length(widths[0] as u16),
-                Constraint::Length(widths[1] as u16),
-                Constraint::Length(widths[2] as u16),
-                Constraint::Length(widths[3] as u16),
-                Constraint::Length(widths[4] as u16),
-                Constraint::Length(widths[5] as u16),
-                Constraint::Length(widths[6] as u16),
-            ],
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(split[2]);
+        let metadata = Paragraph::new(
+            detail_row
+                .into_iter()
+                .map(Line::from)
+                .collect::<Vec<_>>(),
         )
-        .header(Row::new(header_cells).style(Style::default().add_modifier(Modifier::BOLD)))
-        .column_spacing(2);
-        f.render_widget(down_rate_table, metadata_center_h[1]);
+        .block(Block::default().borders(Borders::ALL).title(" Metadata "));
+        f.render_widget(metadata, metadata_split[0]);
+        let tags = tag_names(model);
+        let tag_lines = if tags.is_empty() {
+            vec![Line::from("No tags available.")]
+        } else {
+            wrap_joined_tags(
+                &tags,
+                metadata_split[1].width.saturating_sub(2) as usize,
+                metadata_split[1].height.saturating_sub(2) as usize,
+            )
+        };
+        let tags_widget = Paragraph::new(tag_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" Tags "));
+        f.render_widget(tags_widget, metadata_split[1]);
+
+        let file_lines = if let Some(version) = selected_version {
+            if version.files.is_empty() {
+                vec![Line::from("No files available for this version.")]
+            } else {
+                version
+                    .files
+                    .iter()
+                    .take(split[3].height.saturating_sub(2) as usize)
+                    .map(|file| {
+                        let prefix = if file.primary { "> " } else { "  " };
+                        let summary = format!(
+                            "{}{} | {}{}{}",
+                            prefix,
+                            file.name,
+                            file.format.as_deref().unwrap_or("file"),
+                            file.fp
+                                .as_deref()
+                                .map(|value| format!("/{value}"))
+                                .unwrap_or_default(),
+                            file.size_kb
+                                .map(|value| format!(" | {}", compact_file_size(value)))
+                                .unwrap_or_default(),
+                        );
+                        Line::from(Span::styled(
+                            compact_cell_text(summary, split[3].width.saturating_sub(2) as usize),
+                            if file.primary {
+                                Style::default().fg(Color::Yellow)
+                            } else {
+                                Style::default()
+                            },
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            }
+        } else {
+            vec![Line::from("No versions available.")]
+        };
+        let files = Paragraph::new(file_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Files "));
+        f.render_widget(files, split[3]);
 
         let desc_split = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
-            .split(split[3]);
+            .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+            .split(split[4]);
 
-        let description = model
-            .description
-            .as_deref()
-            .unwrap_or("No description available.");
-        let version_description = selected_version
-            .and_then(|version| version.description.as_deref())
-            .filter(|desc| !desc.is_empty())
-            .unwrap_or(description);
-        let description_lines = render_description_lines(version_description);
+        let description_text_value = model
+            .extras
+            .get("description")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .or_else(|| {
+                selected_version
+                    .and_then(|version| version.description.as_deref())
+                    .filter(|desc| !desc.is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| category_name(model).map(|category| format!("Category: {category}")))
+            .unwrap_or_else(|| "No description available.".to_string());
+        let description_lines = render_description_lines(&description_text_value);
         let description_text = Paragraph::new(description_lines)
             .wrap(Wrap { trim: true })
             .block(
@@ -1609,17 +1618,16 @@ fn draw_model_sidebar(
             .split(image_center_outer[1]);
         let inner_img_area = image_center_inner[1];
 
-        let selected_version_has_image = selected_version
-            .map(|version| !version.images.is_empty())
-            .unwrap_or(false);
-        let has_any_version_image = model
-            .model_versions
+        let has_any_cached_image = versions
             .iter()
-            .any(|version| !version.images.is_empty());
+            .any(|version| app.model_version_image_cache.contains_key(&version.id));
+        let is_waiting_for_selected_version = selected_version
+            .map(|version| !app.model_version_image_failed.contains(&version.id))
+            .unwrap_or(false);
 
         let mut image_version_id = selected_version.map(|version| version.id);
         if image_version_id.is_none() {
-            image_version_id = model.model_versions.iter().find_map(|version| {
+            image_version_id = versions.iter().find_map(|version| {
                 if app.model_version_image_cache.contains_key(&version.id) {
                     Some(version.id)
                 } else {
@@ -1629,35 +1637,28 @@ fn draw_model_sidebar(
         }
 
         if let Some(image_version_id) = image_version_id {
-            let protocol = app.model_version_image_cache.get_mut(&image_version_id);
+            let protocol = app
+                .model_version_image_cache
+                .get_mut(&image_version_id)
+                .and_then(|protocols| protocols.get_mut(0));
             if let Some(mut protocol) = protocol {
                 let image_widget: StatefulImage<StatefulProtocol> = StatefulImage::new();
                 f.render_stateful_widget(image_widget, inner_img_area, &mut protocol);
             } else {
-                if !selected_version_has_image {
+                if app.model_version_image_failed.contains(&image_version_id) {
                     f.render_widget(
                         Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
-                        inner_img_area,
-                    );
-                } else if app.model_version_image_failed.contains(&image_version_id) {
-                    f.render_widget(
-                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
-                        inner_img_area,
-                    );
-                } else if has_any_version_image {
-                    f.render_widget(
-                        Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                         inner_img_area,
                     );
                 } else {
                     f.render_widget(
-                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                        Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                         inner_img_area,
                     );
                 }
             }
         } else {
-            if has_any_version_image {
+            if has_any_cached_image || is_waiting_for_selected_version {
                 f.render_widget(
                     Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                     inner_img_area,
@@ -1950,7 +1951,7 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     let name = app
         .pending_bookmark_remove_id
         .and_then(|model_id| app.bookmarks.iter().find(|model| model.id == model_id))
-        .map(|model| model.name.clone())
+        .map(model_name)
         .unwrap_or_else(|| "selected bookmark".to_string());
 
     let block = Block::default()
@@ -2145,21 +2146,6 @@ fn build_horizontal_item_window(items: &[(String, bool)], max_width: usize) -> V
         .collect()
 }
 
-fn center_text(src: String, width: usize) -> String {
-    let src_chars: Vec<char> = src.chars().collect();
-    if width == 0 {
-        return String::new();
-    }
-    if src_chars.len() >= width {
-        return compact_cell_text(src, width);
-    }
-
-    let diff = width - src_chars.len();
-    let left = diff / 2;
-    let right = diff - left;
-    format!("{}{}{}", " ".repeat(left), src, " ".repeat(right))
-}
-
 fn compact_number(v: u64) -> String {
     const UNITS: [&str; 7] = ["", "K", "M", "B", "T", "P", "E"];
     let mut value = v as f64;
@@ -2172,25 +2158,6 @@ fn compact_number(v: u64) -> String {
 
     let rounded = format!("{:>5.1}", value);
     format!("{}{}", rounded, UNITS[idx])
-}
-
-fn normalized_version_rating(stats: Option<&crate::api::VersionStats>) -> f64 {
-    let Some(stats) = stats else {
-        return 0.0;
-    };
-
-    if stats.rating.is_finite() && stats.rating > 0.0 {
-        return stats.rating;
-    }
-
-    let thumbs_up = stats.thumbs_up_count as f64;
-    let thumbs_down = stats.thumbs_down_count as f64;
-    let total = thumbs_up + thumbs_down;
-    if total > 0.0 {
-        (thumbs_up / total) * 5.0
-    } else {
-        0.0
-    }
 }
 
 fn compact_file_size(size_kb: f64) -> String {
@@ -2231,6 +2198,56 @@ fn compact_bytes(size_bytes: u64) -> String {
     } else {
         format!("{} B", size_bytes)
     }
+}
+
+fn wrap_joined_tags(tags: &[String], width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let joined = tags.join(", ");
+    let chars: Vec<char> = joined.chars().collect();
+    if chars.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() && lines.len() < height {
+        let end = (start + width).min(chars.len());
+        let mut line = chars[start..end].iter().collect::<String>();
+        if end < chars.len() {
+            if let Some(last_sep) = line.rfind(", ") {
+                if last_sep > 0 {
+                    line.truncate(last_sep + 1);
+                    start += last_sep + 2;
+                } else {
+                    start = end;
+                }
+            } else {
+                start = end;
+            }
+        } else {
+            start = end;
+        }
+        lines.push(Line::from(line.trim().to_string()));
+    }
+
+    if start < chars.len() && !lines.is_empty() {
+        let last_index = lines.len() - 1;
+        let mut last = lines[last_index]
+            .spans
+            .first()
+            .map(|span| span.content.to_string())
+            .unwrap_or_default();
+        let target_width = width.saturating_sub(3);
+        if last.chars().count() > target_width {
+            last = compact_cell_text(last, target_width);
+        }
+        lines[last_index] = Line::from(format!("{last}..."));
+    }
+
+    lines
 }
 
 fn render_description_lines(raw: &str) -> Vec<Line<'static>> {

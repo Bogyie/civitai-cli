@@ -172,7 +172,7 @@ pub async fn run_event_loop(
                                         &format!(
                                             "UI: search submit query=\"{}\" limit={} append=false force_refresh=false",
                                             app.search_form.query,
-                                            search_options.limit
+                                            search_options.limit.unwrap_or(50)
                                         ),
                                     );
                                     if let Some(tx) = &app.tx {
@@ -747,7 +747,7 @@ pub async fn run_event_loop(
                                                     &app.config,
                                                     &format!(
                                                     "UI: request more models append=true query=\"{}\" next_page={}",
-                                                    opts.query
+                                                    opts.query.clone().unwrap_or_default()
                                                     ,
                                                     next_page.is_some()
                                                 ),
@@ -1072,11 +1072,15 @@ pub async fn run_event_loop(
                             }
                         }
                     }
-                    AppMessage::ImageDecoded(id, protocol) => {
+                     AppMessage::ImageDecoded(id, protocol) => {
                          app.image_cache.insert(id, protocol);
                      }
                      AppMessage::ModelCoverDecoded(version_id, protocol) => {
-                         app.model_version_image_cache.insert(version_id, protocol);
+                         app.model_version_image_cache.entry(version_id).or_insert_with(|| vec![protocol]);
+                         app.model_version_image_failed.remove(&version_id);
+                     }
+                     AppMessage::ModelCoversDecoded(version_id, protocols) => {
+                         app.model_version_image_cache.insert(version_id, protocols);
                          app.model_version_image_failed.remove(&version_id);
                      }
                      AppMessage::ModelCoverLoadFailed(version_id) => {
