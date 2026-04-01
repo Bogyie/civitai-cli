@@ -25,12 +25,22 @@ use civitai_cli::sdk::{
     ModelSearchSortBy, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
 };
 use crate::tui::image::{image_tags, image_used_model_entries, image_used_models, ParsedUsedModel};
-use crate::tui::model::{model_name, model_versions, preview_image_info, selected_version};
+use crate::tui::model::{
+    default_base_model, model_metrics, model_name, model_versions, ParsedModelImage,
+    ParsedModelMetrics, ParsedModelVersion,
+};
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+
+#[derive(Clone, Default)]
+struct ParsedModelCacheEntry {
+    metrics: ParsedModelMetrics,
+    versions: Vec<ParsedModelVersion>,
+    default_base_model: Option<String>,
+}
 
 pub struct App {
     pub active_tab: MainTab,
@@ -48,6 +58,7 @@ pub struct App {
     pub model_search_next_page: Option<u32>,
     pub bookmarks: Vec<Model>,
     visible_bookmarks_cache: Vec<Model>,
+    parsed_model_cache: HashMap<u64, ParsedModelCacheEntry>,
     pub image_bookmarks: Vec<ImageItem>,
     visible_image_bookmarks_cache: Vec<ImageItem>,
     pub image_tag_catalog: Vec<String>,
@@ -172,6 +183,7 @@ impl App {
             model_search_next_page: None,
             bookmarks,
             visible_bookmarks_cache: Vec::new(),
+            parsed_model_cache: HashMap::new(),
             image_bookmarks,
             visible_image_bookmarks_cache: Vec::new(),
             image_tag_catalog,
@@ -228,6 +240,7 @@ impl App {
             tx: None,
         };
 
+        app.rebuild_parsed_model_cache();
         app.refresh_visible_bookmarks_cache();
         app.refresh_visible_image_bookmarks_cache();
 
@@ -672,6 +685,7 @@ impl App {
                 self.models.push(model);
             }
         }
+        self.rebuild_parsed_model_cache();
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
         self.model_search_next_page = next_page;
@@ -698,6 +712,7 @@ impl App {
         self.model_version_image_failed
             .retain(|version_id| known_version_ids.contains(version_id));
         self.models = models;
+        self.rebuild_parsed_model_cache();
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
         self.model_search_next_page = next_page;
@@ -753,11 +768,16 @@ impl App {
 
     pub fn select_next_version_for_model(&mut self, model: &Model) {
         let model_id = model.id;
-        let version_len = model_versions(model).len();
-        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-        if *v_idx < version_len.saturating_sub(1) {
-            *v_idx += 1;
-            if let Some(version) = selected_version(model, *v_idx) {
+        let version_len = self.parsed_model_versions(model).len();
+        let next_index = self
+            .selected_version_index
+            .get(&model_id)
+            .copied()
+            .unwrap_or(0);
+        if next_index < version_len.saturating_sub(1) {
+            let next_index = next_index + 1;
+            self.selected_version_index.insert(model_id, next_index);
+            if let Some(version) = self.selected_parsed_version(model, next_index) {
                 self.selected_file_index.entry(version.id).or_insert(0);
             }
         }
@@ -765,10 +785,15 @@ impl App {
 
     pub fn select_previous_version_for_model(&mut self, model: &Model) {
         let model_id = model.id;
-        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-        if *v_idx > 0 {
-            *v_idx -= 1;
-            if let Some(version) = selected_version(model, *v_idx) {
+        let current_index = self
+            .selected_version_index
+            .get(&model_id)
+            .copied()
+            .unwrap_or(0);
+        if current_index > 0 {
+            let next_index = current_index - 1;
+            self.selected_version_index.insert(model_id, next_index);
+            if let Some(version) = self.selected_parsed_version(model, next_index) {
                 self.selected_file_index.entry(version.id).or_insert(0);
             }
         }
@@ -776,7 +801,7 @@ impl App {
 
     pub fn select_next_file_for_model(&mut self, model: &Model) {
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        if let Some(version) = selected_version(model, version_index) {
+        if let Some(version) = self.selected_parsed_version(model, version_index) {
             let file_len = version.files.len();
             if file_len > 0 {
                 let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
@@ -789,7 +814,7 @@ impl App {
 
     pub fn select_previous_file_for_model(&mut self, model: &Model) {
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        if let Some(version) = selected_version(model, version_index) {
+        if let Some(version) = self.selected_parsed_version(model, version_index) {
             let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
             if *file_idx > 0 {
                 *file_idx -= 1;
@@ -799,7 +824,7 @@ impl App {
 
     pub fn request_download_for_model(&mut self, model: &Model) {
         let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        if let Some(version) = selected_version(model, v_idx) {
+        if let Some(version) = self.selected_parsed_version(model, v_idx) {
             let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
             if let Some(tx) = &self.tx {
                 let _ = tx.try_send(WorkerCommand::DownloadModel(
@@ -864,6 +889,13 @@ impl App {
 
     pub fn open_image_model_detail_modal(&mut self, model: Model, version_id: Option<u64>) {
         if let Some(version_id) = version_id
+            && let Some(index) = self
+                .parsed_model_versions(&model)
+                .iter()
+                .position(|version| version.id == version_id)
+        {
+            self.selected_version_index.insert(model.id, index);
+        } else if let Some(version_id) = version_id
             && let Some(index) = model_versions(&model)
                 .iter()
                 .position(|version| version.id == version_id)
@@ -871,12 +903,14 @@ impl App {
             self.selected_version_index.insert(model.id, index);
         }
         self.image_model_detail_model = Some(model);
+        self.rebuild_parsed_model_cache();
         self.show_image_model_detail_modal = true;
     }
 
     pub fn close_image_model_detail_modal(&mut self) {
         self.show_image_model_detail_modal = false;
         self.image_model_detail_model = None;
+        self.rebuild_parsed_model_cache();
     }
 
     pub fn select_next_download(&mut self) {
@@ -991,7 +1025,7 @@ impl App {
     pub fn selected_model_version(&self) -> Option<(u64, u64)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        if let Some(version) = selected_version(model, version_index) {
+        if let Some(version) = self.selected_parsed_version(model, version_index) {
             Some((model.id, version.id))
         } else {
             model.primary_model_version_id().map(|version_id| (model.id, version_id))
@@ -1003,11 +1037,11 @@ impl App {
     ) -> Option<(u64, u64, Option<String>, Option<(u32, u32)>)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = selected_version(model, version_index)?;
+        let version = self.selected_parsed_version(model, version_index)?;
         if self.model_version_image_failed.contains(&version.id) {
             return None;
         }
-        let preview = preview_image_info(model, version_index);
+        let preview = self.preview_image_info(model, version_index);
         Some((
             model.id,
             version.id,
@@ -1024,7 +1058,7 @@ impl App {
         let Some(model) = self.selected_model_in_active_view() else {
             return Vec::new();
         };
-        let versions = model_versions(model);
+        let versions = self.parsed_model_versions(model);
         if versions.is_empty() {
             return Vec::new();
         }
@@ -1043,7 +1077,7 @@ impl App {
             })
             .filter(|(idx, _)| *idx != center && *idx >= start && *idx <= end)
             .map(|(idx, version)| {
-                let preview = preview_image_info(model, idx);
+                let preview = self.preview_image_info(model, idx);
                 (
                     version.id,
                     version.images.first().map(|image| image.url.clone()).or_else(|| {
@@ -1188,6 +1222,7 @@ impl App {
             self.status = format!("Added bookmark: {}", model_name(model));
         }
         self.deduplicate_bookmarks();
+        self.rebuild_parsed_model_cache();
         self.refresh_visible_bookmarks_cache();
         self.persist_bookmarks();
     }
@@ -1201,6 +1236,7 @@ impl App {
         if let Some(pos) = self.bookmarks.iter().position(|model| model.id == model_id) {
             let name = model_name(&self.bookmarks[pos]);
             self.bookmarks.remove(pos);
+            self.rebuild_parsed_model_cache();
             self.refresh_visible_bookmarks_cache();
             self.persist_bookmarks();
             self.clamp_bookmark_selection();
@@ -1485,6 +1521,7 @@ impl App {
         let before = self.bookmarks.len();
         self.bookmarks.append(&mut imported);
         self.deduplicate_bookmarks();
+        self.rebuild_parsed_model_cache();
         self.refresh_visible_bookmarks_cache();
         self.clamp_bookmark_selection();
         self.persist_bookmarks();
@@ -1549,6 +1586,69 @@ impl App {
             } else {
                 self.last_error = None;
             }
+        }
+    }
+
+    pub fn parsed_model_metrics(&self, model: &Model) -> ParsedModelMetrics {
+        self.parsed_model_cache
+            .get(&model.id)
+            .map(|entry| entry.metrics.clone())
+            .unwrap_or_else(|| model_metrics(model))
+    }
+
+    pub fn parsed_model_versions(&self, model: &Model) -> &[ParsedModelVersion] {
+        self.parsed_model_cache
+            .get(&model.id)
+            .map(|entry| entry.versions.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub fn parsed_default_base_model(&self, model: &Model) -> Option<&str> {
+        self.parsed_model_cache
+            .get(&model.id)
+            .and_then(|entry| entry.default_base_model.as_deref())
+    }
+
+    pub fn selected_parsed_version(
+        &self,
+        model: &Model,
+        index: usize,
+    ) -> Option<&ParsedModelVersion> {
+        let versions = self.parsed_model_versions(model);
+        if versions.is_empty() {
+            return None;
+        }
+        versions.get(index.min(versions.len().saturating_sub(1)))
+    }
+
+    pub fn preview_image_info(
+        &self,
+        model: &Model,
+        version_index: usize,
+    ) -> Option<ParsedModelImage> {
+        self.selected_parsed_version(model, version_index)?
+            .images
+            .first()
+            .cloned()
+            .filter(|image| !image.url.trim().is_empty())
+    }
+
+    fn rebuild_parsed_model_cache(&mut self) {
+        self.parsed_model_cache.clear();
+
+        for model in self
+            .models
+            .iter()
+            .chain(self.bookmarks.iter())
+            .chain(self.image_model_detail_model.iter())
+        {
+            self.parsed_model_cache
+                .entry(model.id)
+                .or_insert_with(|| ParsedModelCacheEntry {
+                    metrics: model_metrics(model),
+                    versions: model_versions(model),
+                    default_base_model: default_base_model(model),
+                });
         }
     }
 }

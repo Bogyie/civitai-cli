@@ -36,8 +36,7 @@ use crate::tui::image::{
     image_prompt, image_stats, image_tags, image_used_models, image_username,
 };
 use crate::tui::model::{
-    build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
-    model_versions, tag_names,
+    build_model_url, category_name, creator_name, model_name, tag_names,
 };
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
@@ -124,6 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .split(model_chunks[1]);
 
                 draw_model_list(
+                    app,
                     f,
                     split[0],
                     &app.models,
@@ -135,6 +135,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 draw_model_sidebar(f, app, split[1], selected_model.as_ref());
             } else {
                 draw_model_list(
+                    app,
                     f,
                     model_chunks[1],
                     &app.models,
@@ -165,6 +166,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     .split(bookmark_chunks[1]);
 
                 draw_model_list(
+                    app,
                     f,
                     split[0],
                     &bookmark_items,
@@ -176,6 +178,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 draw_model_sidebar(f, app, split[1], selected_bookmark_model.as_ref());
             } else {
                 draw_model_list(
+                    app,
                     f,
                     bookmark_chunks[1],
                     &bookmark_items,
@@ -1323,6 +1326,7 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_model_list(
+    app: &App,
     f: &mut Frame,
     area: Rect,
     models: &[civitai_cli::sdk::SearchModelHit],
@@ -1353,11 +1357,11 @@ fn draw_model_list(
     let mut items: Vec<ListItem> = Vec::with_capacity(models.len());
     for (idx, model) in models.iter().enumerate() {
         let is_selected = idx == selected_idx;
-        let metrics = model_metrics(model);
+        let metrics = app.parsed_model_metrics(model);
         let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
         let mut display_name = model_name(model);
         let is_bookmarked = bookmarked_ids.contains(&model.id);
-        let has_version_id = !model_versions(model).is_empty();
+        let has_version_id = !app.parsed_model_versions(model).is_empty();
 
         if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
@@ -1477,13 +1481,13 @@ fn draw_model_sidebar(
         .split(area);
 
     if let Some(model) = selected_model {
-        let versions = model_versions(model);
+        let versions = app.parsed_model_versions(model);
         let v_idx = *app.selected_version_index.get(&model.id).unwrap_or(&0);
         let safe_v_idx = v_idx.min(versions.len().saturating_sub(1));
         let selected_version = versions.get(safe_v_idx);
         let metrics = selected_version
             .map(|version| version.stats.clone())
-            .unwrap_or_else(|| model_metrics(model));
+            .unwrap_or_else(|| app.parsed_model_metrics(model));
         let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
         let model_title = model_name(model);
         let model_url = build_model_url(model, selected_version.map(|version| version.id));
@@ -1597,7 +1601,7 @@ fn draw_model_sidebar(
                 "Base",
                 selected_version
                     .and_then(|version| version.base_model.clone())
-                    .or_else(|| default_base_model(model))
+                    .or_else(|| app.parsed_default_base_model(model).map(str::to_string))
                     .unwrap_or_else(|| "Unknown".to_string())
             ),
             format!(
