@@ -5,6 +5,7 @@ mod download;
 mod image_search;
 mod image_search_types;
 mod model_search;
+mod model_search_types;
 mod shared;
 
 #[allow(unused_imports)]
@@ -38,7 +39,12 @@ pub use image_search_types::{
 };
 #[allow(unused_imports)]
 pub use model_search::{
-    ModelDownloadAuth, ModelSearchSortBy, ModelSearchState, SearchModelHit, SearchModelResponse,
+    ModelDownloadAuth, ModelSearchState, SearchModelHit, SearchModelResponse,
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
+};
+#[allow(unused_imports)]
+pub use model_search_types::{
+    ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,
+    ModelType,
 };

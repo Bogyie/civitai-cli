@@ -1,11 +1,12 @@
 use civitai_cli::sdk::{
+    DownloadClient, ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy,
+    ImageSearchState, ImageTechnique, ImageTool, ModelBaseModel, ModelCategory,
+    ModelCheckpointType, ModelDownloadAuth, ModelFileFormat, ModelSearchSortBy, ModelSearchState,
+    ModelType, SearchImageHit, SearchModelHit, SearchSdkConfig, WebSearchClient,
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
-    DownloadClient, ImageSearchSortBy, ImageSearchState, ModelDownloadAuth,
-    ModelSearchSortBy, ModelSearchState, SearchImageHit, SearchModelHit, SearchSdkConfig,
-    WebSearchClient,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 mod fixtures {
     use super::*;
@@ -75,13 +76,13 @@ mod fixtures {
         ImageSearchState {
             query: Some("cute cat".to_string()),
             sort_by: ImageSearchSortBy::MostReactions,
-            media_types: vec!["image".to_string(), "video".to_string()],
+            media_types: vec![ImageMediaType::Image, ImageMediaType::Video],
             tags: vec!["pg".to_string(), "anime".to_string()],
             users: vec!["alice".to_string()],
-            tools: vec!["lora".to_string()],
-            techniques: vec!["flux".to_string()],
-            base_models: vec!["SDXL".to_string()],
-            aspect_ratios: vec!["1:1".to_string()],
+            tools: vec![ImageTool::ComfyUi, ImageTool::custom("lora")],
+            techniques: vec![ImageTechnique::Txt2Img, ImageTechnique::custom("flux")],
+            base_models: vec![ImageBaseModel::Sdxl10, ImageBaseModel::custom("SDXL")],
+            aspect_ratios: vec![ImageAspectRatio::Square],
             created_at: Some("1700000000-1705000000".to_string()),
             image_id: Some(42),
             page: Some(2),
@@ -94,11 +95,14 @@ mod fixtures {
         ModelSearchState {
             query: Some("hello".to_string()),
             sort_by: ModelSearchSortBy::MostDownloaded,
-            base_models: vec!["SDXL".to_string(), "Flux.1 D".to_string()],
-            types: vec!["Checkpoint".to_string()],
-            checkpoint_types: vec!["Merges".to_string()],
-            file_formats: vec!["SafeTensor".to_string()],
-            categories: vec!["character".to_string()],
+            base_models: vec![ModelBaseModel::Sdxl10, ModelBaseModel::Flux1D],
+            types: vec![ModelType::Checkpoint],
+            checkpoint_types: vec![
+                ModelCheckpointType::Merge,
+                ModelCheckpointType::custom("Merges"),
+            ],
+            file_formats: vec![ModelFileFormat::SafeTensor],
+            categories: vec![ModelCategory::Character],
             users: vec!["alice".to_string()],
             tags: vec!["anime".to_string(), "cute".to_string()],
             created_at: Some("1700000000-1705000000".to_string()),
@@ -152,13 +156,71 @@ mod image_state_tests {
 
     #[test]
     fn parses_image_multi_value_query_parameters() {
-        let input = "/search/images?type=image,video&type=audio&tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
+        let input = "/search/images?type=image,video&type=audio&tools=ComfyUI,KREA&techniques=txt2img,workflow&baseModel=SDXL%201.0,Flux.1%20D&aspectRatio=Square,Landscape&tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
         let state = ImageSearchState::from_web_url(input).unwrap();
 
-        assert_eq!(state.media_types, vec!["image", "video", "audio"]);
+        assert_eq!(
+            state.media_types,
+            vec![
+                ImageMediaType::Image,
+                ImageMediaType::Video,
+                ImageMediaType::Audio
+            ]
+        );
+        assert_eq!(state.tools, vec![ImageTool::ComfyUi, ImageTool::Krea]);
+        assert_eq!(
+            state.techniques,
+            vec![ImageTechnique::Txt2Img, ImageTechnique::Workflow]
+        );
+        assert_eq!(
+            state.base_models,
+            vec![ImageBaseModel::Sdxl10, ImageBaseModel::Flux1D]
+        );
+        assert_eq!(
+            state.aspect_ratios,
+            vec![ImageAspectRatio::Square, ImageAspectRatio::Landscape]
+        );
         assert_eq!(state.tags, vec!["a", "b", "c"]);
         assert_eq!(state.users, vec!["one", "two"]);
         assert_eq!(state.sort_by, ImageSearchSortBy::Newest);
+    }
+
+    #[test]
+    fn preserves_unknown_image_filter_values() {
+        let state = ImageSearchState::from_web_url(
+            "/search/images?type=panorama&tools=MyTool&techniques=my-technique&baseModel=MyBaseModel&aspectRatio=UltraWide&sortBy=images_v6:customMetric:desc",
+        )
+        .unwrap();
+
+        assert_eq!(state.media_types, vec![ImageMediaType::custom("panorama")]);
+        assert_eq!(state.tools, vec![ImageTool::custom("MyTool")]);
+        assert_eq!(
+            state.techniques,
+            vec![ImageTechnique::custom("my-technique")]
+        );
+        assert_eq!(
+            state.base_models,
+            vec![ImageBaseModel::custom("MyBaseModel")]
+        );
+        assert_eq!(
+            state.aspect_ratios,
+            vec![ImageAspectRatio::custom("UltraWide")]
+        );
+        assert_eq!(
+            state.sort_by,
+            ImageSearchSortBy::Custom("images_v6:customMetric:desc".to_string())
+        );
+
+        let round_trip = state
+            .to_web_url("https://civitai.com/search/images")
+            .unwrap()
+            .to_string();
+        assert!(round_trip.contains("type=panorama"));
+        assert!(round_trip.contains("tools=MyTool"));
+        assert!(round_trip.contains("techniques=my-technique"));
+        assert!(round_trip.contains("baseModel=MyBaseModel"));
+        assert!(round_trip.contains("aspectRatio=UltraWide"));
+        assert!(round_trip.contains("sortBy=images_v6%3AcustomMetric%3Adesc"));
     }
 
     #[test]
@@ -224,11 +286,8 @@ mod image_hit_tests {
             "https://alt.civitai.test/images/1"
         );
         assert_eq!(
-            hit.media_url_with_base_and_namespace(
-                "https://media.civitai.test/",
-                "custom-space"
-            )
-            .as_deref(),
+            hit.media_url_with_base_and_namespace("https://media.civitai.test/", "custom-space")
+                .as_deref(),
             Some("https://media.civitai.test/custom-space/abc123-token/original=true")
         );
     }
@@ -277,13 +336,67 @@ mod model_state_tests {
 
     #[test]
     fn parses_model_multi_value_query_parameters() {
-        let input = "/search/models?baseModel=SDXL,Flux.1%20D&tags=anime,cute&tags=portrait&users=one,two&sortBy=models_v9:createdAt:desc";
+        let input = "/search/models?baseModel=SDXL%201.0,Flux.1%20D&type=Checkpoint,LORA&checkpointType=Merge,Pruned&fileFormats=SafeTensor,GGUF&category=character,style&tags=anime,cute&tags=portrait&users=one,two&sortBy=models_v9:createdAt:desc";
         let state = ModelSearchState::from_web_url(input).unwrap();
 
-        assert_eq!(state.base_models, vec!["SDXL", "Flux.1 D"]);
+        assert_eq!(
+            state.base_models,
+            vec![ModelBaseModel::Sdxl10, ModelBaseModel::Flux1D]
+        );
+        assert_eq!(state.types, vec![ModelType::Checkpoint, ModelType::Lora]);
+        assert_eq!(
+            state.checkpoint_types,
+            vec![ModelCheckpointType::Merge, ModelCheckpointType::Pruned]
+        );
+        assert_eq!(
+            state.file_formats,
+            vec![ModelFileFormat::SafeTensor, ModelFileFormat::GGUF]
+        );
+        assert_eq!(
+            state.categories,
+            vec![ModelCategory::Character, ModelCategory::Style]
+        );
         assert_eq!(state.tags, vec!["anime", "cute", "portrait"]);
         assert_eq!(state.users, vec!["one", "two"]);
         assert_eq!(state.sort_by, ModelSearchSortBy::Newest);
+    }
+
+    #[test]
+    fn preserves_unknown_model_filter_values() {
+        let state = ModelSearchState::from_web_url(
+            "/search/models?baseModel=MyBaseModel&type=MyType&checkpointType=MyCheckpoint&fileFormats=MyFormat&category=my-category&sortBy=models_v9:customMetric:desc",
+        )
+        .unwrap();
+
+        assert_eq!(
+            state.base_models,
+            vec![ModelBaseModel::custom("MyBaseModel")]
+        );
+        assert_eq!(state.types, vec![ModelType::custom("MyType")]);
+        assert_eq!(
+            state.checkpoint_types,
+            vec![ModelCheckpointType::custom("MyCheckpoint")]
+        );
+        assert_eq!(
+            state.file_formats,
+            vec![ModelFileFormat::custom("MyFormat")]
+        );
+        assert_eq!(state.categories, vec![ModelCategory::custom("my-category")]);
+        assert_eq!(
+            state.sort_by,
+            ModelSearchSortBy::Custom("models_v9:customMetric:desc".to_string())
+        );
+
+        let round_trip = state
+            .to_web_url("https://civitai.com/search/models")
+            .unwrap()
+            .to_string();
+        assert!(round_trip.contains("baseModel=MyBaseModel"));
+        assert!(round_trip.contains("type=MyType"));
+        assert!(round_trip.contains("checkpointType=MyCheckpoint"));
+        assert!(round_trip.contains("fileFormats=MyFormat"));
+        assert!(round_trip.contains("category=my-category"));
+        assert!(round_trip.contains("sortBy=models_v9%3AcustomMetric%3Adesc"));
     }
 
     #[test]
@@ -397,8 +510,8 @@ mod model_download_tests {
     }
 
     #[tokio::test]
-    async fn builds_model_download_requests_with_optional_auth(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn builds_model_download_requests_with_optional_auth()
+    -> Result<(), Box<dyn std::error::Error>> {
         let sdk = DownloadClient::new()?;
 
         let plain = sdk.build_model_download_request(555, None).build()?;
@@ -464,7 +577,10 @@ mod client_config_tests {
         assert_eq!(config.civitai_web_url, "https://alt.civitai.test");
         assert_eq!(config.media_delivery_url, "https://media.civitai.test");
         assert_eq!(config.media_delivery_namespace, "custom-space");
-        assert_eq!(config.model_download_api_url, "https://download.civitai.test/models");
+        assert_eq!(
+            config.model_download_api_url,
+            "https://download.civitai.test/models"
+        );
         assert_eq!(config.images_index, "images_custom");
         assert_eq!(config.models_index, "models_custom");
         assert_eq!(config.user_agent, "sdk-test/1.0");
@@ -478,7 +594,10 @@ mod client_config_tests {
         let model_hit = fixtures::sample_model_hit();
 
         assert_eq!(sdk.config(), &config);
-        assert_eq!(sdk.image_page_url(&image_hit), "https://alt.civitai.test/images/1");
+        assert_eq!(
+            sdk.image_page_url(&image_hit),
+            "https://alt.civitai.test/images/1"
+        );
         assert_eq!(
             sdk.original_media_url(&image_hit).as_deref(),
             Some("https://media.civitai.test/custom-space/abc123-token/original=true")
@@ -488,7 +607,10 @@ mod client_config_tests {
                 .as_deref(),
             Some("https://media.civitai.test/other-space/abc123-token/original=true")
         );
-        assert_eq!(sdk.model_page_url(&model_hit), "https://alt.civitai.test/models/12345");
+        assert_eq!(
+            sdk.model_page_url(&model_hit),
+            "https://alt.civitai.test/models/12345"
+        );
         assert_eq!(
             sdk.model_download_url(&model_hit).as_deref(),
             Some("https://download.civitai.test/models/987654")
@@ -514,8 +636,8 @@ mod live_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn fetch_live_civitai_image_web_search_sample(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_live_civitai_image_web_search_sample() -> Result<(), Box<dyn std::error::Error>>
+    {
         let sdk = WebSearchClient::new()?;
         let state = ImageSearchState {
             query: Some("man".to_string()),
@@ -553,7 +675,8 @@ mod live_tests {
             println!(
                 "typed_item[{idx}] page_url={}, media_url={}",
                 hit.image_page_url(),
-                hit.original_media_url().unwrap_or_else(|| "N/A".to_string())
+                hit.original_media_url()
+                    .unwrap_or_else(|| "N/A".to_string())
             );
         }
 
@@ -568,10 +691,7 @@ mod live_tests {
                 .get("baseModel")
                 .and_then(Value::as_str)
                 .unwrap_or("N/A");
-            let prompt = item
-                .get("prompt")
-                .and_then(Value::as_str)
-                .unwrap_or("N/A");
+            let prompt = item.get("prompt").and_then(Value::as_str).unwrap_or("N/A");
             let page_url = format!("https://civitai.com/images/{id}");
             let media_url = item
                 .get("url")
@@ -596,12 +716,12 @@ mod live_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn fetch_live_civitai_image_only_web_search_sample(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_live_civitai_image_only_web_search_sample()
+    -> Result<(), Box<dyn std::error::Error>> {
         let sdk = WebSearchClient::new()?;
         let state = ImageSearchState {
             query: Some("hello".to_string()),
-            media_types: vec!["image".to_string()],
+            media_types: vec![ImageMediaType::Image],
             limit: Some(5),
             ..Default::default()
         };
@@ -628,17 +748,19 @@ mod live_tests {
         }
 
         assert!(!typed.hits.is_empty());
-        assert!(typed
-            .hits
-            .iter()
-            .all(|hit| matches!(hit.r#type.as_deref(), Some("image"))));
+        assert!(
+            typed
+                .hits
+                .iter()
+                .all(|hit| matches!(hit.r#type.as_deref(), Some("image")))
+        );
         Ok(())
     }
 
     #[tokio::test]
     #[ignore]
-    async fn fetch_live_civitai_video_only_web_search_sample(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_live_civitai_video_only_web_search_sample()
+    -> Result<(), Box<dyn std::error::Error>> {
         let sdk = WebSearchClient::new()?;
         let candidate_queries = ["video", "animation", "wan"];
         let mut typed = None;
@@ -647,7 +769,7 @@ mod live_tests {
             let response = sdk
                 .search_images(&ImageSearchState {
                     query: Some(query.to_string()),
-                    media_types: vec!["video".to_string()],
+                    media_types: vec![ImageMediaType::Video],
                     limit: Some(5),
                     ..Default::default()
                 })
@@ -681,17 +803,19 @@ mod live_tests {
         }
 
         assert!(!typed.hits.is_empty());
-        assert!(typed
-            .hits
-            .iter()
-            .all(|hit| matches!(hit.r#type.as_deref(), Some("video"))));
+        assert!(
+            typed
+                .hits
+                .iter()
+                .all(|hit| matches!(hit.r#type.as_deref(), Some("video")))
+        );
         Ok(())
     }
 
     #[tokio::test]
     #[ignore]
-    async fn fetch_live_civitai_model_web_search_sample(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn fetch_live_civitai_model_web_search_sample() -> Result<(), Box<dyn std::error::Error>>
+    {
         let sdk = WebSearchClient::new()?;
         let state = ModelSearchState {
             query: Some("hello".to_string()),

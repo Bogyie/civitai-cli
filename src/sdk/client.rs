@@ -12,8 +12,8 @@ use super::api::{
 };
 use super::constants::{
     CIVITAI_IMAGE_SEARCH_CLIENT_KEY, CIVITAI_IMAGE_SEARCH_MEILI_URL,
-    CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL,
-    CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL, IMAGES_SEARCH_INDEX, MODELS_SEARCH_INDEX,
+    CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL, CIVITAI_MODEL_DOWNLOAD_API_URL,
+    CIVITAI_WEB_URL, IMAGES_SEARCH_INDEX, MODELS_SEARCH_INDEX,
 };
 use super::download::{
     DownloadControl, DownloadDestination, DownloadEvent, DownloadKind, DownloadOptions,
@@ -188,11 +188,7 @@ impl SdkClients {
         let web = WebSearchClient::from_parts(client.clone(), config.clone());
         let api = ApiClient::from_parts(client.clone(), config.clone());
         let download = DownloadClient::from_parts(client, config);
-        Ok(Self {
-            web,
-            api,
-            download,
-        })
+        Ok(Self { web, api, download })
     }
 }
 
@@ -820,15 +816,40 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
     let limit = state.limit.unwrap_or(50);
     let page_index = state.page.unwrap_or(0);
     let offset = page_index.saturating_mul(limit);
+    let media_types = state
+        .media_types
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let tools = state
+        .tools
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let techniques = state
+        .techniques
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let base_models = state
+        .base_models
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let aspect_ratios = state
+        .aspect_ratios
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
 
     let mut filters = Vec::new();
-    push_equals_filters(&mut filters, "type", &state.media_types);
+    push_equals_filters(&mut filters, "type", &media_types);
     push_equals_filters(&mut filters, "tagNames", &state.tags);
-    push_equals_filters(&mut filters, "toolNames", &state.tools);
-    push_equals_filters(&mut filters, "techniqueNames", &state.techniques);
+    push_equals_filters(&mut filters, "toolNames", &tools);
+    push_equals_filters(&mut filters, "techniqueNames", &techniques);
     push_equals_filters(&mut filters, "user.username", &state.users);
-    push_equals_filters(&mut filters, "baseModel", &state.base_models);
-    push_equals_filters(&mut filters, "aspectRatio", &state.aspect_ratios);
+    push_equals_filters(&mut filters, "baseModel", &base_models);
+    push_equals_filters(&mut filters, "aspectRatio", &aspect_ratios);
 
     if let Some(created_at) = state.created_at.as_ref() {
         filters.extend(build_created_at_filters(created_at, "createdAtUnix"));
@@ -860,13 +881,38 @@ fn build_model_meili_payload(state: &ModelSearchState) -> Value {
     let limit = state.limit.unwrap_or(50);
     let page_index = state.page.unwrap_or(0);
     let offset = page_index.saturating_mul(limit);
+    let base_models = state
+        .base_models
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let types = state
+        .types
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let checkpoint_types = state
+        .checkpoint_types
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let file_formats = state
+        .file_formats
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
+    let categories = state
+        .categories
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
 
     let mut filters = Vec::new();
-    push_equals_filters(&mut filters, "version.baseModel", &state.base_models);
-    push_equals_filters(&mut filters, "type", &state.types);
-    push_equals_filters(&mut filters, "checkpointType", &state.checkpoint_types);
-    push_equals_filters(&mut filters, "fileFormats", &state.file_formats);
-    push_equals_filters(&mut filters, "category.name", &state.categories);
+    push_equals_filters(&mut filters, "version.baseModel", &base_models);
+    push_equals_filters(&mut filters, "type", &types);
+    push_equals_filters(&mut filters, "checkpointType", &checkpoint_types);
+    push_equals_filters(&mut filters, "fileFormats", &file_formats);
+    push_equals_filters(&mut filters, "category.name", &categories);
     push_equals_filters(&mut filters, "user.username", &state.users);
     push_equals_filters(&mut filters, "tags.name", &state.tags);
 

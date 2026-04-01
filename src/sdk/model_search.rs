@@ -3,83 +3,13 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::constants::{
-    CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL, DEFAULT_MODEL_SORTS,
-};
+use super::constants::{CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL};
 use super::image_search::ImageHitUser;
-use super::shared::{
-    append_csv_pair, normalize_search_url, parse_query_map, split_multi_keys,
+use super::model_search_types::{
+    ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,
+    ModelType,
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelSearchSortBy {
-    #[default]
-    Relevance,
-    HighestRated,
-    MostDownloaded,
-    MostLiked,
-    MostDiscussed,
-    MostCollected,
-    MostBuzz,
-    Newest,
-}
-
-impl ModelSearchSortBy {
-    pub fn as_query_value(&self) -> &'static str {
-        match self {
-            Self::Relevance => DEFAULT_MODEL_SORTS[0],
-            Self::HighestRated => DEFAULT_MODEL_SORTS[1],
-            Self::MostDownloaded => DEFAULT_MODEL_SORTS[2],
-            Self::MostLiked => DEFAULT_MODEL_SORTS[3],
-            Self::MostDiscussed => DEFAULT_MODEL_SORTS[4],
-            Self::MostCollected => DEFAULT_MODEL_SORTS[5],
-            Self::MostBuzz => DEFAULT_MODEL_SORTS[6],
-            Self::Newest => DEFAULT_MODEL_SORTS[7],
-        }
-    }
-
-    pub fn from_query_value(value: &str) -> Self {
-        if value == DEFAULT_MODEL_SORTS[0] {
-            return Self::Relevance;
-        }
-        if value == DEFAULT_MODEL_SORTS[1] {
-            return Self::HighestRated;
-        }
-        if value == DEFAULT_MODEL_SORTS[2] {
-            return Self::MostDownloaded;
-        }
-        if value == DEFAULT_MODEL_SORTS[3] {
-            return Self::MostLiked;
-        }
-        if value == DEFAULT_MODEL_SORTS[4] {
-            return Self::MostDiscussed;
-        }
-        if value == DEFAULT_MODEL_SORTS[5] {
-            return Self::MostCollected;
-        }
-        if value == DEFAULT_MODEL_SORTS[6] {
-            return Self::MostBuzz;
-        }
-        if value == DEFAULT_MODEL_SORTS[7] {
-            return Self::Newest;
-        }
-        Self::Relevance
-    }
-
-    pub fn to_meili_sort_value(&self) -> Option<&'static str> {
-        match self {
-            Self::Relevance => None,
-            Self::HighestRated => Some("metrics.thumbsUpCount:desc"),
-            Self::MostDownloaded => Some("metrics.downloadCount:desc"),
-            Self::MostLiked => Some("metrics.favoriteCount:desc"),
-            Self::MostDiscussed => Some("metrics.commentCount:desc"),
-            Self::MostCollected => Some("metrics.collectedCount:desc"),
-            Self::MostBuzz => Some("metrics.tippedAmountCount:desc"),
-            Self::Newest => Some("createdAt:desc"),
-        }
-    }
-}
+use super::shared::{append_csv_pair, normalize_search_url, parse_query_map, split_multi_keys};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -87,11 +17,11 @@ impl ModelSearchSortBy {
 pub struct ModelSearchState {
     pub query: Option<String>,
     pub sort_by: ModelSearchSortBy,
-    pub base_models: Vec<String>,
-    pub types: Vec<String>,
-    pub checkpoint_types: Vec<String>,
-    pub file_formats: Vec<String>,
-    pub categories: Vec<String>,
+    pub base_models: Vec<ModelBaseModel>,
+    pub types: Vec<ModelType>,
+    pub checkpoint_types: Vec<ModelCheckpointType>,
+    pub file_formats: Vec<ModelFileFormat>,
+    pub categories: Vec<ModelCategory>,
     pub users: Vec<String>,
     pub tags: Vec<String>,
     pub created_at: Option<String>,
@@ -104,7 +34,10 @@ impl ModelSearchState {
     pub fn to_query_pairs(&self) -> Vec<(String, String)> {
         let mut pairs = Vec::new();
 
-        pairs.push(("sortBy".to_string(), self.sort_by.as_query_value().to_string()));
+        pairs.push((
+            "sortBy".to_string(),
+            self.sort_by.to_query_value().into_owned(),
+        ));
 
         if let Some(query) = self.query.as_ref().filter(|q| !q.is_empty()) {
             pairs.push(("query".to_string(), query.to_string()));
@@ -114,11 +47,51 @@ impl ModelSearchState {
             pairs.push(("createdAt".to_string(), value.to_string()));
         }
 
-        append_csv_pair(&mut pairs, "baseModel", &self.base_models);
-        append_csv_pair(&mut pairs, "type", &self.types);
-        append_csv_pair(&mut pairs, "checkpointType", &self.checkpoint_types);
-        append_csv_pair(&mut pairs, "fileFormats", &self.file_formats);
-        append_csv_pair(&mut pairs, "category", &self.categories);
+        append_csv_pair(
+            &mut pairs,
+            "baseModel",
+            &self
+                .base_models
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "type",
+            &self
+                .types
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "checkpointType",
+            &self
+                .checkpoint_types
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "fileFormats",
+            &self
+                .file_formats
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "category",
+            &self
+                .categories
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
         append_csv_pair(&mut pairs, "users", &self.users);
         append_csv_pair(&mut pairs, "tags", &self.tags);
 
@@ -136,8 +109,11 @@ impl ModelSearchState {
 
     pub fn to_web_url(&self, base_url: &str) -> Result<Url> {
         let pairs = self.to_query_pairs();
-        let url = Url::parse_with_params(base_url, pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .context("Failed to build Civitai model search URL")?;
+        let url = Url::parse_with_params(
+            base_url,
+            pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+        )
+        .context("Failed to build Civitai model search URL")?;
         Ok(url)
     }
 
@@ -160,11 +136,26 @@ impl ModelSearchState {
             query.sort_by = ModelSearchSortBy::from_query_value(v);
         }
 
-        query.base_models = split_multi_keys(&map, &["baseModel", "baseModels"]);
-        query.types = split_multi_keys(&map, &["type", "types"]);
-        query.checkpoint_types = split_multi_keys(&map, &["checkpointType", "checkpointTypes"]);
-        query.file_formats = split_multi_keys(&map, &["fileFormat", "fileFormats"]);
-        query.categories = split_multi_keys(&map, &["category", "categories"]);
+        query.base_models = split_multi_keys(&map, &["baseModel", "baseModels"])
+            .into_iter()
+            .map(|value| ModelBaseModel::from_query_value(&value))
+            .collect();
+        query.types = split_multi_keys(&map, &["type", "types"])
+            .into_iter()
+            .map(|value| ModelType::from_query_value(&value))
+            .collect();
+        query.checkpoint_types = split_multi_keys(&map, &["checkpointType", "checkpointTypes"])
+            .into_iter()
+            .map(|value| ModelCheckpointType::from_query_value(&value))
+            .collect();
+        query.file_formats = split_multi_keys(&map, &["fileFormat", "fileFormats"])
+            .into_iter()
+            .map(|value| ModelFileFormat::from_query_value(&value))
+            .collect();
+        query.categories = split_multi_keys(&map, &["category", "categories"])
+            .into_iter()
+            .map(|value| ModelCategory::from_query_value(&value))
+            .collect();
         query.users = split_multi_keys(&map, &["users"]);
         query.tags = split_multi_keys(&map, &["tags"]);
 
@@ -349,8 +340,9 @@ impl SearchModelHit {
         base_url: &str,
         token: &str,
     ) -> Option<String> {
-        self.primary_model_version_id()
-            .map(|version_id| build_model_download_url_with_token_and_base(base_url, version_id, token))
+        self.primary_model_version_id().map(|version_id| {
+            build_model_download_url_with_token_and_base(base_url, version_id, token)
+        })
     }
 
     fn extract_version_id(value: &Value) -> Option<u64> {
