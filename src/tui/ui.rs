@@ -2250,12 +2250,12 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(4),
             Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(6),
-            Constraint::Length(8),
-            Constraint::Length(10),
-            Constraint::Min(8),
+            Constraint::Length(5),
+            Constraint::Length(7),
+            Constraint::Length(14),
+            Constraint::Min(6),
             Constraint::Length(2),
         ])
         .split(inner);
@@ -2403,6 +2403,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>(),
+            false,
             sections[3].width.saturating_sub(4) as usize,
             sections[3].height.saturating_sub(3) as usize,
         ))
@@ -2426,6 +2427,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>(),
+            false,
             sections[4].width.saturating_sub(4) as usize,
             sections[4].height.saturating_sub(3) as usize,
         ))
@@ -2449,6 +2451,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 .iter()
                 .cloned()
                 .collect::<Vec<_>>(),
+            false,
             sections[5].width.saturating_sub(4) as usize,
             sections[5].height.saturating_sub(3) as usize,
         ))
@@ -2822,6 +2825,7 @@ fn build_image_filter_box_lines(
     configured: bool,
     items: &[(String, bool, bool)],
     selected: &[String],
+    show_selected: bool,
     width: usize,
     height: usize,
 ) -> Vec<Line<'static>> {
@@ -2857,38 +2861,40 @@ fn build_image_filter_box_lines(
         },
     )));
     lines.extend(build_wrapped_option_lines(items, width, 2, focused));
-    lines.push(Line::from(Span::styled(
-        "Selected",
-        if focused {
-            Style::default().fg(Color::DarkGray)
-        } else if configured {
-            inactive_box_style(true)
-        } else {
-            inactive_box_style(false)
-        },
-    )));
-    if selected.is_empty() {
+    if show_selected {
         lines.push(Line::from(Span::styled(
-            "All",
+            "Selected",
             if focused {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::DarkGray)
             } else if configured {
                 inactive_box_style(true)
             } else {
                 inactive_box_style(false)
             },
         )));
-    } else {
-        lines.extend(style_lines(
-            wrap_joined_tags(selected, width, height.saturating_sub(5)),
-            if focused {
-                Style::default().fg(Color::White)
-            } else if configured {
-                inactive_box_style(true)
-            } else {
-                inactive_box_style(false)
-            },
-        ));
+        if selected.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "All",
+                if focused {
+                    Style::default().fg(Color::White)
+                } else if configured {
+                    inactive_box_style(true)
+                } else {
+                    inactive_box_style(false)
+                },
+            )));
+        } else {
+            lines.extend(style_lines(
+                wrap_joined_tags(selected, width, height.saturating_sub(5)),
+                if focused {
+                    Style::default().fg(Color::White)
+                } else if configured {
+                    inactive_box_style(true)
+                } else {
+                    inactive_box_style(false)
+                },
+            ));
+        }
     }
     lines
 }
