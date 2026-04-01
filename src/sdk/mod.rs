@@ -1,4 +1,5 @@
 mod api;
+mod api_types;
 mod client;
 mod constants;
 mod download;

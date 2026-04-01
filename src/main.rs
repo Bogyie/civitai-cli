@@ -1,6 +1,6 @@
 mod cli;
+mod cli_download;
 mod config;
-mod download;
 mod tui;
 
 use anyhow::{Context, Result};
@@ -9,8 +9,8 @@ use clap::Parser;
 use std::path::PathBuf;
 
 use cli::{Cli, Commands};
+use cli_download::run_download_command;
 use config::AppConfig;
-use download::DownloadManager;
 
 fn build_api_client(api_key: Option<&str>) -> Result<ApiClient> {
     let builder = if let Some(api_key) = api_key.filter(|value| !value.trim().is_empty()) {
@@ -44,32 +44,7 @@ async fn main() -> Result<()> {
         }
         Some(Commands::Download { id, hash }) => {
             let client = build_api_client(app_config.api_key.as_deref())?;
-            let manager = DownloadManager::new(app_config)?;
-
-            if let Some(model_id) = id {
-                println!("Fetching model {} metadata...", model_id);
-                let model = client.get_model(*model_id).await?;
-
-                // For simplicity, download the latest or primary version
-                if let Some(version) = model.model_versions.first() {
-                    let path = manager.download_version(&model, version, None).await?;
-                    println!("Successfully downloaded to {:?}", path);
-                } else {
-                    println!("No downloadable versions found for model {}", model_id);
-                }
-            } else if let Some(model_hash) = hash {
-                println!("Fetching version by hash {}...", model_hash);
-                let version = client.get_model_version_by_hash(model_hash).await?;
-                if let Some(mid) = version.model_id {
-                    let model = client.get_model(mid).await?;
-                    let path = manager.download_version(&model, &version, None).await?;
-                    println!("Successfully downloaded to {:?}", path);
-                } else {
-                    println!("Could not resolve the parent model ID for this version.");
-                }
-            } else {
-                println!("Please provide an --id or --hash to download.");
-            }
+            run_download_command(&app_config, &client, *id, hash.as_deref()).await?;
         }
         Some(Commands::Ui) | None => {
             // Run Interactive TUI
