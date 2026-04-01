@@ -30,10 +30,7 @@ pub(super) fn bookmark_matches_query(model: &Model, query: &str) -> bool {
     query.is_empty() || model_name(model).to_ascii_lowercase().contains(query)
 }
 
-pub(super) fn bookmark_matches_type(
-    model: &Model,
-    selected_types: &BTreeSet<ModelType>,
-) -> bool {
+pub(super) fn bookmark_matches_type(model: &Model, selected_types: &BTreeSet<ModelType>) -> bool {
     if selected_types.is_empty() {
         return true;
     }
@@ -99,7 +96,11 @@ pub(super) fn sort_bookmarks(items: &mut [Model], sort_by: &ModelSearchSortBy) {
             model_metrics(b)
                 .rating
                 .total_cmp(&model_metrics(a).rating)
-                .then_with(|| model_metrics(b).rating_count.cmp(&model_metrics(a).rating_count))
+                .then_with(|| {
+                    model_metrics(b)
+                        .rating_count
+                        .cmp(&model_metrics(a).rating_count)
+                })
         }),
         ModelSearchSortBy::MostDownloaded => items.sort_by(|a, b| {
             model_metrics(b)
@@ -110,7 +111,11 @@ pub(super) fn sort_bookmarks(items: &mut [Model], sort_by: &ModelSearchSortBy) {
             model_metrics(b)
                 .favorite_count
                 .cmp(&model_metrics(a).favorite_count)
-                .then_with(|| model_metrics(b).thumbs_up_count.cmp(&model_metrics(a).thumbs_up_count))
+                .then_with(|| {
+                    model_metrics(b)
+                        .thumbs_up_count
+                        .cmp(&model_metrics(a).thumbs_up_count)
+                })
         }),
         ModelSearchSortBy::MostDiscussed => items.sort_by(|a, b| {
             model_metrics(b)
@@ -197,6 +202,9 @@ mod tests {
 
         sort_bookmarks(&mut items, &ModelSearchSortBy::MostDownloaded);
 
-        assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), vec![2, 3, 1]);
+        assert_eq!(
+            items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![2, 3, 1]
+        );
     }
 }

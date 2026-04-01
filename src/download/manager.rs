@@ -93,7 +93,7 @@ impl DownloadManager {
         }
 
         match req.send().await {
-            Ok(res) if res.status().is_success() => return Ok(res),
+            Ok(res) if res.status().is_success() => Ok(res),
             Ok(res) => {
                 let status = res.status();
                 if self.config.api_key.is_some() && matches!(status.as_u16(), 401 | 403) {
@@ -109,7 +109,7 @@ impl DownloadManager {
                     }
                     return Ok(fallback_req.send().await?.error_for_status()?);
                 }
-                return Err(res.error_for_status().unwrap_err().into());
+                Err(res.error_for_status().unwrap_err().into())
             }
             Err(err) => {
                 if self.config.api_key.is_some() {
@@ -170,20 +170,20 @@ impl DownloadManager {
             file_obj.write_all(&chunk).await?;
             downloaded += chunk.len() as f64;
 
-            if let Some(ref chan) = tx {
-                if total_size > 0.0 {
-                    let percent = (downloaded / total_size) * 100.0;
-                    // Only send update if progressed more than 1% to prevent channel flooding
-                    if percent - last_percent >= 1.0 {
-                        last_percent = percent;
-                        let _ = chan.try_send(crate::tui::app::AppMessage::DownloadProgress(
-                            model.id,
-                            smart_filename.clone(),
-                            percent,
-                            downloaded.round() as u64,
-                            total_size.round() as u64,
-                        ));
-                    }
+            if let Some(ref chan) = tx
+                && total_size > 0.0
+            {
+                let percent = (downloaded / total_size) * 100.0;
+                // Only send update if progressed more than 1% to prevent channel flooding
+                if percent - last_percent >= 1.0 {
+                    last_percent = percent;
+                    let _ = chan.try_send(crate::tui::app::AppMessage::DownloadProgress(
+                        model.id,
+                        smart_filename.clone(),
+                        percent,
+                        downloaded.round() as u64,
+                        total_size.round() as u64,
+                    ));
                 }
             }
         }

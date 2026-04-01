@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::tui::app::{
     App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection,
-    MainTab, SearchFormMode, SearchFormSection, WorkerCommand,
+    MainTab, NewDownloadHistoryEntry, SearchFormMode, SearchFormSection, WorkerCommand,
 };
 use crate::tui::image::comfy_workflow_json;
 use crate::tui::runtime::{
@@ -48,19 +48,19 @@ pub async fn run_event_loop(
         if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
             return;
         }
-        if let Some(image) = app.selected_image_in_active_view().cloned() {
-            if let Some(tx) = &app.tx {
-                let request = current_image_render_request();
-                let request_key = render_request_key(request, app.config.media_quality);
-                if app.has_cached_image_request(image.id, &request_key) {
-                    if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
-                        let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
-                    }
-                } else {
-                    app.image_cache.remove(&image.id);
-                    app.image_request_keys.remove(&image.id);
-                    let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
+        if let Some(image) = app.selected_image_in_active_view().cloned()
+            && let Some(tx) = &app.tx
+        {
+            let request = current_image_render_request();
+            let request_key = render_request_key(request, app.config.media_quality);
+            if app.has_cached_image_request(image.id, &request_key) {
+                if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
+                    let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
                 }
+            } else {
+                app.image_cache.remove(&image.id);
+                app.image_request_keys.remove(&image.id);
+                let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
             }
         }
     };
@@ -72,10 +72,10 @@ pub async fn run_event_loop(
         if let Some(image) = app.selected_image_in_active_view().cloned() {
             let request = current_image_render_request();
             let request_key = render_request_key(request, app.config.media_quality);
-            if !app.has_cached_image_request(image.id, &request_key) {
-                if let Some(tx) = &app.tx {
-                    let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
-                }
+            if !app.has_cached_image_request(image.id, &request_key)
+                && let Some(tx) = &app.tx
+            {
+                let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
             }
         }
     };
@@ -219,22 +219,21 @@ pub async fn run_event_loop(
             return;
         }
 
-        if let Some(tx) = &app.tx {
-            match tx.try_send(WorkerCommand::FetchImages(
-                app.image_search_form.build_options(),
-                next_page,
-                current_image_render_request(),
-            )) {
-                Ok(_) => {
-                    app.image_feed_loading = true;
-                    app.status = if app.image_feed_loaded {
-                        "Loading more images...".to_string()
-                    } else {
-                        "Fetching image feed...".to_string()
-                    };
-                }
-                Err(_) => {}
-            }
+        if let Some(tx) = &app.tx
+            && tx
+                .try_send(WorkerCommand::FetchImages(
+                    app.image_search_form.build_options(),
+                    next_page,
+                    current_image_render_request(),
+                ))
+                .is_ok()
+        {
+            app.image_feed_loading = true;
+            app.status = if app.image_feed_loaded {
+                "Loading more images...".to_string()
+            } else {
+                "Fetching image feed...".to_string()
+            };
         }
     };
 
@@ -256,8 +255,8 @@ pub async fn run_event_loop(
                  event_res = tokio::task::spawn_blocking(move || {
                     event::poll(std::time::Duration::from_millis(poll_timeout_ms))
                  }) => {
-                 if let Ok(Ok(true)) = event_res {
-                     if let Ok(evt) = event::read() {
+                 if let Ok(Ok(true)) = event_res
+                     && let Ok(evt) = event::read() {
                         if let Event::Resize(_, _) = evt {
                             if app.show_image_model_detail_modal {
                                 send_image_model_detail_cover_priority(app);
@@ -483,18 +482,16 @@ pub async fn run_event_loop(
                                     if app.search_form.mode == SearchFormMode::Builder {
                                         match app.search_form.focused_section {
                                             SearchFormSection::Type => {
-                                                if let Some(item) = app.search_form.type_options.get(app.search_form.type_cursor).cloned() {
-                                                    if !app.search_form.selected_types.insert(item.clone()) {
+                                                if let Some(item) = app.search_form.type_options.get(app.search_form.type_cursor).cloned()
+                                                    && !app.search_form.selected_types.insert(item.clone()) {
                                                         app.search_form.selected_types.remove(&item);
                                                     }
-                                                }
                                             }
                                             SearchFormSection::BaseModel => {
-                                                if let Some(item) = app.search_form.base_options.get(app.search_form.base_cursor).cloned() {
-                                                    if !app.search_form.selected_base_models.insert(item.clone()) {
+                                                if let Some(item) = app.search_form.base_options.get(app.search_form.base_cursor).cloned()
+                                                    && !app.search_form.selected_base_models.insert(item.clone()) {
                                                         app.search_form.selected_base_models.remove(&item);
                                                     }
-                                                }
                                             }
                                             _ => {}
                                         }
@@ -634,11 +631,9 @@ pub async fn run_event_loop(
                                                     .type_options
                                                     .get(app.bookmark_search_form_draft.type_cursor)
                                                     .cloned()
-                                                {
-                                                    if !app.bookmark_search_form_draft.selected_types.insert(item.clone()) {
+                                                    && !app.bookmark_search_form_draft.selected_types.insert(item.clone()) {
                                                         app.bookmark_search_form_draft.selected_types.remove(&item);
                                                     }
-                                                }
                                             }
                                             SearchFormSection::BaseModel => {
                                                 if let Some(item) = app
@@ -646,8 +641,7 @@ pub async fn run_event_loop(
                                                     .base_options
                                                     .get(app.bookmark_search_form_draft.base_cursor)
                                                     .cloned()
-                                                {
-                                                    if !app
+                                                    && !app
                                                         .bookmark_search_form_draft
                                                         .selected_base_models
                                                         .insert(item.clone())
@@ -656,7 +650,6 @@ pub async fn run_event_loop(
                                                             .selected_base_models
                                                             .remove(&item);
                                                     }
-                                                }
                                             }
                                             _ => {}
                                         }
@@ -1289,10 +1282,9 @@ pub async fn run_event_loop(
                                     _ => {}
                                 }
                             }
-                        } else if app.active_tab == MainTab::Images
-                            || app.active_tab == MainTab::ImageBookmarks
-                        {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        } else if (app.active_tab == MainTab::Images
+                            || app.active_tab == MainTab::ImageBookmarks)
+                            && key.modifiers.contains(KeyModifiers::SHIFT) {
                                 match key.code {
                                     KeyCode::Up => {
                                         app.select_previous_image_model();
@@ -1305,7 +1297,6 @@ pub async fn run_event_loop(
                                     _ => {}
                                 }
                             }
-                        }
 
                         match key.code {
                             KeyCode::Char('1') => {
@@ -1352,8 +1343,8 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Enter => {
                                 if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
-                                    if let Some(selected_model) = app.selected_image_used_model() {
-                                        if selected_model.navigable {
+                                    if let Some(selected_model) = app.selected_image_used_model()
+                                        && selected_model.navigable {
                                             if let Some(model_id) = selected_model.model_id {
                                                 app.begin_image_model_detail_modal_loading();
                                                 if let Some(tx) = &app.tx {
@@ -1376,7 +1367,6 @@ pub async fn run_event_loop(
                                             }
                                             continue;
                                         }
-                                    }
                                 } else if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     if let Some((_, version_id)) = app.selected_model_version() {
                                         app.image_search_form.set_linked_model_version(Some(version_id));
@@ -1465,9 +1455,7 @@ pub async fn run_event_loop(
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
-                                    } else if app.settings_form.focused_field == 11 {
-                                        String::new()
-                                    } else if app.settings_form.focused_field == 9 {
+                                    } else if matches!(app.settings_form.focused_field, 9 | 11) {
                                         String::new()
                                     } else {
                                         app.config.model_search_cache_ttl_hours.to_string()
@@ -1523,11 +1511,10 @@ pub async fn run_event_loop(
                                     || app.active_tab == MainTab::ImageBookmarks
                                 {
                                     app.select_next();
-                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5) {
-                                        if let Some(next_page) = app.next_image_feed_page() {
+                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5)
+                                        && let Some(next_page) = app.next_image_feed_page() {
                                             request_image_feed_if_needed(app, Some(next_page));
                                         }
-                                    }
                                     ensure_selected_image_loaded(app);
                                 } else if app.active_tab == MainTab::Models
                                     || app.active_tab == MainTab::Bookmarks
@@ -1544,11 +1531,10 @@ pub async fn run_event_loop(
                                     }
                                 } else if app.active_tab == MainTab::Bookmarks {
                                     app.request_bookmark_remove_selected();
-                                } else if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
-                                    if let Some(image) = app.selected_image_in_active_view().cloned() {
+                                } else if (app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks)
+                                    && let Some(image) = app.selected_image_in_active_view().cloned() {
                                         app.toggle_bookmark_for_selected_image(&image);
                                     }
-                                }
                             }
                             KeyCode::Char('j') => {
                                 if app.active_tab == MainTab::Settings {
@@ -1570,8 +1556,8 @@ pub async fn run_event_loop(
                                                 let trigger_idx = app.models.len().saturating_sub(prefetch_threshold);
                                                 selected >= trigger_idx
                                             });
-                                        if load_more {
-                                            if let Some((opts, next_page)) = app.next_model_search_options_if_needed() {
+                                        if load_more
+                                            && let Some((opts, next_page)) = app.next_model_search_options_if_needed() {
                                                 debug_fetch_log(
                                                     &app.config,
                                                     &format!(
@@ -1593,13 +1579,11 @@ pub async fn run_event_loop(
                                                     app.status = "Loading more results...".to_string();
                                                 }
                                             }
-                                        }
                                     }
-                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5) {
-                                        if let Some(next_page) = app.next_image_feed_page() {
+                                    if app.active_tab == MainTab::Images && app.can_request_more_images(5)
+                                        && let Some(next_page) = app.next_image_feed_page() {
                                             request_image_feed_if_needed(app, Some(next_page));
                                         }
-                                    }
                                     ensure_selected_image_loaded(app);
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
@@ -1687,11 +1671,10 @@ pub async fn run_event_loop(
                                 if app.active_tab == MainTab::Downloads {
                                     if let Some(removed) = app.remove_selected_history() {
                                         let was_active = app.active_downloads.contains_key(&removed.model_id);
-                                        if was_active {
-                                            if let Some(tx) = &app.tx {
+                                        if was_active
+                                            && let Some(tx) = &app.tx {
                                                 let _ = tx.try_send(WorkerCommand::CancelDownload(removed.model_id));
                                             }
-                                        }
 
                                         app.status = if was_active {
                                             format!(
@@ -1760,8 +1743,8 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('p') => {
                                 if app.active_tab == MainTab::Downloads {
-                                    if let Some(download_id) = app.selected_download_id() {
-                                        if let Some(tracker) = app.active_downloads.get(&download_id) {
+                                    if let Some(download_id) = app.selected_download_id()
+                                        && let Some(tracker) = app.active_downloads.get(&download_id) {
                                             if tracker.state == DownloadState::Running {
                                                 if let Some(tx) = &app.tx {
                                                     let _ = tx.try_send(WorkerCommand::PauseDownload(download_id));
@@ -1772,7 +1755,6 @@ pub async fn run_event_loop(
                                                 }
                                             }
                                         }
-                                    }
                                 } else {
                                     app.request_download();
                                 }
@@ -1798,13 +1780,11 @@ pub async fn run_event_loop(
                                     } else {
                                         app.status = "No Comfy workflow metadata for current image".into();
                                     }
-                                } else if app.active_tab == MainTab::Downloads {
-                                    if let Some(download_id) = app.selected_download_id() {
-                                        if let Some(tx) = &app.tx {
+                                } else if app.active_tab == MainTab::Downloads
+                                    && let Some(download_id) = app.selected_download_id()
+                                        && let Some(tx) = &app.tx {
                                             let _ = tx.try_send(WorkerCommand::CancelDownload(download_id));
                                         }
-                                    }
-                                }
                             }
                             KeyCode::Char('m') => {
                                 if app.active_tab == MainTab::Images || app.active_tab == MainTab::ImageBookmarks {
@@ -2032,7 +2012,6 @@ pub async fn run_event_loop(
 
                         }
                      }
-                 }
              }
              // Receiving decoded image bytes and status ticks from worker
              Some(msg) = rx.recv() => {
@@ -2063,11 +2042,10 @@ pub async fn run_event_loop(
                             if let Some(next_page) = app.next_image_feed_page() {
                                 request_image_feed_if_needed(app, Some(next_page));
                             }
-                        } else if app.can_request_more_images(5) {
-                            if let Some(next_page) = app.next_image_feed_page() {
+                        } else if app.can_request_more_images(5)
+                            && let Some(next_page) = app.next_image_feed_page() {
                                 request_image_feed_if_needed(app, Some(next_page));
                             }
-                        }
                     }
                      AppMessage::ImageDecoded(id, protocol, bytes, request_key) => {
                          app.image_cache.insert(id, protocol);
@@ -2141,8 +2119,8 @@ pub async fn run_event_loop(
                              app.status = format!("Found {} models", app.models.len());
                          }
                      }
-                     AppMessage::ModelDetailLoaded(model, version_id) => {
-                         app.open_image_model_detail_modal(model, version_id);
+                    AppMessage::ModelDetailLoaded(model, version_id) => {
+                        app.open_image_model_detail_modal(*model, version_id);
                          send_image_model_detail_cover_priority(app);
                          send_image_model_detail_cover_prefetch(app);
                          app.status = if let Some(model) = app.image_model_detail_model.as_ref() {
@@ -2214,17 +2192,17 @@ pub async fn run_event_loop(
                      AppMessage::DownloadCompleted(model_id) => {
                          app.last_error = None;
                          if let Some(tracker) = app.active_downloads.remove(&model_id) {
-                             app.push_download_history(
-                                 model_id,
-                                     tracker.version_id,
-                                     tracker.filename,
-                                     tracker.model_name,
-                                     tracker.file_path,
-                                     tracker.downloaded_bytes,
-                                     tracker.total_bytes,
-                                     DownloadHistoryStatus::Completed,
-                                     tracker.progress,
-                                 );
+                            app.push_download_history(NewDownloadHistoryEntry {
+                                model_id,
+                                version_id: tracker.version_id,
+                                filename: tracker.filename,
+                                model_name: tracker.model_name,
+                                file_path: tracker.file_path,
+                                downloaded_bytes: tracker.downloaded_bytes,
+                                total_bytes: tracker.total_bytes,
+                                status: DownloadHistoryStatus::Completed,
+                                progress: tracker.progress,
+                            });
                          }
                          app.active_download_order.retain(|id| *id != model_id);
                          app.clamp_selected_download_index();
@@ -2233,17 +2211,17 @@ pub async fn run_event_loop(
                      }
                      AppMessage::DownloadFailed(model_id, reason) => {
                             if let Some(tracker) = app.active_downloads.remove(&model_id) {
-                            app.push_download_history(
-                                 model_id,
-                                 tracker.version_id,
-                                 tracker.filename,
-                                 tracker.model_name,
-                                 tracker.file_path,
-                                 tracker.downloaded_bytes,
-                                 tracker.total_bytes,
-                                 DownloadHistoryStatus::Failed(reason.clone()),
-                                 tracker.progress,
-                             );
+                            app.push_download_history(NewDownloadHistoryEntry {
+                                model_id,
+                                version_id: tracker.version_id,
+                                filename: tracker.filename,
+                                model_name: tracker.model_name,
+                                file_path: tracker.file_path,
+                                downloaded_bytes: tracker.downloaded_bytes,
+                                total_bytes: tracker.total_bytes,
+                                status: DownloadHistoryStatus::Failed(reason.clone()),
+                                progress: tracker.progress,
+                            });
                          }
                          app.active_download_order.retain(|id| *id != model_id);
                          app.clamp_selected_download_index();
@@ -2254,17 +2232,17 @@ pub async fn run_event_loop(
                      }
                     AppMessage::DownloadCancelled(model_id) => {
                          if let Some(tracker) = app.active_downloads.remove(&model_id) {
-                             app.push_download_history(
+                             app.push_download_history(NewDownloadHistoryEntry {
                                  model_id,
-                                 tracker.version_id,
-                                 tracker.filename,
-                                 tracker.model_name,
-                                 tracker.file_path,
-                                 tracker.downloaded_bytes,
-                                 tracker.total_bytes,
-                                 DownloadHistoryStatus::Cancelled,
-                                 tracker.progress,
-                             );
+                                 version_id: tracker.version_id,
+                                 filename: tracker.filename,
+                                 model_name: tracker.model_name,
+                                 file_path: tracker.file_path,
+                                 downloaded_bytes: tracker.downloaded_bytes,
+                                 total_bytes: tracker.total_bytes,
+                                 status: DownloadHistoryStatus::Cancelled,
+                                 progress: tracker.progress,
+                             });
                          }
                          app.active_download_order.retain(|id| *id != model_id);
                          app.clamp_selected_download_index();

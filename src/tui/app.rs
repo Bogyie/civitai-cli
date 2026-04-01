@@ -19,7 +19,8 @@ use self::storage::{
 };
 pub use self::types::{
     AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
-    DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab, WorkerCommand,
+    DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab, NewDownloadHistoryEntry,
+    SelectedModelCover, SelectedVersionCover, VersionCoverJob, WorkerCommand,
 };
 use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
 use crate::tui::model::{
@@ -281,7 +282,7 @@ impl App {
     }
 
     pub fn next_image_feed_page(&self) -> Option<u32> {
-        self.image_feed_next_page.clone()
+        self.image_feed_next_page
     }
 
     pub fn visible_image_bookmarks(&self) -> &[ImageItem] {
@@ -534,7 +535,7 @@ impl App {
         self.model_search_loading_more = true;
         Some((
             self.search_form.build_options(),
-            self.model_search_next_page.clone(),
+            self.model_search_next_page,
         ))
     }
 
@@ -722,49 +723,49 @@ impl App {
     }
 
     pub fn select_next_version(&mut self) {
-        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view().cloned() {
-                self.select_next_version_for_model(&model);
-            }
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+            && let Some(model) = self.selected_model_in_active_view().cloned()
+        {
+            self.select_next_version_for_model(&model);
         }
     }
 
     pub fn select_previous_version(&mut self) {
-        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view().cloned() {
-                self.select_previous_version_for_model(&model);
-            }
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+            && let Some(model) = self.selected_model_in_active_view().cloned()
+        {
+            self.select_previous_version_for_model(&model);
         }
     }
 
     pub fn select_next_file(&mut self) {
-        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view().cloned() {
-                self.select_next_file_for_model(&model);
-            }
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+            && let Some(model) = self.selected_model_in_active_view().cloned()
+        {
+            self.select_next_file_for_model(&model);
         }
     }
 
     pub fn select_previous_file(&mut self) {
-        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view().cloned() {
-                self.select_previous_file_for_model(&model);
-            }
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+            && let Some(model) = self.selected_model_in_active_view().cloned()
+        {
+            self.select_previous_file_for_model(&model);
         }
     }
 
     pub fn request_download(&mut self) {
         if self.active_tab == MainTab::Images {
-            if let Some(img) = self.images.get(self.selected_index) {
-                if let Some(tx) = &self.tx {
-                    let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
-                    self.status = format!("Downloading image {}...", img.id);
-                }
+            if let Some(img) = self.images.get(self.selected_index)
+                && let Some(tx) = &self.tx
+            {
+                let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
+                self.status = format!("Downloading image {}...", img.id);
             }
-        } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
-                self.request_download_for_model(&model);
-            }
+        } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+            && let Some(model) = self.selected_model_in_active_view().cloned()
+        {
+            self.request_download_for_model(&model);
         }
     }
 
@@ -954,28 +955,17 @@ impl App {
             .copied()
     }
 
-    pub fn push_download_history(
-        &mut self,
-        model_id: u64,
-        version_id: u64,
-        filename: String,
-        model_name: String,
-        file_path: Option<PathBuf>,
-        downloaded_bytes: u64,
-        total_bytes: u64,
-        status: DownloadHistoryStatus,
-        progress: f64,
-    ) {
+    pub fn push_download_history(&mut self, entry: NewDownloadHistoryEntry) {
         self.download_history.push(DownloadHistoryEntry {
-            model_id,
-            version_id,
-            filename,
-            model_name,
-            file_path,
-            downloaded_bytes,
-            total_bytes,
-            status,
-            progress,
+            model_id: entry.model_id,
+            version_id: entry.version_id,
+            filename: entry.filename,
+            model_name: entry.model_name,
+            file_path: entry.file_path,
+            downloaded_bytes: entry.downloaded_bytes,
+            total_bytes: entry.total_bytes,
+            status: entry.status,
+            progress: entry.progress,
             created_at: std::time::SystemTime::now(),
         });
         if self.download_history.len() > 200 {
@@ -1036,9 +1026,7 @@ impl App {
         }
     }
 
-    pub fn selected_model_version_with_cover_url(
-        &self,
-    ) -> Option<(u64, u64, Option<String>, Option<(u32, u32)>)> {
+    pub fn selected_model_version_with_cover_url(&self) -> Option<SelectedModelCover> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
         let version = self.selected_parsed_version(model, version_index)?;
@@ -1054,10 +1042,7 @@ impl App {
         ))
     }
 
-    pub fn selected_model_neighbor_cover_urls(
-        &self,
-        radius: usize,
-    ) -> Vec<(u64, Option<String>, Option<(u32, u32)>)> {
+    pub fn selected_model_neighbor_cover_urls(&self, radius: usize) -> Vec<VersionCoverJob> {
         let Some(model) = self.selected_model_in_active_view() else {
             return Vec::new();
         };
@@ -1090,9 +1075,7 @@ impl App {
             .collect()
     }
 
-    pub fn image_model_detail_selected_cover(
-        &self,
-    ) -> Option<(u64, Option<String>, Option<(u32, u32)>)> {
+    pub fn image_model_detail_selected_cover(&self) -> Option<SelectedVersionCover> {
         let model = self.image_model_detail_model.as_ref()?;
         let versions = self.parsed_model_versions(model);
         if versions.is_empty() {
@@ -1118,10 +1101,7 @@ impl App {
         ))
     }
 
-    pub fn image_model_detail_neighbor_cover_urls(
-        &self,
-        radius: usize,
-    ) -> Vec<(u64, Option<String>, Option<(u32, u32)>)> {
+    pub fn image_model_detail_neighbor_cover_urls(&self, radius: usize) -> Vec<VersionCoverJob> {
         let Some(model) = self.image_model_detail_model.as_ref() else {
             return Vec::new();
         };

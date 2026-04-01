@@ -4,8 +4,8 @@ mod download;
 mod tui;
 
 use anyhow::{Context, Result};
-use clap::Parser;
 use civitai_cli::sdk::{ApiClient, SdkClientBuilder};
+use clap::Parser;
 use std::path::PathBuf;
 
 use cli::{Cli, Commands};
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
 
                 // For simplicity, download the latest or primary version
                 if let Some(version) = model.model_versions.first() {
-                    let path = manager.download_version(&model, &version, None).await?;
+                    let path = manager.download_version(&model, version, None).await?;
                     println!("Successfully downloaded to {:?}", path);
                 } else {
                     println!("No downloadable versions found for model {}", model_id);

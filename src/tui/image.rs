@@ -50,10 +50,12 @@ pub fn image_prompt(hit: &SearchImageHit) -> Option<String> {
 
     generation_data(hit)
         .and_then(|data| data.meta.and_then(|meta| meta.prompt))
-        .or_else(|| hit.prompt
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| hit.metadata.as_ref().and_then(extract_prompt_from_metadata)))
+        .or_else(|| {
+            hit.prompt
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| hit.metadata.as_ref().and_then(extract_prompt_from_metadata))
+        })
 }
 
 pub fn image_negative_prompt(hit: &SearchImageHit) -> Option<String> {
@@ -63,9 +65,11 @@ pub fn image_negative_prompt(hit: &SearchImageHit) -> Option<String> {
 
     generation_data(hit)
         .and_then(|data| data.meta.and_then(|meta| meta.negative_prompt))
-        .or_else(|| hit.metadata
-        .as_ref()
-        .and_then(extract_negative_prompt_from_metadata))
+        .or_else(|| {
+            hit.metadata
+                .as_ref()
+                .and_then(extract_negative_prompt_from_metadata)
+        })
 }
 
 pub fn image_stats(hit: &SearchImageHit) -> ParsedImageStats {
@@ -99,7 +103,11 @@ pub fn image_used_model_entries(hit: &SearchImageHit) -> Vec<ParsedUsedModel> {
     let mut values = Vec::new();
     let mut seen_labels = HashSet::new();
 
-    if let Some(base_model) = hit.base_model.as_ref().filter(|value| !value.trim().is_empty()) {
+    if let Some(base_model) = hit
+        .base_model
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         push_used_model(
             &mut values,
             &mut seen_labels,
@@ -206,7 +214,10 @@ fn extract_negative_prompt_from_metadata(metadata: &Value) -> Option<String> {
             return Some(value);
         }
     }
-    if let Some(value) = metadata.get("meta").and_then(extract_negative_prompt_from_metadata) {
+    if let Some(value) = metadata
+        .get("meta")
+        .and_then(extract_negative_prompt_from_metadata)
+    {
         return Some(value);
     }
     if let Some(Value::String(raw)) = metadata.get("meta")
@@ -295,8 +306,7 @@ fn extract_comfy_workflow(metadata: &Value) -> Option<Value> {
         }
     }
 
-    if let Some(value) = metadata.get("prompt")
-    {
+    if let Some(value) = metadata.get("prompt") {
         if is_comfy_like(value) {
             return Some(value.clone());
         }
@@ -420,8 +430,9 @@ fn parse_generation_resources_value(
         Value::String(raw) => serde_json::from_str::<Value>(&raw)
             .ok()
             .and_then(parse_generation_resources_value),
-        other => serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(other)
-            .ok(),
+        other => {
+            serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(other).ok()
+        }
     }
 }
 
@@ -474,7 +485,6 @@ fn is_supported_generation_resource_type(value: &str) -> bool {
             | "model"
     )
 }
-
 
 fn parse_nested_json(value: &Value) -> Option<Value> {
     match value {

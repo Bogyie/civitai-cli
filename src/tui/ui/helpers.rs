@@ -123,7 +123,9 @@ pub(super) fn build_wrapped_option_lines(
         }
 
         let style = if box_focused && *focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else if box_focused && *checked {
             Style::default().fg(Color::Green)
         } else if *checked {
@@ -275,25 +277,35 @@ pub(super) fn build_model_modal_constraints(
     constraints
 }
 
-pub(super) fn build_text_filter_box_lines(
-    label: &str,
-    focused: bool,
-    configured: bool,
-    value: &str,
-    placeholder: &str,
-    suggestions: Option<&[String]>,
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
+pub(super) struct TextFilterBoxProps<'a> {
+    pub label: &'a str,
+    pub focused: bool,
+    pub configured: bool,
+    pub value: &'a str,
+    pub placeholder: &'a str,
+    pub suggestions: Option<&'a [String]>,
+    pub width: usize,
+    pub height: usize,
+}
+
+pub(super) fn build_text_filter_box_lines(props: TextFilterBoxProps<'_>) -> Vec<Line<'static>> {
+    let TextFilterBoxProps {
+        label,
+        focused,
+        configured,
+        value,
+        placeholder,
+        suggestions,
+        width,
+        height,
+    } = props;
     let mut lines = Vec::new();
     let display_value = if value.trim().is_empty() {
         placeholder.to_string()
     } else {
         value.to_string()
     };
-    let current_style = if focused {
-        Style::default().fg(Color::Yellow)
-    } else if configured {
+    let current_style = if focused || configured {
         Style::default().fg(Color::Yellow)
     } else {
         inactive_box_style(false)
@@ -371,25 +383,39 @@ pub(super) fn build_autocomplete_lines(
     )
 }
 
-pub(super) fn build_image_filter_box_lines(
-    label: &str,
-    focused: bool,
-    configured: bool,
-    items: &[(String, bool, bool)],
-    selected: &[String],
-    show_selected: bool,
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
+pub(super) struct ImageFilterBoxProps<'a> {
+    pub label: &'a str,
+    pub focused: bool,
+    pub configured: bool,
+    pub items: &'a [(String, bool, bool)],
+    pub selected: &'a [String],
+    pub show_selected: bool,
+    pub width: usize,
+    pub height: usize,
+}
+
+pub(super) fn build_image_filter_box_lines(props: ImageFilterBoxProps<'_>) -> Vec<Line<'static>> {
+    let ImageFilterBoxProps {
+        label,
+        focused,
+        configured,
+        items,
+        selected,
+        show_selected,
+        width,
+        height,
+    } = props;
     let current = items
         .iter()
         .find(|(_, current, _)| *current)
-        .map(|(text, _, checked)| format!(
-            "{} Current: {} {}",
-            if focused { ">" } else { " " },
-            text,
-            if *checked { "[x]" } else { "[ ]" }
-        ))
+        .map(|(text, _, checked)| {
+            format!(
+                "{} Current: {} {}",
+                if focused { ">" } else { " " },
+                text,
+                if *checked { "[x]" } else { "[ ]" }
+            )
+        })
         .unwrap_or_else(|| format!("{} Current: <none>", if focused { ">" } else { " " }));
 
     let mut lines = vec![Line::from(Span::styled(
@@ -470,7 +496,8 @@ pub(super) fn wrap_text_lines(text: &str, width: usize, height: usize) -> Vec<Li
 }
 
 pub(super) fn style_lines(lines: Vec<Line<'static>>, style: Style) -> Vec<Line<'static>> {
-    lines.into_iter()
+    lines
+        .into_iter()
         .map(|line| {
             let text = line
                 .spans
@@ -535,11 +562,7 @@ pub(super) fn compact_bytes(size_bytes: u64) -> String {
     }
 }
 
-pub(super) fn wrap_joined_tags(
-    tags: &[String],
-    width: usize,
-    height: usize,
-) -> Vec<Line<'static>> {
+pub(super) fn wrap_joined_tags(tags: &[String], width: usize, height: usize) -> Vec<Line<'static>> {
     if width == 0 || height == 0 {
         return Vec::new();
     }
@@ -649,14 +672,20 @@ pub(super) fn render_description_lines(raw: &str) -> Vec<Line<'static>> {
 
         if let Some(rest) = line.strip_prefix("• ") {
             let mut spans = vec![Span::styled("• ", Style::default().fg(Color::LightGreen))];
-            spans.extend(parse_styled_markdown(rest, Style::default().fg(Color::White)));
+            spans.extend(parse_styled_markdown(
+                rest,
+                Style::default().fg(Color::White),
+            ));
             lines.push(Line::from(spans));
             continue;
         }
 
         if let Some(rest) = line.strip_prefix("› ") {
             let mut spans = vec![Span::styled("› ", Style::default().fg(Color::DarkGray))];
-            spans.extend(parse_styled_markdown(rest, Style::default().fg(Color::Gray)));
+            spans.extend(parse_styled_markdown(
+                rest,
+                Style::default().fg(Color::Gray),
+            ));
             lines.push(Line::from(spans));
             continue;
         }
@@ -753,9 +782,7 @@ pub(super) fn parse_styled_markdown(raw: &str, base_style: Style) -> Vec<Span<'s
                 }
 
                 let raw_url = &rest[..end];
-                let trimmed = raw_url.trim_end_matches(|ch| {
-                    matches!(ch, '.' | ',' | ')' | ']' | '}' | '>')
-                });
+                let trimmed = raw_url.trim_end_matches(['.', ',', ')', ']', '}', '>']);
                 if !trimmed.is_empty() {
                     spans.push(Span::styled(
                         trimmed.to_string(),

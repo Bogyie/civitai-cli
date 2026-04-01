@@ -252,12 +252,7 @@ impl ImageMediaType {
 
 impl ImageAspectRatio {
     pub fn all() -> Vec<Self> {
-        vec![
-            Self::Landscape,
-            Self::Portrait,
-            Self::Square,
-            Self::Unknown,
-        ]
+        vec![Self::Landscape, Self::Portrait, Self::Square, Self::Unknown]
     }
 
     pub fn label(&self) -> Cow<'_, str> {

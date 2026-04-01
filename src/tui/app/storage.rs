@@ -148,10 +148,9 @@ pub(super) fn collect_paused_sessions_from_history(
             None
         } else {
             Some(entry.total_bytes)
-        } {
-            if entry.downloaded_bytes >= total_bytes {
-                continue;
-            }
+        } && entry.downloaded_bytes >= total_bytes
+        {
+            continue;
         }
 
         if let Some(file_path) = &entry.file_path {
@@ -263,7 +262,10 @@ mod tests {
 
         let bookmarks = load_bookmarks(Some(&path));
 
-        assert_eq!(bookmarks.iter().map(|item| item.id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(
+            bookmarks.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]

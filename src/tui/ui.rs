@@ -1,12 +1,12 @@
 mod helpers;
 
 use self::helpers::{
-    build_horizontal_item_window, build_image_filter_box_lines,
-    build_image_modal_constraints, build_model_modal_constraints, build_text_filter_box_lines,
-    build_wrapped_option_lines, centered_rect, compact_bytes, compact_cell_text,
-    compact_file_size, compact_number, help_text_style, inactive_box_style,
-    model_key_value_spans, render_description_lines, rotate_left_chars,
-    styled_search_block, wrap_joined_tags, wrap_text_lines,
+    ImageFilterBoxProps, TextFilterBoxProps, build_horizontal_item_window,
+    build_image_filter_box_lines, build_image_modal_constraints, build_model_modal_constraints,
+    build_text_filter_box_lines, build_wrapped_option_lines, centered_rect, compact_bytes,
+    compact_cell_text, compact_file_size, compact_number, help_text_style, inactive_box_style,
+    model_key_value_spans, render_description_lines, rotate_left_chars, styled_search_block,
+    wrap_joined_tags, wrap_text_lines,
 };
 use anyhow::{Context, Result};
 use crossterm::{
@@ -19,9 +19,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap,
-    },
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use std::io::{self, Stdout};
@@ -35,9 +33,7 @@ use crate::tui::image::{
     comfy_workflow_json, comfy_workflow_node_count, image_generation_info, image_negative_prompt,
     image_prompt, image_stats, image_tags, image_used_models, image_username,
 };
-use crate::tui::model::{
-    build_model_url, category_name, creator_name, model_name, tag_names,
-};
+use crate::tui::model::{build_model_url, category_name, creator_name, model_name, tag_names};
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = io::stdout();
@@ -112,7 +108,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 .split(chunks[1]);
 
             draw_model_search_summary(f, app, model_chunks[0]);
-            let show_model_details = app.show_model_details;
             let selected_model = app.selected_model_in_active_view().cloned();
             let bookmarked_ids: Vec<u64> = app.bookmarks.iter().map(|model| model.id).collect();
 
@@ -128,7 +123,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     split[0],
                     &app.models,
                     &app.model_list_state,
-                    show_model_details,
                     &bookmarked_ids,
                     enable_name_rolling,
                 );
@@ -140,7 +134,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     model_chunks[1],
                     &app.models,
                     &app.model_list_state,
-                    show_model_details,
                     &bookmarked_ids,
                     enable_name_rolling,
                 );
@@ -169,9 +162,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     app,
                     f,
                     split[0],
-                    &bookmark_items,
+                    bookmark_items,
                     &app.bookmark_list_state,
-                    app.show_model_details,
                     &[],
                     enable_name_rolling,
                 );
@@ -181,9 +173,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     app,
                     f,
                     bookmark_chunks[1],
-                    &bookmark_items,
+                    bookmark_items,
                     &app.bookmark_list_state,
-                    app.show_model_details,
                     &[],
                     enable_name_rolling,
                 );
@@ -295,8 +286,14 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
     let summary = Paragraph::new(Line::from(vec![
         Span::styled(" Focus ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            if has_active { "Active queue" } else { "History" },
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            if has_active {
+                "Active queue"
+            } else {
+                "History"
+            },
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
         Span::styled("Actions ", Style::default().fg(Color::DarkGray)),
@@ -305,7 +302,11 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Gray),
         ),
     ]))
-    .block(Block::default().borders(Borders::BOTTOM).title(" Control Panel "));
+    .block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .title(" Control Panel "),
+    );
     f.render_widget(summary, layout_sections[0]);
 
     if !has_active && !has_history {
@@ -333,8 +334,6 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
             .constraints(constraints)
             .split(layout_sections[1])
             .to_vec();
-    } else if has_active {
-        sections.push(layout_sections[1]);
     } else {
         sections.push(layout_sections[1]);
     }
@@ -384,8 +383,8 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let inner_width = inner_area.width.saturating_sub(2) as usize;
-    let model_width = (inner_width * 38 / 100).max(16).min(34);
-    let file_width = (inner_width * 30 / 100).max(12).min(26);
+    let model_width = (inner_width * 38 / 100).clamp(16, 34);
+    let file_width = (inner_width * 30 / 100).clamp(12, 26);
     let size_width = 13usize;
 
     let columns = format!(
@@ -610,7 +609,9 @@ fn format_time_ago(ts: SystemTime) -> String {
 }
 
 fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
-    let outer = Block::default().borders(Borders::ALL).title(" Settings Control Panel ");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" Settings Control Panel ");
     f.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
     let fm = &app.settings_form;
@@ -637,14 +638,21 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
                 .bookmark_file_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| crate::config::AppConfig::bookmark_path().map(|p| p.to_string_lossy().to_string()))
+                .or_else(|| {
+                    crate::config::AppConfig::bookmark_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "Default".to_string()),
             3 => app
                 .config
                 .model_search_cache_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| app.config.search_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .or_else(|| {
+                    app.config
+                        .search_cache_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "Default".to_string()),
             4 => format!("{}h", app.config.model_search_cache_ttl_hours),
             5 => app
@@ -652,7 +660,11 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
                 .image_cache_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| app.config.image_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .or_else(|| {
+                    app.config
+                        .image_cache_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "Default".to_string()),
             6 => format!("{}m", app.config.image_search_cache_ttl_minutes),
             7 => format!("{}m", app.config.image_detail_cache_ttl_minutes),
@@ -669,7 +681,11 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
                 .download_history_file_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
-                .or_else(|| app.config.download_history_path().map(|p| p.to_string_lossy().to_string()))
+                .or_else(|| {
+                    app.config
+                        .download_history_path()
+                        .map(|p| p.to_string_lossy().to_string())
+                })
                 .unwrap_or_else(|| "Default".to_string()),
             11 => "Delete search/detail/media caches".to_string(),
             _ => String::new(),
@@ -679,7 +695,9 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     let item_line = |idx: usize, label: &str| -> Line<'static> {
         let focused = fm.focused_field == idx;
         let label_style = if focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
@@ -725,7 +743,11 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         item_line(1, "ComfyUI"),
         item_line(2, "Bookmark File"),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Access & Paths "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Access & Paths "),
+    )
     .wrap(Wrap { trim: true });
     f.render_widget(access, top[0]);
 
@@ -744,7 +766,11 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         item_line(3, "Model Cache Folder"),
         item_line(4, "Model Search TTL"),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Model Cache "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Model Cache "),
+    )
     .wrap(Wrap { trim: true });
     f.render_widget(model_cache, middle[0]);
 
@@ -754,7 +780,11 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
         item_line(7, "Image Detail TTL"),
         item_line(8, "Image Binary TTL"),
     ])
-    .block(Block::default().borders(Borders::ALL).title(" Image Cache "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Image Cache "),
+    )
     .wrap(Wrap { trim: true });
     f.render_widget(image_cache, middle[1]);
 
@@ -900,29 +930,29 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             .skip(start_idx)
             .take(visible_rows.max(1))
             .map(|(idx, item)| {
-                let prefix = if idx == selected_model_idx { "> " } else { "  " };
-                let available_width = sections[3].width.saturating_sub(4) as usize;
-                let display_item = if idx == selected_model_idx
-                    && item.chars().count() > available_width.max(1)
-                {
-                    let now_ms = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_else(|_| Duration::from_millis(0))
-                        .as_millis();
-                    let shift = ((now_ms / 260) as usize) % item.chars().count().max(1);
-                    rotate_left_chars(item, shift)
+                let prefix = if idx == selected_model_idx {
+                    "> "
                 } else {
-                    item.clone()
+                    "  "
                 };
+                let available_width = sections[3].width.saturating_sub(4) as usize;
+                let display_item =
+                    if idx == selected_model_idx && item.chars().count() > available_width.max(1) {
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_else(|_| Duration::from_millis(0))
+                            .as_millis();
+                        let shift = ((now_ms / 260) as usize) % item.chars().count().max(1);
+                        rotate_left_chars(item, shift)
+                    } else {
+                        item.clone()
+                    };
                 let style = if idx == selected_model_idx {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default()
                 };
-                Line::from(vec![Span::styled(
-                    format!("{prefix}{display_item}"),
-                    style,
-                )])
+                Line::from(vec![Span::styled(format!("{prefix}{display_item}"), style)])
             })
             .collect::<Vec<_>>()
     };
@@ -939,21 +969,12 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             "Created",
             img.created_at.as_deref().unwrap_or("<none>"),
         )),
-        Line::from(model_key_value_spans(
-            "Image",
-            &image_meta_value,
-        )),
+        Line::from(model_key_value_spans("Image", &image_meta_value)),
         Line::from(model_key_value_spans("Link", &image_link)),
     ];
     let stats_lines = vec![
-        Line::from(model_key_value_spans(
-            "Stats",
-            &stats_primary_value,
-        )),
-        Line::from(model_key_value_spans(
-            "More",
-            &stats_secondary_value,
-        )),
+        Line::from(model_key_value_spans("Stats", &stats_primary_value)),
+        Line::from(model_key_value_spans("More", &stats_secondary_value)),
     ];
     let generation_lines = vec![
         Line::from(model_key_value_spans(
@@ -977,7 +998,11 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(model_key_value_spans("Comfy", &workflow_label)),
         Line::from(model_key_value_spans(
             "Copy",
-            if workflow_json.is_some() { "[c]" } else { "<none>" },
+            if workflow_json.is_some() {
+                "[c]"
+            } else {
+                "<none>"
+            },
         )),
     ];
 
@@ -1029,11 +1054,15 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     }
     f.render_widget(
         Paragraph::new(tag_block_lines)
-            .block(Block::default().borders(Borders::ALL).title(if app.image_advanced_visible {
-                " Tags / Advanced "
-            } else {
-                " Tags "
-            }))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(if app.image_advanced_visible {
+                        " Tags / Advanced "
+                    } else {
+                        " Tags "
+                    }),
+            )
             .wrap(Wrap { trim: false }),
         sections[4],
     );
@@ -1059,7 +1088,9 @@ fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
     );
 
     let area = centered_rect(78, 82, f.area());
-    let block = Block::default().borders(Borders::ALL).title(" Prompt Viewer ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Prompt Viewer ");
     f.render_widget(Clear, area);
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
@@ -1091,7 +1122,9 @@ fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
         } else {
             "b: Bookmark"
         };
-        format!(" Model Details | [←/→] Version | [J/K] Files | [d] Download | [{bookmark_label}] | [Esc] Close ")
+        format!(
+            " Model Details | [←/→] Version | [J/K] Files | [d] Download | [{bookmark_label}] | [Esc] Close "
+        )
     } else {
         " Model Details | Loading... | [Esc] Close ".to_string()
     };
@@ -1331,7 +1364,6 @@ fn draw_model_list(
     area: Rect,
     models: &[civitai_cli::sdk::SearchModelHit],
     list_state: &ListState,
-    _show_model_details: bool,
     bookmarked_ids: &[u64],
     enable_name_rolling: bool,
 ) {
@@ -1456,7 +1488,7 @@ fn draw_model_list(
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
-    let mut state = list_state.clone();
+    let mut state = *list_state;
     if !models.is_empty() {
         state.select(Some(selected_idx.saturating_sub(start_idx)));
     }
@@ -1513,10 +1545,7 @@ fn draw_model_sidebar(
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                compact_cell_text(
-                    model_url,
-                    split[0].width.saturating_sub(2) as usize,
-                ),
+                compact_cell_text(model_url, split[0].width.saturating_sub(2) as usize),
                 Style::default().fg(Color::Cyan),
             )),
         ];
@@ -1604,11 +1633,7 @@ fn draw_model_sidebar(
                     .or_else(|| app.parsed_default_base_model(model).map(str::to_string))
                     .unwrap_or_else(|| "Unknown".to_string())
             ),
-            format!(
-                "{:<10} {}",
-                "Down",
-                compact_number(metrics.download_count)
-            ),
+            format!("{:<10} {}", "Down", compact_number(metrics.download_count)),
             format!(
                 "{:<10} {}",
                 "Likes",
@@ -1619,11 +1644,7 @@ fn draw_model_sidebar(
                 "Comments",
                 compact_number(metrics.comment_count)
             ),
-            format!(
-                "{:<10} {:.1}",
-                "Rating",
-                metrics.rating
-            ),
+            format!("{:<10} {:.1}", "Rating", metrics.rating),
             format!(
                 "{:<10} {}",
                 "Format",
@@ -1644,13 +1665,8 @@ fn draw_model_sidebar(
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(split[2]);
-        let metadata = Paragraph::new(
-            detail_row
-                .into_iter()
-                .map(Line::from)
-                .collect::<Vec<_>>(),
-        )
-        .block(Block::default().borders(Borders::ALL).title(" Metadata "));
+        let metadata = Paragraph::new(detail_row.into_iter().map(Line::from).collect::<Vec<_>>())
+            .block(Block::default().borders(Borders::ALL).title(" Metadata "));
         f.render_widget(metadata, metadata_split[0]);
         let tags = tag_names(model);
         let tag_lines = if tags.is_empty() {
@@ -1796,9 +1812,9 @@ fn draw_model_sidebar(
                 .model_version_image_cache
                 .get_mut(&image_version_id)
                 .and_then(|protocols| protocols.get_mut(0));
-            if let Some(mut protocol) = protocol {
+            if let Some(protocol) = protocol {
                 let image_widget: StatefulImage<StatefulProtocol> = StatefulImage::new();
-                f.render_stateful_widget(image_widget, inner_img_area, &mut protocol);
+                f.render_stateful_widget(image_widget, inner_img_area, protocol);
             } else {
                 if app.model_version_image_failed.contains(&image_version_id) {
                     f.render_widget(
@@ -1856,7 +1872,14 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
                         .map(|sort| sort.label().to_string())
                         .unwrap_or_else(|| "Relevance".to_string()),
                     fm.selected_types.len(),
-                    if fm.tag_query.trim().is_empty() { 0 } else { fm.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
+                    if fm.tag_query.trim().is_empty() {
+                        0
+                    } else {
+                        fm.tag_query
+                            .split(',')
+                            .filter(|tag| !tag.trim().is_empty())
+                            .count()
+                    },
                     fm.selected_base_models.len(),
                     fm.periods
                         .get(fm.selected_period)
@@ -1968,7 +1991,11 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
             },
         ),
     ])])
-    .block(styled_search_block(" Query ", query_focused, query_is_configured))
+    .block(styled_search_block(
+        " Query ",
+        query_focused,
+        query_is_configured,
+    ))
     .wrap(Wrap { trim: true });
     f.render_widget(query_box, sections[0]);
 
@@ -1983,7 +2010,11 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         sort_focused,
     ));
     let sort_box = Paragraph::new(sort_lines)
-        .block(styled_search_block(" Sort ", sort_focused, sort_is_configured))
+        .block(styled_search_block(
+            " Sort ",
+            sort_focused,
+            sort_is_configured,
+        ))
         .wrap(Wrap { trim: true });
     f.render_widget(sort_box, sections[1]);
 
@@ -1998,54 +2029,76 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         period_focused,
     ));
     let period_box = Paragraph::new(period_lines)
-        .block(styled_search_block(" Period ", period_focused, period_is_configured))
+        .block(styled_search_block(
+            " Period ",
+            period_focused,
+            period_is_configured,
+        ))
         .wrap(Wrap { trim: true });
     f.render_widget(period_box, sections[2]);
 
-    let type_widget = Paragraph::new(build_image_filter_box_lines(
-        "Type",
+    let selected_types = fm
+        .selected_types
+        .iter()
+        .map(|item| item.label().to_string())
+        .collect::<Vec<_>>();
+    let type_widget = Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+        label: "Type",
+        focused: type_focused,
+        configured: type_is_configured,
+        items: &type_items,
+        selected: &selected_types,
+        show_selected: false,
+        width: sections[3].width.saturating_sub(4) as usize,
+        height: sections[3].height.saturating_sub(3) as usize,
+    }))
+    .block(styled_search_block(
+        " Type ",
         type_focused,
         type_is_configured,
-        &type_items,
-        &fm.selected_types.iter().map(|item| item.label().to_string()).collect::<Vec<_>>(),
-        false,
-        sections[3].width.saturating_sub(4) as usize,
-        sections[3].height.saturating_sub(3) as usize,
     ))
-        .block(styled_search_block(" Type ", type_focused, type_is_configured))
-        .wrap(Wrap { trim: true });
+    .wrap(Wrap { trim: true });
     f.render_widget(type_widget, sections[3]);
 
-    let tag_widget = Paragraph::new(build_text_filter_box_lines(
-        "Tag",
+    let tag_widget = Paragraph::new(build_text_filter_box_lines(TextFilterBoxProps {
+        label: "Tag",
+        focused: tag_focused,
+        configured: tag_is_configured,
+        value: &fm.tag_query,
+        placeholder: "Comma-separated tags",
+        suggestions: None,
+        width: sections[4].width.saturating_sub(4) as usize,
+        height: sections[4].height.saturating_sub(3) as usize,
+    }))
+    .block(styled_search_block(
+        " Tags ",
         tag_focused,
         tag_is_configured,
-        &fm.tag_query,
-        "Comma-separated tags",
-        None,
-        sections[4].width.saturating_sub(4) as usize,
-        sections[4].height.saturating_sub(3) as usize,
     ))
-    .block(styled_search_block(" Tags ", tag_focused, tag_is_configured))
     .wrap(Wrap { trim: true });
     f.render_widget(tag_widget, sections[4]);
 
-    let base_widget = Paragraph::new(build_image_filter_box_lines(
-        "Base Model",
+    let selected_base_models = fm
+        .selected_base_models
+        .iter()
+        .map(|item| item.label().to_string())
+        .collect::<Vec<_>>();
+    let base_widget = Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+        label: "Base Model",
+        focused: base_focused,
+        configured: base_is_configured,
+        items: &base_items,
+        selected: &selected_base_models,
+        show_selected: false,
+        width: sections[5].width.saturating_sub(4) as usize,
+        height: sections[5].height.saturating_sub(3) as usize,
+    }))
+    .block(styled_search_block(
+        " Base Model ",
         base_focused,
         base_is_configured,
-        &base_items,
-        &fm
-            .selected_base_models
-            .iter()
-            .map(|item| item.label().to_string())
-            .collect::<Vec<_>>(),
-        false,
-        sections[5].width.saturating_sub(4) as usize,
-        sections[5].height.saturating_sub(3) as usize,
     ))
-        .block(styled_search_block(" Base Model ", base_focused, base_is_configured))
-        .wrap(Wrap { trim: true });
+    .wrap(Wrap { trim: true });
     f.render_widget(base_widget, sections[5]);
 
     let help = Paragraph::new(" [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ")
@@ -2072,7 +2125,11 @@ fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
         )),
     ];
     let p = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" Image Bookmark Search "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Image Bookmark Search "),
+        )
         .wrap(Wrap { trim: true });
     let area = centered_rect(60, 24, f.area());
     f.render_widget(Clear, area);
@@ -2130,7 +2187,14 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                         .map(|sort| sort.label().to_string())
                         .unwrap_or_else(|| "Relevance".to_string()),
                     form.selected_media_types.len(),
-                    if form.tag_query.trim().is_empty() { 0 } else { form.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
+                    if form.tag_query.trim().is_empty() {
+                        0
+                    } else {
+                        form.tag_query
+                            .split(',')
+                            .filter(|tag| !tag.trim().is_empty())
+                            .count()
+                    },
                     form.selected_base_models.len(),
                     form.selected_aspect_ratios.len(),
                     form.periods
@@ -2146,7 +2210,11 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             )),
         ];
         let p = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title(" Image Search "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Image Search "),
+            )
             .wrap(Wrap { trim: true });
         let quick_area = centered_rect(60, 24, f.area());
         f.render_widget(Clear, quick_area);
@@ -2234,6 +2302,21 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         })
         .collect::<Vec<_>>();
     let tag_suggestions = app.image_tag_suggestions(sections[4].height.saturating_sub(4) as usize);
+    let selected_media_types = form
+        .selected_media_types
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let selected_base_models = form
+        .selected_base_models
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let selected_aspect_ratios = form
+        .selected_aspect_ratios
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
 
     let query_box = Paragraph::new(vec![Line::from(vec![
         Span::styled(
@@ -2253,7 +2336,11 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             },
         ),
     ])])
-    .block(styled_search_block(" Query ", query_focused, !form.query.trim().is_empty()))
+    .block(styled_search_block(
+        " Query ",
+        query_focused,
+        !form.query.trim().is_empty(),
+    ))
     .wrap(Wrap { trim: true });
     f.render_widget(query_box, sections[0]);
 
@@ -2292,20 +2379,16 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     );
 
     f.render_widget(
-        Paragraph::new(build_image_filter_box_lines(
-            "Media Type",
-            type_focused,
-            !form.selected_media_types.is_empty(),
-            &type_items,
-            &form
-                .selected_media_types
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            false,
-            sections[3].width.saturating_sub(4) as usize,
-            sections[3].height.saturating_sub(3) as usize,
-        ))
+        Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+            label: "Media Type",
+            focused: type_focused,
+            configured: !form.selected_media_types.is_empty(),
+            items: &type_items,
+            selected: &selected_media_types,
+            show_selected: false,
+            width: sections[3].width.saturating_sub(4) as usize,
+            height: sections[3].height.saturating_sub(3) as usize,
+        }))
         .block(styled_search_block(
             " Media Type ",
             type_focused,
@@ -2315,16 +2398,16 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         sections[3],
     );
 
-    let tag_box = Paragraph::new(build_text_filter_box_lines(
-        "Tag",
-        tag_focused,
-        !form.tag_query.trim().is_empty(),
-        &form.tag_query,
-        "Comma-separated tags",
-        Some(tag_suggestions.as_slice()),
-        sections[4].width.saturating_sub(4) as usize,
-        sections[4].height.saturating_sub(3) as usize,
-    ))
+    let tag_box = Paragraph::new(build_text_filter_box_lines(TextFilterBoxProps {
+        label: "Tag",
+        focused: tag_focused,
+        configured: !form.tag_query.trim().is_empty(),
+        value: &form.tag_query,
+        placeholder: "Comma-separated tags",
+        suggestions: Some(tag_suggestions.as_slice()),
+        width: sections[4].width.saturating_sub(4) as usize,
+        height: sections[4].height.saturating_sub(3) as usize,
+    }))
     .block(styled_search_block(
         " Tags ",
         tag_focused,
@@ -2334,20 +2417,16 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     f.render_widget(tag_box, sections[4]);
 
     f.render_widget(
-        Paragraph::new(build_image_filter_box_lines(
-            "Base Model",
-            base_focused,
-            !form.selected_base_models.is_empty(),
-            &base_items,
-            &form
-                .selected_base_models
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            false,
-            sections[5].width.saturating_sub(4) as usize,
-            sections[5].height.saturating_sub(3) as usize,
-        ))
+        Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+            label: "Base Model",
+            focused: base_focused,
+            configured: !form.selected_base_models.is_empty(),
+            items: &base_items,
+            selected: &selected_base_models,
+            show_selected: false,
+            width: sections[5].width.saturating_sub(4) as usize,
+            height: sections[5].height.saturating_sub(3) as usize,
+        }))
         .block(styled_search_block(
             " Base Model ",
             base_focused,
@@ -2358,20 +2437,16 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     );
 
     f.render_widget(
-        Paragraph::new(build_image_filter_box_lines(
-            "Aspect Ratio",
-            ratio_focused,
-            !form.selected_aspect_ratios.is_empty(),
-            &ratio_items,
-            &form
-                .selected_aspect_ratios
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>(),
-            false,
-            sections[6].width.saturating_sub(4) as usize,
-            sections[6].height.saturating_sub(3) as usize,
-        ))
+        Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+            label: "Aspect Ratio",
+            focused: ratio_focused,
+            configured: !form.selected_aspect_ratios.is_empty(),
+            items: &ratio_items,
+            selected: &selected_aspect_ratios,
+            show_selected: false,
+            width: sections[6].width.saturating_sub(4) as usize,
+            height: sections[6].height.saturating_sub(3) as usize,
+        }))
         .block(styled_search_block(
             " Aspect Ratio ",
             ratio_focused,
@@ -2421,7 +2496,9 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
 
 fn draw_help_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(72, 60, f.area());
-    let block = Block::default().borders(Borders::ALL).title(" Keyboard Help ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Keyboard Help ");
     f.render_widget(Clear, area);
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
@@ -2449,7 +2526,12 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     let header = Paragraph::new(vec![
         Line::from(vec![
             Span::styled("Tab ", Style::default().fg(Color::DarkGray)),
-            Span::styled(title, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                title,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(Span::styled(
             "Global navigation is consistent across tabs. Context actions change by tab.",
@@ -2495,7 +2577,11 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" While editing: type text, [Enter] save, [Esc] cancel"),
         ],
     })
-    .block(Block::default().borders(Borders::ALL).title(" Search & Input "))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Search & Input "),
+    )
     .wrap(Wrap { trim: true });
     f.render_widget(search, sections[2]);
 
@@ -2553,7 +2639,11 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         ],
     };
     let actions = Paragraph::new(actions_lines)
-        .block(Block::default().borders(Borders::ALL).title(" Context Actions "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Context Actions "),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(actions, sections[3]);
 
@@ -2660,11 +2750,21 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download",
-        MainTab::Bookmarks => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove",
-        MainTab::Images => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
-        MainTab::ImageBookmarks => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
-        MainTab::Downloads => "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove",
+        MainTab::Models => {
+            "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download"
+        }
+        MainTab::Bookmarks => {
+            "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove"
+        }
+        MainTab::Images => {
+            "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+        }
+        MainTab::ImageBookmarks => {
+            "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+        }
+        MainTab::Downloads => {
+            "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove"
+        }
         MainTab::Settings => "[?] Help  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel",
     };
 

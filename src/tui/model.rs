@@ -95,10 +95,10 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
     let mut versions = Vec::new();
     let top_level_metrics = model_metrics(hit);
 
-    if let Some(value) = hit.version.as_ref() {
-        if let Some(version) = parse_version(value) {
-            push_or_merge_version(&mut versions, version);
-        }
+    if let Some(value) = hit.version.as_ref()
+        && let Some(version) = parse_version(value)
+    {
+        push_or_merge_version(&mut versions, version);
     }
 
     if let Some(items) = hit.versions.as_ref() {
@@ -109,18 +109,18 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
         }
     }
 
-    if versions.is_empty() {
-        if let Some(version_id) = hit.primary_model_version_id() {
-            versions.push(ParsedModelVersion {
-                id: version_id,
-                name: format!("Version {version_id}"),
-                base_model: hit
-                    .version
-                    .as_ref()
-                    .and_then(|value| value_string(value.get("baseModel"))),
-                ..ParsedModelVersion::default()
-            });
-        }
+    if versions.is_empty()
+        && let Some(version_id) = hit.primary_model_version_id()
+    {
+        versions.push(ParsedModelVersion {
+            id: version_id,
+            name: format!("Version {version_id}"),
+            base_model: hit
+                .version
+                .as_ref()
+                .and_then(|value| value_string(value.get("baseModel"))),
+            ..ParsedModelVersion::default()
+        });
     }
 
     let top_level_images = parse_images_from_array(hit.images.as_ref());
@@ -138,10 +138,10 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
             }
         }
 
-        if let Some(first_version) = versions.first_mut() {
-            if first_version.images.is_empty() {
-                first_version.images = top_level_images.clone();
-            }
+        if let Some(first_version) = versions.first_mut()
+            && first_version.images.is_empty()
+        {
+            first_version.images = top_level_images.clone();
         }
     }
 

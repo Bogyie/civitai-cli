@@ -285,12 +285,13 @@ impl WebSearchClient {
             .await
             .with_context(|| format!("Failed to request generation data for image {image_id}"))?
             .error_for_status()
-            .with_context(|| format!("Generation data endpoint returned error for image {image_id}"))?;
+            .with_context(|| {
+                format!("Generation data endpoint returned error for image {image_id}")
+            })?;
 
-        let payload = response
-            .json::<Value>()
-            .await
-            .with_context(|| format!("Failed to decode generation data response for image {image_id}"))?;
+        let payload = response.json::<Value>().await.with_context(|| {
+            format!("Failed to decode generation data response for image {image_id}")
+        })?;
 
         serde_json::from_value(
             payload
@@ -935,7 +936,10 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
         if let Ok(number) = trimmed_value.parse::<u64>() {
             filters.push(format!("{target_key} = {number}"));
         } else {
-            filters.push(format!("{target_key} = \"{}\"", trimmed_value.replace('"', "\\\"")));
+            filters.push(format!(
+                "{target_key} = \"{}\"",
+                trimmed_value.replace('"', "\\\"")
+            ));
         }
     }
 
@@ -1015,7 +1019,10 @@ fn build_model_meili_payload(state: &ModelSearchState) -> Value {
         if let Ok(number) = trimmed_value.parse::<u64>() {
             filters.push(format!("{target_key} = {number}"));
         } else {
-            filters.push(format!("{target_key} = \"{}\"", trimmed_value.replace('"', "\\\"")));
+            filters.push(format!(
+                "{target_key} = \"{}\"",
+                trimmed_value.replace('"', "\\\"")
+            ));
         }
     }
 

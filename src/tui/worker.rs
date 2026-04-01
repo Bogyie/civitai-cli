@@ -11,19 +11,19 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use crate::config::{AppConfig, MediaQualityPreference};
-use civitai_cli::sdk::{
-    ApiImageSearchOptions, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
-    DownloadOptions, DownloadSpec, ImageSearchSortBy, ImageSearchState, MediaUrlOptions,
-    ModelDownloadAuth, ModelSearchState, SdkClientBuilder, SearchImageHit as ImageItem,
-    SearchModelHit as Model, media_url_from_raw_with_options,
-};
-use crate::tui::app::{AppMessage, MediaRenderRequest, WorkerCommand};
+use crate::tui::app::{AppMessage, MediaRenderRequest, VersionCoverJob, WorkerCommand};
 use crate::tui::image::image_media_url;
 use crate::tui::model::{
     ParsedModelFile, build_download_file_name, model_name, model_versions,
     resolve_download_target_dir,
 };
 use crate::tui::runtime::{debug_fetch_log, render_request_key};
+use civitai_cli::sdk::{
+    ApiImageSearchOptions, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
+    DownloadOptions, DownloadSpec, ImageSearchSortBy, ImageSearchState, MediaUrlOptions,
+    ModelDownloadAuth, ModelSearchState, SdkClientBuilder, SearchImageHit as ImageItem,
+    SearchModelHit as Model, media_url_from_raw_with_options,
+};
 
 type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
 type SearchCache = HashMap<String, CachedSearchResult>;
@@ -60,7 +60,28 @@ struct CachedBinaryBlob {
 enum CoverQueueCommand {
     Enqueue(Vec<(u64, String)>),
     Prioritize(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
-    Prefetch(Vec<(u64, Option<String>, Option<(u32, u32)>)>, MediaRenderRequest),
+    Prefetch(Vec<VersionCoverJob>, MediaRenderRequest),
+}
+
+struct ModelCoverLoadContext {
+    request_key: String,
+    client: Client,
+    picker: Picker,
+    cover_cache_root: Option<PathBuf>,
+    debug_config: AppConfig,
+    use_cache: bool,
+}
+
+struct FeedImageLoadContext {
+    request_key: String,
+    client: Client,
+    picker: Picker,
+    tx_msg: mpsc::Sender<AppMessage>,
+    semaphore: Arc<Semaphore>,
+    debug_config: AppConfig,
+    image_bytes_cache_root: Option<PathBuf>,
+    ttl_minutes: u64,
+    use_cache: bool,
 }
 
 const MODEL_VERSION_COVER_IMAGE_LIMIT: usize = 1;
@@ -133,8 +154,7 @@ fn build_media_options_for_display(
         };
     }
 
-    let (width, height, quality) =
-        resolve_dynamic_media_target(request, source_dims, preference);
+    let (width, height, quality) = resolve_dynamic_media_target(request, source_dims, preference);
 
     if is_video {
         MediaUrlOptions {
@@ -170,8 +190,7 @@ fn build_cover_media_options(
         };
     }
 
-    let (width, height, quality) =
-        resolve_dynamic_media_target(request, source_dims, preference);
+    let (width, height, quality) = resolve_dynamic_media_target(request, source_dims, preference);
     MediaUrlOptions {
         width: Some(width),
         height: Some(height),
@@ -189,14 +208,17 @@ fn build_image_display_url(
 ) -> Option<String> {
     let source_dims = item.width.zip(item.height);
     if item.r#type.as_deref() == Some("video") {
-        item.thumbnail_url.clone().filter(|value| !value.trim().is_empty()).or_else(|| {
-            item.media_url_with_options(&build_media_options_for_display(
-                request,
-                source_dims,
-                preference,
-                true,
-            ))
-        })
+        item.thumbnail_url
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| {
+                item.media_url_with_options(&build_media_options_for_display(
+                    request,
+                    source_dims,
+                    preference,
+                    true,
+                ))
+            })
     } else if item.media_token().is_some() {
         item.media_url_with_options(&build_media_options_for_display(
             request,
@@ -219,7 +241,7 @@ fn rewrite_cover_url_for_display(
         raw_url,
         &build_cover_media_options(request, source_dims, preference),
     )
-        .or_else(|| Some(raw_url.to_string()))
+    .or_else(|| Some(raw_url.to_string()))
 }
 
 fn cache_key_for_options(opts: &ModelSearchState) -> String {
@@ -238,7 +260,9 @@ fn cache_key_for_options(opts: &ModelSearchState) -> String {
     ));
     parts.push(format!(
         "limit={}",
-        opts.limit.map(|value| value.to_string()).unwrap_or_default()
+        opts.limit
+            .map(|value| value.to_string())
+            .unwrap_or_default()
     ));
     parts.push(format!(
         "base={}",
@@ -367,9 +391,7 @@ async fn forward_download_events(
     while let Some(event) = progress_rx.recv().await {
         match event {
             DownloadEvent::Started {
-                path,
-                total_bytes,
-                ..
+                path, total_bytes, ..
             } => {
                 let _ = tx_msg
                     .send(AppMessage::DownloadStarted(
@@ -944,7 +966,10 @@ fn merge_json_objects(base: Value, overlay: Value) -> Value {
     }
 }
 
-fn attach_generation_data(image: &mut ImageItem, generation: &civitai_cli::sdk::ImageGenerationData) {
+fn attach_generation_data(
+    image: &mut ImageItem,
+    generation: &civitai_cli::sdk::ImageGenerationData,
+) {
     if image.generation_process.is_none() {
         image.generation_process = generation.process.clone();
     }
@@ -1024,10 +1049,10 @@ fn pop_next_job(
     queue: &mut VecDeque<(u64, String)>,
     focus_version: Option<u64>,
 ) -> Option<(u64, String)> {
-    if let Some(focus_version) = focus_version {
-        if let Some(pos) = queue.iter().position(|(id, _)| *id == focus_version) {
-            return queue.remove(pos);
-        }
+    if let Some(focus_version) = focus_version
+        && let Some(pos) = queue.iter().position(|(id, _)| *id == focus_version)
+    {
+        return queue.remove(pos);
     }
 
     queue.pop_front()
@@ -1154,12 +1179,14 @@ pub async fn spawn_worker(
                         let result = load_model_cover_result(
                             version_id,
                             image_url,
-                            request_key,
-                            req_client,
-                            picker,
-                            cover_cache_root,
-                            debug_config,
-                            use_cover_cache,
+                            ModelCoverLoadContext {
+                                request_key,
+                                client: req_client,
+                                picker,
+                                cover_cache_root,
+                                debug_config,
+                                use_cache: use_cover_cache,
+                            },
                         )
                         .await;
                         let _ = tx_msg.send(result).await;
@@ -1196,12 +1223,14 @@ pub async fn spawn_worker(
                         }
                         CoverQueueCommand::Prefetch(jobs, render_request) => {
                             for (version_id, image_url, source_dims) in jobs {
-                                if running_ids.contains(&version_id) || queued_ids.contains(&version_id) {
+                                if running_ids.contains(&version_id)
+                                    || queued_ids.contains(&version_id)
+                                {
                                     continue;
                                 }
 
-                                let resolved_url = if let Some(url) =
-                                    image_url.or_else(|| known_version_urls.get(&version_id).cloned())
+                                let resolved_url = if let Some(url) = image_url
+                                    .or_else(|| known_version_urls.get(&version_id).cloned())
                                 {
                                     rewrite_cover_url_for_display(
                                         &url,
@@ -1256,19 +1285,17 @@ pub async fn spawn_worker(
                                     )
                                 })
                                 .collect();
-                            if resolved_urls.is_empty() {
-                                if let Some(url) =
-                                    image_url.or_else(|| known_version_urls.get(&version_id).cloned())
-                                {
-                                    if let Some(transformed) = rewrite_cover_url_for_display(
-                                        &url,
-                                        source_dims,
-                                        render_request,
-                                        debug_config.media_quality,
-                                    ) {
-                                        resolved_urls.push(transformed);
-                                    }
-                                }
+                            if resolved_urls.is_empty()
+                                && let Some(url) = image_url
+                                    .or_else(|| known_version_urls.get(&version_id).cloned())
+                                && let Some(transformed) = rewrite_cover_url_for_display(
+                                    &url,
+                                    source_dims,
+                                    render_request,
+                                    debug_config.media_quality,
+                                )
+                            {
+                                resolved_urls.push(transformed);
                             }
 
                             if let Some(first_url) = resolved_urls.first().cloned() {
@@ -1305,12 +1332,14 @@ pub async fn spawn_worker(
                                 let result = load_model_cover_results(
                                     version_id,
                                     resolved_urls,
-                                    request_key,
-                                    req_client,
-                                    picker,
-                                    cover_cache_root,
-                                    debug_config,
-                                    use_cover_cache,
+                                    ModelCoverLoadContext {
+                                        request_key,
+                                        client: req_client,
+                                        picker,
+                                        cover_cache_root,
+                                        debug_config,
+                                        use_cache: use_cover_cache,
+                                    },
                                 )
                                 .await;
                                 let _ = tx_msg.send(result).await;
@@ -1433,11 +1462,10 @@ pub async fn spawn_worker(
                                         )
                                     })
                                     .collect();
-                                if resolved_urls.is_empty() {
-                                    if let Some(url) =
+                                if resolved_urls.is_empty()
+                                    && let Some(url) =
                                         image_url.or_else(|| known_version_urls.get(&version_id).cloned())
-                                    {
-                                        if let Some(transformed) = rewrite_cover_url_for_display(
+                                        && let Some(transformed) = rewrite_cover_url_for_display(
                                             &url,
                                             source_dims,
                                             render_request,
@@ -1445,8 +1473,6 @@ pub async fn spawn_worker(
                                         ) {
                                             resolved_urls.push(transformed);
                                         }
-                                    }
-                                }
 
                                 if let Some(first_url) = resolved_urls.first().cloned() {
                                     known_version_urls.insert(version_id, first_url);
@@ -1476,12 +1502,14 @@ pub async fn spawn_worker(
                                         let result = load_model_cover_results(
                                             version_id,
                                             resolved_urls,
-                                            request_key,
-                                            req_client,
-                                            picker,
-                                            cover_cache_root,
-                                            debug_config,
-                                            use_cover_cache,
+                                            ModelCoverLoadContext {
+                                                request_key,
+                                                client: req_client,
+                                                picker,
+                                                cover_cache_root,
+                                                debug_config,
+                                                use_cache: use_cover_cache,
+                                            },
                                         )
                                         .await;
                                         let _ = tx_msg.send(result).await;
@@ -1566,13 +1594,11 @@ pub async fn spawn_worker(
                         let current_url = build_image_search_url(&request_state);
                         let configured_image_search_ttl_minutes =
                             *image_search_cache_ttl_minutes.lock().await;
-                        let image_detail_ttl_minutes =
-                            *image_detail_cache_ttl_minutes.lock().await;
-                        let image_search_ttl_minutes =
-                            image_search_cache_ttl_minutes_for(
-                                &request_state,
-                                configured_image_search_ttl_minutes,
-                            );
+                        let image_detail_ttl_minutes = *image_detail_cache_ttl_minutes.lock().await;
+                        let image_search_ttl_minutes = image_search_cache_ttl_minutes_for(
+                            &request_state,
+                            configured_image_search_ttl_minutes,
+                        );
                         let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
                         let media_quality = debug_config.media_quality;
                         let request_key = render_request_key(render_request, media_quality);
@@ -1607,20 +1633,17 @@ pub async fn spawn_worker(
                             }
 
                             let mut entry = cache.get(&cache_key).cloned();
-                            if entry.is_none() {
-                                if let Some(cache_root) = cache_root.as_deref() {
-                                    if let Some(on_disk_entry) =
-                                        load_cached_image_search_entry(cache_root, &cache_key)
-                                    {
-                                        if is_cache_valid_minutes(
-                                            on_disk_entry.cached_at_unix_secs,
-                                            image_search_ttl_minutes,
-                                        ) {
-                                            cache.insert(cache_key.clone(), on_disk_entry.clone());
-                                            entry = Some(on_disk_entry);
-                                        }
-                                    }
-                                }
+                            if entry.is_none()
+                                && let Some(cache_root) = cache_root.as_deref()
+                                && let Some(on_disk_entry) =
+                                    load_cached_image_search_entry(cache_root, &cache_key)
+                                && is_cache_valid_minutes(
+                                    on_disk_entry.cached_at_unix_secs,
+                                    image_search_ttl_minutes,
+                                )
+                            {
+                                cache.insert(cache_key.clone(), on_disk_entry.clone());
+                                entry = Some(on_disk_entry);
                             }
 
                             match entry {
@@ -1678,27 +1701,29 @@ pub async fn spawn_worker(
                         let (visible_items, final_next_page) = match fetch_result {
                             Ok((items, next_page)) => {
                                 let total_items = items.len();
-                                let detail_cache_root = image_detail_cache_path.lock().await.clone();
+                                let detail_cache_root =
+                                    image_detail_cache_path.lock().await.clone();
                                 let mut visible_items =
                                     stream::iter(items.into_iter().map(|item| {
-                                    let sdk_clone = sdk_clone.clone();
-                                    let detail_cache_root = detail_cache_root.clone();
-                                    async move {
-                                        enrich_image_detail(
-                                            &sdk_clone,
-                                            detail_cache_root.as_deref(),
-                                            item,
-                                            image_detail_ttl_minutes,
-                                        )
-                                        .await
-                                    }
-                                }))
-                                .buffered(6)
-                                .collect::<Vec<_>>()
-                                .await;
+                                        let sdk_clone = sdk_clone.clone();
+                                        let detail_cache_root = detail_cache_root.clone();
+                                        async move {
+                                            enrich_image_detail(
+                                                &sdk_clone,
+                                                detail_cache_root.as_deref(),
+                                                item,
+                                                image_detail_ttl_minutes,
+                                            )
+                                            .await
+                                        }
+                                    }))
+                                    .buffered(6)
+                                    .collect::<Vec<_>>()
+                                    .await;
                                 visible_items
                                     .retain(|item| item.r#type.as_deref() != Some("video"));
-                                let skipped_videos = total_items.saturating_sub(visible_items.len());
+                                let skipped_videos =
+                                    total_items.saturating_sub(visible_items.len());
 
                                 debug_fetch_log(
                                     &debug_config,
@@ -1738,14 +1763,14 @@ pub async fn spawn_worker(
                                     &format!("FetchImages: get_images failed: {}", e),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "{}",
+                                    .send(AppMessage::StatusUpdate(
                                         error_status_with_url(
                                             "Error fetching images",
                                             &current_url,
                                             &e.to_string(),
                                         )
-                                    )))
+                                        .to_string(),
+                                    ))
                                     .await;
                                 return;
                             }
@@ -1780,15 +1805,17 @@ pub async fn spawn_worker(
                             handles.push(tokio::spawn(load_feed_image(
                                 image_id,
                                 image_url,
-                                request_key.clone(),
-                                req_client.clone(),
-                                picker.clone(),
-                                tx_msg_clone.clone(),
-                                fetch_semaphore.clone(),
-                                debug_config.clone(),
-                                image_bytes_cache_root,
-                                image_cache_ttl_minutes,
-                                use_binary_cache,
+                                FeedImageLoadContext {
+                                    request_key: request_key.clone(),
+                                    client: req_client.clone(),
+                                    picker: picker.clone(),
+                                    tx_msg: tx_msg_clone.clone(),
+                                    semaphore: fetch_semaphore.clone(),
+                                    debug_config: debug_config.clone(),
+                                    image_bytes_cache_root,
+                                    ttl_minutes: image_cache_ttl_minutes,
+                                    use_cache: use_binary_cache,
+                                },
                             )));
                         }
                         for handle in handles {
@@ -1815,15 +1842,17 @@ pub async fn spawn_worker(
                             load_feed_image(
                                 item.id,
                                 image_url,
-                                request_key,
-                                req_client,
-                                picker,
-                                tx_msg_clone,
-                                Arc::new(Semaphore::new(1)),
-                                debug_config,
-                                image_bytes_cache_root,
-                                image_cache_ttl_minutes,
-                                use_cache,
+                                FeedImageLoadContext {
+                                    request_key,
+                                    client: req_client,
+                                    picker,
+                                    tx_msg: tx_msg_clone,
+                                    semaphore: Arc::new(Semaphore::new(1)),
+                                    debug_config,
+                                    image_bytes_cache_root,
+                                    ttl_minutes: image_cache_ttl_minutes,
+                                    use_cache,
+                                },
                             )
                             .await;
                         }
@@ -1932,52 +1961,50 @@ pub async fn spawn_worker(
                             }
 
                             let mut entry = cache.get(&cache_key).cloned();
-                            if entry.is_none() {
-                                if let Some(cache_root) = cache_path.as_deref() {
-                                    let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(format!(
-                                            "Checking on-disk cache for \"{}\"",
-                                            query_label
-                                        )))
-                                        .await;
-                                    if let Some(on_disk_entry) =
-                                        load_cached_search_entry(cache_root, &cache_key)
+                            if entry.is_none()
+                                && let Some(cache_root) = cache_path.as_deref()
+                            {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::StatusUpdate(format!(
+                                        "Checking on-disk cache for \"{}\"",
+                                        query_label
+                                    )))
+                                    .await;
+                                if let Some(on_disk_entry) =
+                                    load_cached_search_entry(cache_root, &cache_key)
+                                {
+                                    if is_cache_valid(on_disk_entry.cached_at_unix_secs, ttl_hours)
                                     {
-                                        if is_cache_valid(
-                                            on_disk_entry.cached_at_unix_secs,
-                                            ttl_hours,
-                                        ) {
-                                            cache.insert(cache_key.clone(), on_disk_entry.clone());
-                                            entry = Some(on_disk_entry);
-                                            debug_fetch_log(
-                                                &debug_config,
-                                                &format!(
-                                                    "SearchModels: on-disk cache hit for \"{}\"",
-                                                    query_label
-                                                ),
-                                            );
-                                            let _ = tx_msg_clone
-                                                .send(AppMessage::StatusUpdate(format!(
-                                                    "Loaded on-disk cached results for \"{}\"",
-                                                    query_label
-                                                )))
-                                                .await;
-                                        } else {
-                                            debug_fetch_log(
-                                                &debug_config,
-                                                &format!(
-                                                    "SearchModels: on-disk cache expired for \"{}\"",
-                                                    query_label
-                                                ),
-                                            );
-                                            let _ = tx_msg_clone
-                                                .send(AppMessage::StatusUpdate(format!(
-                                                    "Cached file expired for \"{}\", refreshing",
-                                                    query_label
-                                                )))
-                                                .await;
-                                            remove_cached_search_entry(cache_root, &cache_key);
-                                        }
+                                        cache.insert(cache_key.clone(), on_disk_entry.clone());
+                                        entry = Some(on_disk_entry);
+                                        debug_fetch_log(
+                                            &debug_config,
+                                            &format!(
+                                                "SearchModels: on-disk cache hit for \"{}\"",
+                                                query_label
+                                            ),
+                                        );
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(format!(
+                                                "Loaded on-disk cached results for \"{}\"",
+                                                query_label
+                                            )))
+                                            .await;
+                                    } else {
+                                        debug_fetch_log(
+                                            &debug_config,
+                                            &format!(
+                                                "SearchModels: on-disk cache expired for \"{}\"",
+                                                query_label
+                                            ),
+                                        );
+                                        let _ = tx_msg_clone
+                                            .send(AppMessage::StatusUpdate(format!(
+                                                "Cached file expired for \"{}\", refreshing",
+                                                query_label
+                                            )))
+                                            .await;
+                                        remove_cached_search_entry(cache_root, &cache_key);
                                     }
                                 }
                             }
@@ -2039,22 +2066,20 @@ pub async fn spawn_worker(
                                     .await;
                             }
                         } else {
-                            let _ =
-                                tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
-                                        "{}",
-                                        if use_cache {
-                                            format!(
-                                                "Bypassing cache for \"{}\" due to manual refresh",
-                                                query_label
-                                            )
-                                        } else {
-                                            format!(
-                                                "Debug mode: cache disabled; fetching from network",
-                                            )
-                                        }
-                                    )))
-                                    .await;
+                            let _ = tx_msg_clone
+                                .send(AppMessage::StatusUpdate(
+                                    (if use_cache {
+                                        format!(
+                                            "Bypassing cache for \"{}\" due to manual refresh",
+                                            query_label
+                                        )
+                                    } else {
+                                        "Debug mode: cache disabled; fetching from network"
+                                            .to_string()
+                                    })
+                                    .to_string(),
+                                ))
+                                .await;
                             debug_fetch_log(
                                 &debug_config,
                                 &format!(
@@ -2098,17 +2123,17 @@ pub async fn spawn_worker(
 
                             let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                             if let Some(version_id) = preferred_version_id {
-                                    let _ = cover_cmd_tx
-                                        .send(CoverQueueCommand::Prioritize(
-                                            version_id,
-                                            preferred_url,
-                                            None,
-                                            MediaRenderRequest {
-                                                width: 960,
-                                                height: 720,
-                                            },
-                                        ))
-                                        .await;
+                                let _ = cover_cmd_tx
+                                    .send(CoverQueueCommand::Prioritize(
+                                        version_id,
+                                        preferred_url,
+                                        None,
+                                        MediaRenderRequest {
+                                            width: 960,
+                                            height: 720,
+                                        },
+                                    ))
+                                    .await;
                             }
 
                             let _ = tx_msg_clone
@@ -2169,8 +2194,8 @@ pub async fn spawn_worker(
                                     res.offset,
                                     res.estimated_total_hits,
                                 );
-                                let next_page =
-                                    has_more.then_some(request_state.page.unwrap_or(0).saturating_add(1));
+                                let next_page = has_more
+                                    .then_some(request_state.page.unwrap_or(0).saturating_add(1));
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(
@@ -2218,10 +2243,7 @@ pub async fn spawn_worker(
                                     let app_models = std::mem::take(&mut models);
                                     let _ = tx_msg_clone
                                         .send(AppMessage::ModelsSearchedChunk(
-                                            app_models,
-                                            append,
-                                            has_more,
-                                            next_page,
+                                            app_models, append, has_more, next_page,
                                         ))
                                         .await;
                                 }
@@ -2229,8 +2251,7 @@ pub async fn spawn_worker(
                                     .send(AppMessage::StatusUpdate(status_with_url(
                                         &format!(
                                             "Fetched {} models for \"{}\"",
-                                            model_count,
-                                            query_label
+                                            model_count, query_label
                                         ),
                                         &request_url,
                                     )))
@@ -2256,9 +2277,7 @@ pub async fn spawn_worker(
                                         &debug_config,
                                         &format!(
                                             "SearchModels: persist cache query=\"{}\" append={} count={}",
-                                            query_label,
-                                            append,
-                                            model_count
+                                            query_label, append, model_count
                                         ),
                                     );
                                     let mut cache = search_cache.lock().await;
@@ -2273,8 +2292,11 @@ pub async fn spawn_worker(
                                         },
                                     );
                                     if append {
-                                        let mut seen_ids =
-                                            entry.models.iter().map(|model| model.id).collect::<HashSet<_>>();
+                                        let mut seen_ids = entry
+                                            .models
+                                            .iter()
+                                            .map(|model| model.id)
+                                            .collect::<HashSet<_>>();
                                         for model in models {
                                             if seen_ids.insert(model.id) {
                                                 entry.models.push(model);
@@ -2337,18 +2359,21 @@ pub async fn spawn_worker(
 
                         match sdk_clone.search_models(&state).await {
                             Ok(response) => {
-                                if let Some(model) = response.hits.into_iter().find(|hit| hit.id == model_id) {
+                                if let Some(model) =
+                                    response.hits.into_iter().find(|hit| hit.id == model_id)
+                                {
                                     let _ = tx_msg_clone
                                         .send(AppMessage::ModelDetailLoaded(
-                                            model,
+                                            Box::new(model),
                                             preferred_version_id,
                                         ))
                                         .await;
                                 } else {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(
-                                            format!("Model details not found for {}.", model_query),
-                                        ))
+                                        .send(AppMessage::StatusUpdate(format!(
+                                            "Model details not found for {}.",
+                                            model_query
+                                        )))
                                         .await;
                                 }
                             }
@@ -2460,8 +2485,10 @@ pub async fn spawn_worker(
                         .await;
                 }
                 WorkerCommand::UpdateConfig(new_cfg) => {
-                    let builder = if let Some(api_key) =
-                        new_cfg.api_key.clone().filter(|value| !value.trim().is_empty())
+                    let builder = if let Some(api_key) = new_cfg
+                        .api_key
+                        .clone()
+                        .filter(|value| !value.trim().is_empty())
                     {
                         SdkClientBuilder::new().api_key(api_key)
                     } else {
@@ -2497,8 +2524,7 @@ pub async fn spawn_worker(
                             let new_cache_path = model_search_cache_path(&downloader_config);
                             let new_image_search_cache_path =
                                 image_search_cache_root(&downloader_config);
-                            let new_cover_cache_path =
-                                model_cover_cache_root(&downloader_config);
+                            let new_cover_cache_path = model_cover_cache_root(&downloader_config);
                             let new_image_bytes_cache_path =
                                 image_bytes_cache_root(&downloader_config);
                             let new_image_detail_cache_path =
@@ -2576,7 +2602,8 @@ pub async fn spawn_worker(
                         builder.build_download().unwrap()
                     };
                     tokio::spawn(async move {
-                        let Some(spec) = download_client.build_media_download_spec(&image_hit) else {
+                        let Some(spec) = download_client.build_media_download_spec(&image_hit)
+                        else {
                             let _ = tx_msg_clone
                                 .send(AppMessage::StatusUpdate(format!(
                                     "No downloadable media found for image {}",
@@ -2604,10 +2631,7 @@ pub async fn spawn_worker(
                             )))
                             .await;
 
-                        match download_client
-                            .download(&spec, &options, None, None)
-                            .await
-                        {
+                        match download_client.download(&spec, &options, None, None).await {
                             Ok(result) => {
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
@@ -2657,8 +2681,9 @@ pub async fn spawn_worker(
                             )))
                             .await;
 
-                        if let Some(version) =
-                            model_versions(&model_hit).into_iter().find(|item| item.id == version_id)
+                        if let Some(version) = model_versions(&model_hit)
+                            .into_iter()
+                            .find(|item| item.id == version_id)
                         {
                             let selected_file = version
                                 .files
@@ -2673,17 +2698,12 @@ pub async fn spawn_worker(
                             let _estimated_size_bytes = selected_file
                                 .and_then(estimated_file_size_bytes)
                                 .unwrap_or(0);
-                            let auth = config
-                                .api_key
-                                .clone()
-                                .map(ModelDownloadAuth::QueryToken);
+                            let auth = config.api_key.clone().map(ModelDownloadAuth::QueryToken);
                             let download_url = selected_file
                                 .and_then(|file| file.download_url.clone())
                                 .unwrap_or_else(|| match auth.as_ref() {
-                                    Some(ModelDownloadAuth::QueryToken(token)) => {
-                                        download_client
-                                            .build_model_download_url_with_token(version_id, token)
-                                    }
+                                    Some(ModelDownloadAuth::QueryToken(token)) => download_client
+                                        .build_model_download_url_with_token(version_id, token),
                                     _ => download_client.build_model_download_url(version_id),
                                 });
                             let spec = DownloadSpec::new(download_url, DownloadKind::Model)
@@ -2733,7 +2753,10 @@ pub async fn spawn_worker(
                         } else {
                             let _ = tx_msg_clone
                                 .send(AppMessage::StatusUpdate(error_status_with_url(
-                                    &format!("Failed to resolve version {} for model {}", version_id, model_id),
+                                    &format!(
+                                        "Failed to resolve version {} for model {}",
+                                        version_id, model_id
+                                    ),
                                     &model_url,
                                     "selected version not found",
                                 )))
@@ -2772,10 +2795,8 @@ pub async fn spawn_worker(
                     let config = downloader_config.clone();
 
                     tokio::spawn(async move {
-                        let model_url = format!(
-                            "https://civitai.com/api/download/models/{}",
-                            version_id
-                        );
+                        let model_url =
+                            format!("https://civitai.com/api/download/models/{}", version_id);
                         let _ = tx_msg_clone
                             .send(AppMessage::StatusUpdate(status_with_url(
                                 &format!("Resuming download for model {}", model_id),
@@ -2786,7 +2807,10 @@ pub async fn spawn_worker(
                         let fallback_name = format!("civitai-model-v{version_id}");
                         let filename = resume_file_path
                             .as_ref()
-                            .and_then(|path| path.file_name().map(|value| value.to_string_lossy().to_string()))
+                            .and_then(|path| {
+                                path.file_name()
+                                    .map(|value| value.to_string_lossy().to_string())
+                            })
                             .filter(|value| !value.trim().is_empty())
                             .unwrap_or(fallback_name);
                         let target_path = resume_file_path.clone().unwrap_or_else(|| {
@@ -2794,14 +2818,10 @@ pub async fn spawn_worker(
                                 .unwrap_or_else(|_| std::path::PathBuf::from("."))
                                 .join(&filename)
                         });
-                        let auth = config
-                            .api_key
-                            .clone()
-                            .map(ModelDownloadAuth::QueryToken);
+                        let auth = config.api_key.clone().map(ModelDownloadAuth::QueryToken);
                         let download_url = match auth.as_ref() {
-                            Some(ModelDownloadAuth::QueryToken(token)) => {
-                                download_client.build_model_download_url_with_token(version_id, token)
-                            }
+                            Some(ModelDownloadAuth::QueryToken(token)) => download_client
+                                .build_model_download_url_with_token(version_id, token),
                             _ => download_client.build_model_download_url(version_id),
                         };
                         let spec = DownloadSpec::new(download_url, DownloadKind::Model)
@@ -2836,7 +2856,9 @@ pub async fn spawn_worker(
                         if resume_downloaded_bytes > 0 {
                             let percent = total_bytes
                                 .filter(|value| *value > 0)
-                                .map(|value| (resume_downloaded_bytes as f64 / value as f64) * 100.0)
+                                .map(|value| {
+                                    (resume_downloaded_bytes as f64 / value as f64) * 100.0
+                                })
                                 .unwrap_or(0.0);
                             let _ = tx_msg_clone
                                 .send(AppMessage::DownloadProgress(
@@ -2961,64 +2983,66 @@ async fn fetch_image_bytes_with_debug(
 async fn load_model_cover_result(
     version_id: u64,
     image_url: String,
-    request_key: String,
-    client: Client,
-    picker: Picker,
-    cover_cache_root: Option<PathBuf>,
-    debug_config: AppConfig,
-    use_cache: bool,
+    context: ModelCoverLoadContext,
 ) -> AppMessage {
-    if use_cache {
-        if let Some(cache_root) = cover_cache_root.as_ref() {
-            let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
-            if let Some(bytes) = load_cached_model_cover(&cache_path) {
-                if let Some(protocol) = decode_model_cover(&bytes, &picker) {
-                    debug_fetch_log(
-                        &debug_config,
-                        &format!(
-                            "Model cover loaded from cache: version_id={}, url={}",
-                            version_id, image_url
-                        ),
-                    );
-                    return AppMessage::ModelCoverDecoded(
-                        version_id,
-                        protocol,
-                        bytes,
-                        request_key.clone(),
-                    );
-                }
-
-                let _ = std::fs::remove_file(cache_path);
+    if context.use_cache
+        && let Some(cache_root) = context.cover_cache_root.as_ref()
+    {
+        let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+        if let Some(bytes) = load_cached_model_cover(&cache_path) {
+            if let Some(protocol) = decode_model_cover(&bytes, &context.picker) {
+                debug_fetch_log(
+                    &context.debug_config,
+                    &format!(
+                        "Model cover loaded from cache: version_id={}, url={}",
+                        version_id, image_url
+                    ),
+                );
+                return AppMessage::ModelCoverDecoded(
+                    version_id,
+                    protocol,
+                    bytes,
+                    context.request_key.clone(),
+                );
             }
+
+            let _ = std::fs::remove_file(cache_path);
         }
     }
 
-    match fetch_image_bytes_with_debug(&client, &image_url, &debug_config, "Model cover").await {
+    match fetch_image_bytes_with_debug(
+        &context.client,
+        &image_url,
+        &context.debug_config,
+        "Model cover",
+    )
+    .await
+    {
         Ok(bytes) => {
             debug_fetch_log(
-                &debug_config,
+                &context.debug_config,
                 &format!(
                     "Model cover fetched: version_id={}, bytes={}",
                     version_id,
                     bytes.len()
                 ),
             );
-            if let Some(protocol) = decode_model_cover(&bytes, &picker) {
-                if use_cache {
-                    if let Some(cache_root) = cover_cache_root.as_ref() {
-                        let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
-                        persist_model_cover_cache(&cache_path, &bytes);
-                    }
+            if let Some(protocol) = decode_model_cover(&bytes, &context.picker) {
+                if context.use_cache
+                    && let Some(cache_root) = context.cover_cache_root.as_ref()
+                {
+                    let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+                    persist_model_cover_cache(&cache_path, &bytes);
                 }
                 return AppMessage::ModelCoverDecoded(
                     version_id,
                     protocol,
                     bytes.to_vec(),
-                    request_key.clone(),
+                    context.request_key.clone(),
                 );
             }
             debug_fetch_log(
-                &debug_config,
+                &context.debug_config,
                 &format!(
                     "Model cover decode failed: version_id={}, url={}",
                     version_id, image_url
@@ -3027,7 +3051,7 @@ async fn load_model_cover_result(
         }
         Err(e) => {
             debug_fetch_log(
-                &debug_config,
+                &context.debug_config,
                 &format!(
                     "Model cover fetch failed: version_id={}, url={}, err={}",
                     version_id, image_url, e
@@ -3042,44 +3066,46 @@ async fn load_model_cover_result(
 async fn load_model_cover_results(
     version_id: u64,
     image_urls: Vec<String>,
-    request_key: String,
-    client: Client,
-    picker: Picker,
-    cover_cache_root: Option<PathBuf>,
-    debug_config: AppConfig,
-    use_cache: bool,
+    context: ModelCoverLoadContext,
 ) -> AppMessage {
     let mut protocols = Vec::new();
 
     for image_url in image_urls {
-        if use_cache {
-            if let Some(cache_root) = cover_cache_root.as_ref() {
-                let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
-                if let Some(bytes) = load_cached_model_cover(&cache_path) {
-                    if let Some(protocol) = decode_model_cover(&bytes, &picker) {
-                        protocols.push((protocol, bytes));
-                        continue;
-                    }
-                    let _ = std::fs::remove_file(cache_path);
+        if context.use_cache
+            && let Some(cache_root) = context.cover_cache_root.as_ref()
+        {
+            let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+            if let Some(bytes) = load_cached_model_cover(&cache_path) {
+                if let Some(protocol) = decode_model_cover(&bytes, &context.picker) {
+                    protocols.push((protocol, bytes));
+                    continue;
                 }
+                let _ = std::fs::remove_file(cache_path);
             }
         }
 
-        match fetch_image_bytes_with_debug(&client, &image_url, &debug_config, "Model cover").await {
+        match fetch_image_bytes_with_debug(
+            &context.client,
+            &image_url,
+            &context.debug_config,
+            "Model cover",
+        )
+        .await
+        {
             Ok(bytes) => {
-                if let Some(protocol) = decode_model_cover(&bytes, &picker) {
-                    if use_cache {
-                        if let Some(cache_root) = cover_cache_root.as_ref() {
-                            let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
-                            persist_model_cover_cache(&cache_path, &bytes);
-                        }
+                if let Some(protocol) = decode_model_cover(&bytes, &context.picker) {
+                    if context.use_cache
+                        && let Some(cache_root) = context.cover_cache_root.as_ref()
+                    {
+                        let cache_path = model_cover_cache_path(cache_root, version_id, &image_url);
+                        persist_model_cover_cache(&cache_path, &bytes);
                     }
                     protocols.push((protocol, bytes.to_vec()));
                 }
             }
             Err(e) => {
                 debug_fetch_log(
-                    &debug_config,
+                    &context.debug_config,
                     &format!(
                         "Model cover fetch failed: version_id={}, url={}, err={}",
                         version_id, image_url, e
@@ -3092,7 +3118,7 @@ async fn load_model_cover_results(
     if protocols.is_empty() {
         AppMessage::ModelCoverLoadFailed(version_id)
     } else {
-        AppMessage::ModelCoversDecoded(version_id, protocols, request_key)
+        AppMessage::ModelCoversDecoded(version_id, protocols, context.request_key)
     }
 }
 
@@ -3122,84 +3148,81 @@ async fn fetch_cover_urls_for_version(
         .collect()
 }
 
-async fn load_feed_image(
-    image_id: u64,
-    image_url: String,
-    request_key: String,
-    client: Client,
-    picker: Picker,
-    tx_msg: mpsc::Sender<AppMessage>,
-    semaphore: Arc<Semaphore>,
-    debug_config: AppConfig,
-    image_bytes_cache_root: Option<PathBuf>,
-    ttl_minutes: u64,
-    use_cache: bool,
-) {
-    if use_cache {
-        if let Some(cache_root) = image_bytes_cache_root.as_ref() {
-            let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
-            if let Some(bytes) = load_cached_feed_image(&cache_path, ttl_minutes) {
-                debug_fetch_log(
-                    &debug_config,
-                    &format!(
-                        "Image feed loaded from cache: id={}, url={}",
-                        image_id, image_url
-                    ),
-                );
-                if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                    let protocol = picker.new_resize_protocol(dyn_img);
-                    let _ = tx_msg
-                        .send(AppMessage::ImageDecoded(
-                            image_id,
-                            protocol,
-                            bytes,
-                            request_key.clone(),
-                        ))
-                        .await;
-                    return;
-                }
-                let _ = std::fs::remove_file(cache_path);
+async fn load_feed_image(image_id: u64, image_url: String, context: FeedImageLoadContext) {
+    if context.use_cache
+        && let Some(cache_root) = context.image_bytes_cache_root.as_ref()
+    {
+        let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
+        if let Some(bytes) = load_cached_feed_image(&cache_path, context.ttl_minutes) {
+            debug_fetch_log(
+                &context.debug_config,
+                &format!(
+                    "Image feed loaded from cache: id={}, url={}",
+                    image_id, image_url
+                ),
+            );
+            if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+                let protocol = context.picker.new_resize_protocol(dyn_img);
+                let _ = context
+                    .tx_msg
+                    .send(AppMessage::ImageDecoded(
+                        image_id,
+                        protocol,
+                        bytes,
+                        context.request_key.clone(),
+                    ))
+                    .await;
+                return;
             }
+            let _ = std::fs::remove_file(cache_path);
         }
     }
 
-    let _permit = match semaphore.acquire_owned().await {
+    let _permit = match context.semaphore.acquire_owned().await {
         Ok(permit) => permit,
         Err(_) => return,
     };
 
-    match fetch_image_bytes_with_debug(&client, &image_url, &debug_config, "Image feed").await {
+    match fetch_image_bytes_with_debug(
+        &context.client,
+        &image_url,
+        &context.debug_config,
+        "Image feed",
+    )
+    .await
+    {
         Ok(bytes) => {
             debug_fetch_log(
-                &debug_config,
+                &context.debug_config,
                 &format!("Image feed fetched: id={}, bytes={}", image_id, bytes.len()),
             );
             if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                if use_cache {
-                    if let Some(cache_root) = image_bytes_cache_root.as_ref() {
-                        let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
-                        persist_cached_feed_image(&cache_path, &bytes);
-                    }
+                if context.use_cache
+                    && let Some(cache_root) = context.image_bytes_cache_root.as_ref()
+                {
+                    let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
+                    persist_cached_feed_image(&cache_path, &bytes);
                 }
-                let protocol = picker.new_resize_protocol(dyn_img);
-                let _ = tx_msg
+                let protocol = context.picker.new_resize_protocol(dyn_img);
+                let _ = context
+                    .tx_msg
                     .send(AppMessage::ImageDecoded(
                         image_id,
                         protocol,
                         bytes.to_vec(),
-                        request_key.clone(),
+                        context.request_key.clone(),
                     ))
                     .await;
             } else {
                 debug_fetch_log(
-                    &debug_config,
+                    &context.debug_config,
                     &format!("Image feed decode failed: id={}", image_id),
                 );
             }
         }
         Err(e) => {
             debug_fetch_log(
-                &debug_config,
+                &context.debug_config,
                 &format!(
                     "Image feed fetch failed: id={}, url={}, err={}",
                     image_id, image_url, e

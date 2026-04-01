@@ -33,7 +33,13 @@ pub enum SearchPeriod {
 
 impl SearchPeriod {
     pub fn all() -> Vec<Self> {
-        vec![Self::AllTime, Self::Year, Self::Month, Self::Week, Self::Day]
+        vec![
+            Self::AllTime,
+            Self::Year,
+            Self::Month,
+            Self::Week,
+            Self::Day,
+        ]
     }
 
     pub fn label(&self) -> &'static str {
@@ -287,7 +293,10 @@ mod tests {
         let options = form.build_options();
 
         assert_eq!(options.query.as_deref(), Some("flux"));
-        assert_eq!(options.tags, vec!["anime".to_string(), "detailed".to_string()]);
+        assert_eq!(
+            options.tags,
+            vec!["anime".to_string(), "detailed".to_string()]
+        );
         assert_eq!(options.types, vec![ModelType::Lora]);
         assert_eq!(options.base_models, vec![ModelBaseModel::Flux1D]);
         assert!(options.created_at.is_some());
@@ -308,7 +317,10 @@ mod tests {
         let options = form.build_options();
 
         assert_eq!(options.query.as_deref(), Some("portrait"));
-        assert_eq!(options.tags, vec!["studio".to_string(), "cinematic".to_string()]);
+        assert_eq!(
+            options.tags,
+            vec!["studio".to_string(), "cinematic".to_string()]
+        );
         assert_eq!(options.base_models, vec![ImageBaseModel::Flux1D]);
         assert_eq!(options.aspect_ratios, vec![ImageAspectRatio::Landscape]);
         assert_eq!(

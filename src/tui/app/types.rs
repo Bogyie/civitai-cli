@@ -1,9 +1,18 @@
-use civitai_cli::sdk::{ImageSearchState, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model};
+use civitai_cli::sdk::{
+    ImageSearchState, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
+};
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::tui::app::MediaRenderRequest;
+
+pub type ImageDimensions = (u32, u32);
+pub type CoverImageUrl = Option<String>;
+pub type CoverSourceDimensions = Option<ImageDimensions>;
+pub type VersionCoverJob = (u64, CoverImageUrl, CoverSourceDimensions);
+pub type SelectedModelCover = (u64, u64, CoverImageUrl, CoverSourceDimensions);
+pub type SelectedVersionCover = (u64, CoverImageUrl, CoverSourceDimensions);
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
@@ -35,7 +44,7 @@ pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
     ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
-    ModelDetailLoaded(Model, Option<u64>),
+    ModelDetailLoaded(Box<Model>, Option<u64>),
     ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String),
     ModelCoverLoadFailed(u64),
@@ -88,6 +97,18 @@ pub struct DownloadHistoryEntry {
     pub created_at: std::time::SystemTime,
 }
 
+pub struct NewDownloadHistoryEntry {
+    pub model_id: u64,
+    pub version_id: u64,
+    pub filename: String,
+    pub model_name: String,
+    pub file_path: Option<PathBuf>,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+    pub status: DownloadHistoryStatus,
+    pub progress: f64,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct InterruptedDownloadSession {
     pub model_id: u64,
@@ -117,10 +138,7 @@ pub enum WorkerCommand {
     ClearSearchCache,
     ClearAllCaches,
     PrioritizeModelCover(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
-    PrefetchModelCovers(
-        Vec<(u64, Option<String>, Option<(u32, u32)>)>,
-        MediaRenderRequest,
-    ),
+    PrefetchModelCovers(Vec<VersionCoverJob>, MediaRenderRequest),
     DownloadImage(ImageItem),
     DownloadModel(Model, u64, usize),
     PauseDownload(u64),

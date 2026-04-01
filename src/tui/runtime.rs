@@ -49,10 +49,7 @@ pub fn model_cover_render_request_for_size(cols: u16, rows: u16) -> MediaRenderR
     }
 }
 
-pub fn render_request_key(
-    request: MediaRenderRequest,
-    quality: MediaQualityPreference,
-) -> String {
+pub fn render_request_key(request: MediaRenderRequest, quality: MediaQualityPreference) -> String {
     format!("{}:{}x{}", quality.label(), request.width, request.height)
 }
 
