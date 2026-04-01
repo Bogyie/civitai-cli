@@ -13,7 +13,7 @@ Terminal-first Civitai browser and downloader for ComfyUI-focused workflows.
 
 ## Installation
 
-Current project version: `1.1.0`
+Current project version: `1.1.1`
 
 This is a TUI-heavy workflow tool built around the public Civitai API and local ComfyUI model folders.
 
@@ -51,15 +51,15 @@ make build
 Debian / Ubuntu:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli_1.1.0_amd64.deb
-sudo dpkg -i civitai-cli_1.1.0_amd64.deb
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli_1.1.1_amd64.deb
+sudo dpkg -i civitai-cli_1.1.1_amd64.deb
 ```
 
 Fedora / RHEL / openSUSE:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli-1.1.0-1.x86_64.rpm
-sudo rpm -i civitai-cli-1.1.0-1.x86_64.rpm
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1/civitai-cli-1.1.1-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.1.1-1.x86_64.rpm
 ```
 
 ## Screenshots
@@ -404,8 +404,8 @@ GitHub Actions is configured to create a GitHub Release automatically when a tag
 Example:
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 The release workflow validates that the tag version matches the version in [Cargo.toml](/Users/dev/repo/github/bogyie/civitai-cli/Cargo.toml).
