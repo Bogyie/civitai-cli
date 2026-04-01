@@ -1,29 +1,36 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use reqwest::{Client, StatusCode};
-use serde_json::{json, Value};
+use reqwest::{Client, IntoUrl, StatusCode};
+use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
+use super::api::{
+    ApiImageResponse, ApiImageSearchOptions, ApiModel, ApiModelSearchOptions, ApiModelVersion,
+    ApiPaginatedResponse, build_api_images_search_url, build_api_model_url,
+    build_api_model_version_by_hash_url, build_api_models_search_url,
+};
 use super::constants::{
     CIVITAI_IMAGE_SEARCH_CLIENT_KEY, CIVITAI_IMAGE_SEARCH_MEILI_URL,
     CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL,
     CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL, IMAGES_SEARCH_INDEX, MODELS_SEARCH_INDEX,
 };
 use super::download::{
-    authorization_header_value, content_disposition_file_name, content_range_total, emit_event,
-    ensure_parent_dir, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
-    DownloadOptions, DownloadResult, DownloadSpec,
+    DownloadControl, DownloadDestination, DownloadEvent, DownloadKind, DownloadOptions,
+    DownloadResult, DownloadSpec, authorization_header_value, content_disposition_file_name,
+    content_range_total, emit_event, ensure_parent_dir,
 };
 use super::image_search::{ImageSearchState, SearchImageHit, SearchImageResponse};
 use super::model_search::{
-    build_model_download_url_with_token_and_base, ModelDownloadAuth, ModelSearchState,
-    SearchModelHit, SearchModelResponse,
+    ModelDownloadAuth, ModelSearchState, SearchModelHit, SearchModelResponse,
+    build_model_download_url_with_token_and_base,
 };
 use super::shared::{build_created_at_filters, push_equals_filters};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchSdkConfig {
+    pub api_base_url: String,
+    pub api_key: Option<String>,
     pub meili_base_url: String,
     pub meili_client_key: String,
     pub civitai_web_url: String,
@@ -35,14 +42,11 @@ pub struct SearchSdkConfig {
     pub user_agent: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchSdkConfigBuilder {
-    config: SearchSdkConfig,
-}
-
 impl Default for SearchSdkConfig {
     fn default() -> Self {
         Self {
+            api_base_url: CIVITAI_WEB_URL.to_string(),
+            api_key: None,
             meili_base_url: CIVITAI_IMAGE_SEARCH_MEILI_URL.to_string(),
             meili_client_key: CIVITAI_IMAGE_SEARCH_CLIENT_KEY.to_string(),
             civitai_web_url: CIVITAI_WEB_URL.to_string(),
@@ -57,20 +61,44 @@ impl Default for SearchSdkConfig {
 }
 
 impl SearchSdkConfig {
-    pub fn builder() -> SearchSdkConfigBuilder {
-        SearchSdkConfigBuilder {
-            config: Self::default(),
+    pub fn builder() -> SdkClientBuilder {
+        SdkClientBuilder::default()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SdkClientBuilder {
+    config: SearchSdkConfig,
+}
+
+impl Default for SdkClientBuilder {
+    fn default() -> Self {
+        Self {
+            config: SearchSdkConfig::default(),
         }
     }
 }
 
-impl Default for SearchSdkConfigBuilder {
-    fn default() -> Self {
-        SearchSdkConfig::builder()
+impl SdkClientBuilder {
+    pub fn new() -> Self {
+        Self::default()
     }
-}
 
-impl SearchSdkConfigBuilder {
+    pub fn api_base_url(mut self, value: impl Into<String>) -> Self {
+        self.config.api_base_url = value.into();
+        self
+    }
+
+    pub fn api_key(mut self, value: impl Into<String>) -> Self {
+        self.config.api_key = Some(value.into());
+        self
+    }
+
+    pub fn clear_api_key(mut self) -> Self {
+        self.config.api_key = None;
+        self
+    }
+
     pub fn meili_base_url(mut self, value: impl Into<String>) -> Self {
         self.config.meili_base_url = value.into();
         self
@@ -116,116 +144,92 @@ impl SearchSdkConfigBuilder {
         self
     }
 
-    pub fn build(self) -> SearchSdkConfig {
+    pub fn build_config(self) -> SearchSdkConfig {
         self.config
+    }
+
+    pub fn build_web(self) -> Result<WebSearchClient> {
+        WebSearchClient::from_config(self.config)
+    }
+
+    pub fn build_api(self) -> Result<ApiClient> {
+        ApiClient::from_config(self.config)
+    }
+
+    pub fn build_download(self) -> Result<DownloadClient> {
+        DownloadClient::from_config(self.config)
+    }
+
+    pub fn build_clients(self) -> Result<SdkClients> {
+        SdkClients::from_config(self.config)
     }
 }
 
 #[derive(Clone)]
-pub struct SearchSdkClient {
+pub struct WebSearchClient {
     client: Client,
     config: SearchSdkConfig,
 }
 
-impl SearchSdkClient {
+#[derive(Clone)]
+pub struct ApiClient {
+    client: Client,
+    config: SearchSdkConfig,
+}
+
+#[derive(Clone)]
+pub struct DownloadClient {
+    client: Client,
+    config: SearchSdkConfig,
+}
+
+#[derive(Clone)]
+pub struct SdkClients {
+    pub web: WebSearchClient,
+    pub api: ApiClient,
+    pub download: DownloadClient,
+}
+
+impl SdkClients {
+    pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
+        let web = WebSearchClient::from_config(config.clone())?;
+        let api = ApiClient::from_config(config.clone())?;
+        let download = DownloadClient::from_config(config)?;
+        Ok(Self {
+            web,
+            api,
+            download,
+        })
+    }
+}
+
+impl WebSearchClient {
     pub fn new() -> Result<Self> {
-        Self::with_config(SearchSdkConfig::default())
+        Self::from_config(SearchSdkConfig::default())
     }
 
     pub fn with_config(config: SearchSdkConfig) -> Result<Self> {
-        let client = Client::builder()
-            .user_agent(&config.user_agent)
-            .build()
-            .context("Failed to build HTTP client")?;
-        Ok(Self { client, config })
+        Self::from_config(config)
+    }
+
+    pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
+        Ok(Self {
+            client: build_http_client(&config)?,
+            config,
+        })
     }
 
     pub fn config(&self) -> &SearchSdkConfig {
         &self.config
     }
 
-    fn build_image_meili_payload(state: &ImageSearchState) -> Value {
-        let limit = state.limit.unwrap_or(50);
-        let page_index = state.page.unwrap_or(0);
-        let offset = page_index.saturating_mul(limit);
-
-        let mut filters = Vec::new();
-        push_equals_filters(&mut filters, "tagNames", &state.tags);
-        push_equals_filters(&mut filters, "toolNames", &state.tools);
-        push_equals_filters(&mut filters, "techniqueNames", &state.techniques);
-        push_equals_filters(&mut filters, "user.username", &state.users);
-        push_equals_filters(&mut filters, "baseModel", &state.base_models);
-        push_equals_filters(&mut filters, "aspectRatio", &state.aspect_ratios);
-
-        if let Some(created_at) = state.created_at.as_ref() {
-            filters.extend(build_created_at_filters(created_at, "createdAtUnix"));
-        }
-
-        if let Some(image_id) = state.image_id {
-            filters.push(format!("id = {image_id}"));
-        }
-
-        let mut payload = json!({
-            "q": state.query.clone().unwrap_or_default(),
-            "limit": limit,
-            "offset": offset,
-            "attributesToHighlight": [],
-        });
-
-        if !filters.is_empty() {
-            payload["filter"] = json!(filters);
-        }
-
-        if let Some(sort) = state.sort_by.to_meili_sort_value() {
-            payload["sort"] = json!([sort]);
-        }
-
-        payload
-    }
-
-    fn build_model_meili_payload(state: &ModelSearchState) -> Value {
-        let limit = state.limit.unwrap_or(50);
-        let page_index = state.page.unwrap_or(0);
-        let offset = page_index.saturating_mul(limit);
-
-        let mut filters = Vec::new();
-        push_equals_filters(&mut filters, "version.baseModel", &state.base_models);
-        push_equals_filters(&mut filters, "type", &state.types);
-        push_equals_filters(&mut filters, "checkpointType", &state.checkpoint_types);
-        push_equals_filters(&mut filters, "fileFormats", &state.file_formats);
-        push_equals_filters(&mut filters, "category.name", &state.categories);
-        push_equals_filters(&mut filters, "user.username", &state.users);
-        push_equals_filters(&mut filters, "tags.name", &state.tags);
-
-        if let Some(created_at) = state.created_at.as_ref() {
-            filters.extend(build_created_at_filters(created_at, "lastVersionAtUnix"));
-        }
-
-        let mut payload = json!({
-            "q": state.query.clone().unwrap_or_default(),
-            "limit": limit,
-            "offset": offset,
-            "attributesToHighlight": [],
-        });
-
-        if !filters.is_empty() {
-            payload["filter"] = json!(filters);
-        }
-
-        if let Some(sort) = state.sort_by.to_meili_sort_value() {
-            payload["sort"] = json!([sort]);
-        }
-
-        payload
-    }
-
-    pub async fn search_images_web_raw(&self, state: &ImageSearchState) -> Result<Value> {
+    pub async fn search_images_raw(&self, state: &ImageSearchState) -> Result<Value> {
         let url = format!(
             "{}/indexes/{}/search",
             self.config.meili_base_url.trim_end_matches('/'),
             self.config.images_index.trim_matches('/')
         );
-        let payload = Self::build_image_meili_payload(state);
+        let payload = build_image_meili_payload(state);
         let response = self
             .client
             .post(url)
@@ -246,22 +250,18 @@ impl SearchSdkClient {
             .context("Failed to decode Civitai web image search response")
     }
 
-    pub async fn search_images_web(&self, state: &ImageSearchState) -> Result<SearchImageResponse> {
-        let value = self.search_images_web_raw(state).await?;
-        serde_json::from_value(value).context("Failed to decode typed web search response")
+    pub async fn search_images(&self, state: &ImageSearchState) -> Result<SearchImageResponse> {
+        let value = self.search_images_raw(state).await?;
+        serde_json::from_value(value).context("Failed to decode typed web image search response")
     }
 
-    pub async fn search_images_raw(&self, state: &ImageSearchState) -> Result<Value> {
-        self.search_images_web_raw(state).await
-    }
-
-    pub async fn search_models_web_raw(&self, state: &ModelSearchState) -> Result<Value> {
+    pub async fn search_models_raw(&self, state: &ModelSearchState) -> Result<Value> {
         let url = format!(
             "{}/indexes/{}/search",
             self.config.meili_base_url.trim_end_matches('/'),
             self.config.models_index.trim_matches('/')
         );
-        let payload = Self::build_model_meili_payload(state);
+        let payload = build_model_meili_payload(state);
         let response = self
             .client
             .post(url)
@@ -282,68 +282,109 @@ impl SearchSdkClient {
             .context("Failed to decode Civitai web model search response")
     }
 
-    pub async fn search_models_web(&self, state: &ModelSearchState) -> Result<SearchModelResponse> {
-        let value = self.search_models_web_raw(state).await?;
+    pub async fn search_models(&self, state: &ModelSearchState) -> Result<SearchModelResponse> {
+        let value = self.search_models_raw(state).await?;
         serde_json::from_value(value).context("Failed to decode typed web model search response")
     }
+}
 
-    pub async fn search_models_raw(&self, state: &ModelSearchState) -> Result<Value> {
-        self.search_models_web_raw(state).await
+impl ApiClient {
+    pub fn new() -> Result<Self> {
+        Self::from_config(SearchSdkConfig::default())
     }
 
-    pub fn build_model_download_request(
-        &self,
-        version_id: u64,
-        auth: Option<&ModelDownloadAuth>,
-    ) -> reqwest::RequestBuilder {
-        let request_url = match auth {
-            Some(ModelDownloadAuth::QueryToken(token)) => {
-                self.build_model_download_url_with_token(version_id, token)
-            }
-            _ => self.build_model_download_url(version_id),
-        };
-        let mut request = self.client.get(request_url);
-
-        if let Some(ModelDownloadAuth::BearerToken(token)) = auth {
-            let token = token.trim();
-            if !token.is_empty() {
-                request = request.bearer_auth(token);
-            }
-        }
-
-        request
+    pub fn with_config(config: SearchSdkConfig) -> Result<Self> {
+        Self::from_config(config)
     }
 
-    pub fn build_download_request(
+    pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
+        Ok(Self {
+            client: build_http_client(&config)?,
+            config,
+        })
+    }
+
+    pub fn config(&self) -> &SearchSdkConfig {
+        &self.config
+    }
+
+    pub async fn get_model(&self, model_id: u64) -> Result<ApiModel> {
+        let url = build_api_model_url(&self.config.api_base_url, model_id);
+        self.fetch(url).await
+    }
+
+    pub async fn get_model_version_by_hash(&self, hash: &str) -> Result<ApiModelVersion> {
+        let url = build_api_model_version_by_hash_url(&self.config.api_base_url, hash);
+        self.fetch(url).await
+    }
+
+    pub async fn search_models(
         &self,
-        url: &str,
-        auth: Option<&ModelDownloadAuth>,
-        range_start: Option<u64>,
-    ) -> Result<reqwest::RequestBuilder> {
-        let request_url = match auth {
-            Some(ModelDownloadAuth::QueryToken(token)) => {
-                append_query_token(url, token)?
-            }
-            _ => url.to_string(),
-        };
+        opts: &ApiModelSearchOptions,
+    ) -> Result<ApiPaginatedResponse<ApiModel>> {
+        let url = build_api_models_search_url(&self.config.api_base_url, opts)?;
+        self.fetch(url).await
+    }
 
-        let mut request = self.client.get(request_url);
+    pub async fn search_models_by_url(
+        &self,
+        url: impl IntoUrl,
+    ) -> Result<ApiPaginatedResponse<ApiModel>> {
+        self.fetch(url).await
+    }
 
-        if let Some(ModelDownloadAuth::BearerToken(token)) = auth {
-            let token = token.trim();
-            if !token.is_empty() {
-                request = request.header(
-                    reqwest::header::AUTHORIZATION,
-                    authorization_header_value(token)?,
-                );
-            }
+    pub async fn search_images(&self, opts: &ApiImageSearchOptions) -> Result<ApiImageResponse> {
+        let url = build_api_images_search_url(&self.config.api_base_url, opts)?;
+        self.fetch(url).await
+    }
+
+    pub async fn get_images_by_url(&self, url: impl IntoUrl) -> Result<ApiImageResponse> {
+        self.fetch(url).await
+    }
+
+    async fn fetch<T: serde::de::DeserializeOwned, U: IntoUrl>(&self, url: U) -> Result<T> {
+        let mut request = self.client.get(url);
+        if let Some(api_key) = self
+            .config
+            .api_key
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            request = request.bearer_auth(api_key);
         }
 
-        if let Some(start) = range_start {
-            request = request.header(reqwest::header::RANGE, format!("bytes={start}-"));
-        }
+        let response = request
+            .send()
+            .await
+            .context("Failed to send Civitai API request")?
+            .error_for_status()
+            .context("Civitai API endpoint returned error")?;
 
-        Ok(request)
+        response
+            .json::<T>()
+            .await
+            .context("Failed to decode Civitai API response")
+    }
+}
+
+impl DownloadClient {
+    pub fn new() -> Result<Self> {
+        Self::from_config(SearchSdkConfig::default())
+    }
+
+    pub fn with_config(config: SearchSdkConfig) -> Result<Self> {
+        Self::from_config(config)
+    }
+
+    pub fn from_config(config: SearchSdkConfig) -> Result<Self> {
+        Ok(Self {
+            client: build_http_client(&config)?,
+            config,
+        })
+    }
+
+    pub fn config(&self) -> &SearchSdkConfig {
+        &self.config
     }
 
     pub fn image_page_url(&self, hit: &SearchImageHit) -> String {
@@ -404,20 +445,12 @@ impl SearchSdkClient {
 
     pub fn build_image_download_spec(&self, hit: &SearchImageHit) -> Option<DownloadSpec> {
         let spec = self.build_media_download_spec(hit)?;
-        if spec.kind == DownloadKind::Image {
-            Some(spec)
-        } else {
-            None
-        }
+        (spec.kind == DownloadKind::Image).then_some(spec)
     }
 
     pub fn build_video_download_spec(&self, hit: &SearchImageHit) -> Option<DownloadSpec> {
         let spec = self.build_media_download_spec(hit)?;
-        if spec.kind == DownloadKind::Video {
-            Some(spec)
-        } else {
-            None
-        }
+        (spec.kind == DownloadKind::Video).then_some(spec)
     }
 
     pub fn build_model_download_spec(
@@ -443,6 +476,59 @@ impl SearchSdkClient {
         })
     }
 
+    pub fn build_model_download_request(
+        &self,
+        version_id: u64,
+        auth: Option<&ModelDownloadAuth>,
+    ) -> reqwest::RequestBuilder {
+        let request_url = match auth {
+            Some(ModelDownloadAuth::QueryToken(token)) => {
+                self.build_model_download_url_with_token(version_id, token)
+            }
+            _ => self.build_model_download_url(version_id),
+        };
+        let mut request = self.client.get(request_url);
+
+        if let Some(ModelDownloadAuth::BearerToken(token)) = auth {
+            let token = token.trim();
+            if !token.is_empty() {
+                request = request.bearer_auth(token);
+            }
+        }
+
+        request
+    }
+
+    pub fn build_download_request(
+        &self,
+        url: &str,
+        auth: Option<&ModelDownloadAuth>,
+        range_start: Option<u64>,
+    ) -> Result<reqwest::RequestBuilder> {
+        let request_url = match auth {
+            Some(ModelDownloadAuth::QueryToken(token)) => append_query_token(url, token)?,
+            _ => url.to_string(),
+        };
+
+        let mut request = self.client.get(request_url);
+
+        if let Some(ModelDownloadAuth::BearerToken(token)) = auth {
+            let token = token.trim();
+            if !token.is_empty() {
+                request = request.header(
+                    reqwest::header::AUTHORIZATION,
+                    authorization_header_value(token)?,
+                );
+            }
+        }
+
+        if let Some(start) = range_start {
+            request = request.header(reqwest::header::RANGE, format!("bytes={start}-"));
+        }
+
+        Ok(request)
+    }
+
     pub async fn download(
         &self,
         spec: &DownloadSpec,
@@ -450,52 +536,35 @@ impl SearchSdkClient {
         progress_tx: Option<mpsc::Sender<DownloadEvent>>,
         mut control_rx: Option<mpsc::Receiver<DownloadControl>>,
     ) -> Result<DownloadResult> {
-        let target_path = match &options.destination {
+        let provisional_path = match &options.destination {
             DownloadDestination::File(path) => path.clone(),
             DownloadDestination::Directory(path) => path.join(spec.suggested_file_name()),
         };
 
         if options.create_parent_dirs {
-            ensure_parent_dir(&target_path).await?;
+            ensure_parent_dir(&provisional_path).await?;
         }
 
-        let existing_size = if options.resume {
-            tokio::fs::metadata(&target_path)
-                .await
-                .map(|metadata| metadata.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        let resumable = options.resume && existing_size > 0;
-
-        let response = self
-            .build_download_request(
-                &spec.url,
-                spec.auth.as_ref(),
-                if resumable { Some(existing_size) } else { None },
-            )?
+        let initial_response = self
+            .build_download_request(&spec.url, spec.auth.as_ref(), None)?
             .send()
             .await
-            .context("Failed to send download request")?;
-
-        let response = response
+            .context("Failed to send download request")?
             .error_for_status()
             .context("Download endpoint returned error")?;
 
-        let status = response.status();
-        let headers = response.headers().clone();
+        let headers = initial_response.headers().clone();
         let content_type = headers
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
 
         let actual_target_path = match &options.destination {
-            DownloadDestination::File(_) => target_path,
+            DownloadDestination::File(_) => provisional_path,
             DownloadDestination::Directory(path) => {
                 let file_name = content_disposition_file_name(&headers)
                     .or_else(|| {
-                        target_path
+                        provisional_path
                             .file_name()
                             .map(|value| value.to_string_lossy().to_string())
                     })
@@ -508,8 +577,32 @@ impl SearchSdkClient {
             ensure_parent_dir(&actual_target_path).await?;
         }
 
-        let resumed = resumable && status == StatusCode::PARTIAL_CONTENT;
-        let total_bytes = if resumed {
+        let existing_size = if options.resume {
+            tokio::fs::metadata(&actual_target_path)
+                .await
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let should_resume = options.resume
+            && existing_size > 0
+            && matches!(&options.destination, DownloadDestination::File(_));
+
+        let response = if should_resume {
+            self.build_download_request(&spec.url, spec.auth.as_ref(), Some(existing_size))?
+                .send()
+                .await
+                .context("Failed to send resumable download request")?
+                .error_for_status()
+                .context("Download endpoint returned error")?
+        } else {
+            initial_response
+        };
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let total_bytes = if should_resume && status == StatusCode::PARTIAL_CONTENT {
             content_range_total(&headers).or_else(|| {
                 response
                     .content_length()
@@ -518,6 +611,7 @@ impl SearchSdkClient {
         } else {
             response.content_length()
         };
+        let resumed = should_resume && status == StatusCode::PARTIAL_CONTENT;
 
         let mut downloaded_bytes = if resumed { existing_size } else { 0 };
         let mut file = if resumed {
@@ -528,8 +622,15 @@ impl SearchSdkClient {
                 .await
                 .with_context(|| format!("Failed to open {}", actual_target_path.display()))?
         } else {
-            if !options.overwrite && tokio::fs::try_exists(&actual_target_path).await.unwrap_or(false) {
-                return Err(anyhow!("Refusing to overwrite {}", actual_target_path.display()));
+            if !options.overwrite
+                && tokio::fs::try_exists(&actual_target_path)
+                    .await
+                    .unwrap_or(false)
+            {
+                return Err(anyhow!(
+                    "Refusing to overwrite {}",
+                    actual_target_path.display()
+                ));
             }
             tokio::fs::File::create(&actual_target_path)
                 .await
@@ -673,6 +774,88 @@ impl SearchSdkClient {
     }
 }
 
+fn build_http_client(config: &SearchSdkConfig) -> Result<Client> {
+    Client::builder()
+        .user_agent(&config.user_agent)
+        .build()
+        .context("Failed to build HTTP client")
+}
+
+fn build_image_meili_payload(state: &ImageSearchState) -> Value {
+    let limit = state.limit.unwrap_or(50);
+    let page_index = state.page.unwrap_or(0);
+    let offset = page_index.saturating_mul(limit);
+
+    let mut filters = Vec::new();
+    push_equals_filters(&mut filters, "tagNames", &state.tags);
+    push_equals_filters(&mut filters, "toolNames", &state.tools);
+    push_equals_filters(&mut filters, "techniqueNames", &state.techniques);
+    push_equals_filters(&mut filters, "user.username", &state.users);
+    push_equals_filters(&mut filters, "baseModel", &state.base_models);
+    push_equals_filters(&mut filters, "aspectRatio", &state.aspect_ratios);
+
+    if let Some(created_at) = state.created_at.as_ref() {
+        filters.extend(build_created_at_filters(created_at, "createdAtUnix"));
+    }
+
+    if let Some(image_id) = state.image_id {
+        filters.push(format!("id = {image_id}"));
+    }
+
+    let mut payload = json!({
+        "q": state.query.clone().unwrap_or_default(),
+        "limit": limit,
+        "offset": offset,
+        "attributesToHighlight": [],
+    });
+
+    if !filters.is_empty() {
+        payload["filter"] = json!(filters);
+    }
+
+    if let Some(sort) = state.sort_by.to_meili_sort_value() {
+        payload["sort"] = json!([sort]);
+    }
+
+    payload
+}
+
+fn build_model_meili_payload(state: &ModelSearchState) -> Value {
+    let limit = state.limit.unwrap_or(50);
+    let page_index = state.page.unwrap_or(0);
+    let offset = page_index.saturating_mul(limit);
+
+    let mut filters = Vec::new();
+    push_equals_filters(&mut filters, "version.baseModel", &state.base_models);
+    push_equals_filters(&mut filters, "type", &state.types);
+    push_equals_filters(&mut filters, "checkpointType", &state.checkpoint_types);
+    push_equals_filters(&mut filters, "fileFormats", &state.file_formats);
+    push_equals_filters(&mut filters, "category.name", &state.categories);
+    push_equals_filters(&mut filters, "user.username", &state.users);
+    push_equals_filters(&mut filters, "tags.name", &state.tags);
+
+    if let Some(created_at) = state.created_at.as_ref() {
+        filters.extend(build_created_at_filters(created_at, "lastVersionAtUnix"));
+    }
+
+    let mut payload = json!({
+        "q": state.query.clone().unwrap_or_default(),
+        "limit": limit,
+        "offset": offset,
+        "attributesToHighlight": [],
+    });
+
+    if !filters.is_empty() {
+        payload["filter"] = json!(filters);
+    }
+
+    if let Some(sort) = state.sort_by.to_meili_sort_value() {
+        payload["sort"] = json!([sort]);
+    }
+
+    payload
+}
+
 fn append_query_token(url: &str, token: &str) -> Result<String> {
     let token = token.trim();
     if token.is_empty() {
@@ -680,12 +863,7 @@ fn append_query_token(url: &str, token: &str) -> Result<String> {
     }
 
     let mut parsed = reqwest::Url::parse(url).context("Failed to parse download URL")?;
-    if !parsed
-        .query_pairs()
-        .any(|(key, value)| key == "token" && !value.is_empty())
-    {
-        parsed.query_pairs_mut().append_pair("token", token);
-    }
+    parsed.query_pairs_mut().append_pair("token", token);
     Ok(parsed.into())
 }
 
@@ -706,7 +884,9 @@ async fn maybe_emit_progress(
 
     let should_emit = match percent {
         Some(percent) => {
-            progress_step_percent <= 0.0 || *last_percent < 0.0 || percent - *last_percent >= progress_step_percent
+            progress_step_percent <= 0.0
+                || *last_percent < 0.0
+                || percent - *last_percent >= progress_step_percent
         }
         None => true,
     };

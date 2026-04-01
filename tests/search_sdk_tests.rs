@@ -1,8 +1,9 @@
 use civitai_cli::sdk::{
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
-    ImageSearchSortBy, ImageSearchState, ModelDownloadAuth, ModelSearchSortBy,
-    ModelSearchState, SearchImageHit, SearchModelHit, SearchSdkClient, SearchSdkConfig,
+    DownloadClient, ImageSearchSortBy, ImageSearchState, ModelDownloadAuth,
+    ModelSearchSortBy, ModelSearchState, SearchImageHit, SearchModelHit, SearchSdkConfig,
+    WebSearchClient,
 };
 use serde_json::{json, Value};
 
@@ -117,7 +118,7 @@ mod fixtures {
             .images_index("images_custom")
             .models_index("models_custom")
             .user_agent("sdk-test/1.0")
-            .build()
+            .build_config()
     }
 }
 
@@ -395,7 +396,7 @@ mod model_download_tests {
     #[tokio::test]
     async fn builds_model_download_requests_with_optional_auth(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let sdk = SearchSdkClient::new()?;
+        let sdk = DownloadClient::new()?;
 
         let plain = sdk.build_model_download_request(555, None).build()?;
         assert_eq!(
@@ -453,7 +454,7 @@ mod client_config_tests {
             .images_index("images_custom")
             .models_index("models_custom")
             .user_agent("sdk-test/1.0")
-            .build();
+            .build_config();
 
         assert_eq!(config.meili_base_url, "https://search.civitai.test");
         assert_eq!(config.meili_client_key, "secret-key");
@@ -469,7 +470,7 @@ mod client_config_tests {
     #[test]
     fn client_uses_injected_config_for_helper_urls() {
         let config = fixtures::custom_config();
-        let sdk = SearchSdkClient::with_config(config.clone()).unwrap();
+        let sdk = DownloadClient::with_config(config.clone()).unwrap();
         let image_hit = fixtures::sample_image_hit();
         let model_hit = fixtures::sample_model_hit();
 
@@ -512,7 +513,7 @@ mod live_tests {
     #[ignore]
     async fn fetch_live_civitai_image_web_search_sample(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let sdk = SearchSdkClient::new()?;
+        let sdk = WebSearchClient::new()?;
         let state = ImageSearchState {
             query: Some("man".to_string()),
             tags: vec!["xxx".to_string()],
@@ -520,7 +521,7 @@ mod live_tests {
             limit: Some(2),
             ..Default::default()
         };
-        let typed = sdk.search_images_web(&state).await?;
+        let typed = sdk.search_images(&state).await?;
         let value: Value = sdk.search_images_raw(&state).await?;
 
         let items = value["hits"].as_array().cloned().unwrap_or_default();
@@ -594,7 +595,7 @@ mod live_tests {
     #[ignore]
     async fn fetch_live_civitai_model_web_search_sample(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let sdk = SearchSdkClient::new()?;
+        let sdk = WebSearchClient::new()?;
         let state = ModelSearchState {
             query: Some("hello".to_string()),
             tags: vec!["anime".to_string()],
@@ -602,7 +603,7 @@ mod live_tests {
             limit: Some(2),
             ..Default::default()
         };
-        let typed = sdk.search_models_web(&state).await?;
+        let typed = sdk.search_models(&state).await?;
         let value: Value = sdk.search_models_raw(&state).await?;
 
         let items = value["hits"].as_array().cloned().unwrap_or_default();

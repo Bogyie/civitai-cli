@@ -1,6 +1,6 @@
 use civitai_cli::sdk::{
-    DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec,
-    ModelDownloadAuth, SearchImageHit, SearchModelHit, SearchSdkClient,
+    DownloadClient, DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec,
+    ModelDownloadAuth, SearchImageHit, SearchModelHit,
 };
 use civitai_cli::sdk::{DownloadDestination, SearchSdkConfig};
 use std::path::PathBuf;
@@ -183,13 +183,13 @@ fn sample_model_hit() -> SearchModelHit {
 
 #[test]
 fn builds_download_specs_from_hits() {
-    let client = SearchSdkClient::with_config(
+    let client = DownloadClient::with_config(
         SearchSdkConfig::builder()
             .civitai_web_url("https://civitai.test")
             .media_delivery_url("https://media.test")
             .media_delivery_namespace("ns")
             .model_download_api_url("https://download.test/models")
-            .build(),
+            .build_config(),
     )
     .unwrap();
 
@@ -223,7 +223,7 @@ fn builds_download_specs_from_hits() {
 #[tokio::test]
 async fn downloads_to_explicit_file_path() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = spawn_server().await?;
-    let client = SearchSdkClient::new()?;
+    let client = DownloadClient::new()?;
     let target = temp_path("explicit.bin");
 
     let spec = DownloadSpec::new(format!("{base_url}/file.bin"), DownloadKind::Other)
@@ -246,7 +246,7 @@ async fn downloads_to_explicit_file_path() -> Result<(), Box<dyn std::error::Err
 #[tokio::test]
 async fn downloads_to_directory_and_uses_server_filename() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = spawn_server().await?;
-    let client = SearchSdkClient::new()?;
+    let client = DownloadClient::new()?;
     let target_dir = temp_path("downloads-dir");
 
     let spec = DownloadSpec::new(format!("{base_url}/attachment"), DownloadKind::Other);
@@ -270,7 +270,7 @@ async fn downloads_to_directory_and_uses_server_filename() -> Result<(), Box<dyn
 #[tokio::test]
 async fn resumes_partial_download_and_emits_events() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = spawn_server().await?;
-    let client = SearchSdkClient::new()?;
+    let client = DownloadClient::new()?;
     let target = temp_path("resume.bin");
     tokio::fs::write(&target, b"01234").await?;
 
@@ -305,7 +305,7 @@ async fn resumes_partial_download_and_emits_events() -> Result<(), Box<dyn std::
 #[tokio::test]
 async fn downloads_with_query_and_bearer_auth() -> Result<(), Box<dyn std::error::Error>> {
     let base_url = spawn_server().await?;
-    let client = SearchSdkClient::new()?;
+    let client = DownloadClient::new()?;
 
     let query_target = temp_path("query-auth.bin");
     let query_spec = DownloadSpec::new(

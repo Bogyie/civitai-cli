@@ -1,3 +1,4 @@
+mod api;
 mod client;
 mod constants;
 mod download;
@@ -6,7 +7,17 @@ mod model_search;
 mod shared;
 
 #[allow(unused_imports)]
-pub use client::{SearchSdkClient, SearchSdkConfig, SearchSdkConfigBuilder};
+pub use api::{
+    build_api_images_search_url, build_api_model_url, build_api_model_version_by_hash_url,
+    build_api_models_search_url, ApiImageItem, ApiImageResponse, ApiImageSearchOptions,
+    ApiImageStats, ApiModel, ApiModelCreator, ApiModelFile, ApiModelImage,
+    ApiModelSearchOptions, ApiModelStats, ApiModelTag, ApiModelVersion, ApiNsfwValue,
+    ApiPaginatedResponse, ApiPaginationMetadata, ApiVersionStats, FileMetadata,
+};
+#[allow(unused_imports)]
+pub use client::{
+    ApiClient, DownloadClient, SdkClientBuilder, SdkClients, SearchSdkConfig, WebSearchClient,
+};
 #[allow(unused_imports)]
 pub use constants::{
     CIVITAI_IMAGE_SEARCH_CLIENT_KEY, CIVITAI_IMAGE_SEARCH_MEILI_URL,
