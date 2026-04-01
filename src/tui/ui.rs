@@ -43,7 +43,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3), // Tabs
             Constraint::Min(10),   // Main content
-            Constraint::Length(2), // Footer Status
+            Constraint::Length(3), // Footer Status + shortcuts
         ])
         .split(f.area());
 
@@ -1443,10 +1443,11 @@ fn draw_model_sidebar(
         f.render_widget(version_row, split[1]);
 
         let active_file = selected_version.and_then(|version| {
+            let file_idx = *app.selected_file_index.get(&version.id).unwrap_or(&0);
             version
                 .files
-                .iter()
-                .find(|file| file.primary)
+                .get(file_idx)
+                .or_else(|| version.files.iter().find(|file| file.primary))
                 .or_else(|| version.files.first())
         });
         let detail_row = vec![
@@ -1533,9 +1534,18 @@ fn draw_model_sidebar(
                 version
                     .files
                     .iter()
+                    .enumerate()
                     .take(split[3].height.saturating_sub(2) as usize)
-                    .map(|file| {
-                        let prefix = if file.primary { "> " } else { "  " };
+                    .map(|(idx, file)| {
+                        let selected_idx = *app.selected_file_index.get(&version.id).unwrap_or(&0);
+                        let is_selected = idx == selected_idx;
+                        let prefix = if is_selected {
+                            "> "
+                        } else if file.primary {
+                            "* "
+                        } else {
+                            "  "
+                        };
                         let summary = format!(
                             "{}{} | {}{}{}",
                             prefix,
@@ -1551,7 +1561,11 @@ fn draw_model_sidebar(
                         );
                         Line::from(Span::styled(
                             compact_cell_text(summary, split[3].width.saturating_sub(2) as usize),
-                            if file.primary {
+                            if is_selected {
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD)
+                            } else if file.primary {
                                 Style::default().fg(Color::Yellow)
                             } else {
                                 Style::default()
@@ -1683,9 +1697,12 @@ fn draw_model_sidebar(
 }
 
 fn draw_search_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Search Filter Options ");
+    let title = if app.search_form.focused_field == 0 {
+        " Quick Search "
+    } else {
+        " Model Filters "
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
 
     let fm = &app.search_form;
 
@@ -1767,7 +1784,7 @@ fn draw_search_popup(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            " [Up/Down] Select Field | [Left/Right] Cycle Options | [Enter] Search",
+            " [Up/Down] Field | [Left/Right] Change | [Enter] Apply | [Esc] Cancel ",
             Style::default().fg(Color::DarkGray),
         )),
     ];
@@ -2029,7 +2046,7 @@ fn draw_resume_download_modal(f: &mut Frame, app: &App) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(2)])
         .split(area);
 
     let left_status = if let Some(error) = app.last_error.as_deref() {
@@ -2043,10 +2060,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 
     let shortcuts = match app.active_tab {
         MainTab::Models => {
-            "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details"
+            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [f] Filter | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Bookmark | [r] Refresh | [c] Clear | [?] Help"
         }
         MainTab::Bookmarks => {
-            "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details"
+            "[j/k] Move | [g/G] Top/Bottom | [Ctrl-u/d] Jump | [/] Search | [v] Details | [[/]] Version | [J/K] File | [d] Download | [b] Remove | [e] Export | [i] Import"
         }
         MainTab::Images => "[/] Search | [b] Bookmark | [d] Download | [m] Status",
         MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
@@ -2060,7 +2077,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         shortcuts,
         Style::default().fg(Color::DarkGray),
     ))
-    .alignment(Alignment::Left);
+    .alignment(Alignment::Left)
+    .wrap(Wrap { trim: true });
     f.render_widget(shortcuts_row, rows[1]);
 }
 

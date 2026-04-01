@@ -56,6 +56,16 @@ pub async fn run_event_loop(
         }
     };
 
+    let send_cover_prefetch = |app: &mut App| {
+        let neighbors = app.selected_model_neighbor_cover_urls(2);
+        if neighbors.is_empty() {
+            return;
+        }
+        if let Some(tx) = &app.tx {
+            let _ = tx.try_send(WorkerCommand::PrefetchModelCovers(neighbors));
+        }
+    };
+
     let request_image_feed_if_needed = |app: &mut App, next_page: Option<String>| {
         match &next_page {
             None => {
@@ -604,6 +614,26 @@ pub async fn run_event_loop(
                             continue;
                         }
 
+                        if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                match key.code {
+                                    KeyCode::Char('d') => {
+                                        app.move_list_selection_by(10);
+                                        send_cover_priority(app);
+                                        send_cover_prefetch(app);
+                                        continue;
+                                    }
+                                    KeyCode::Char('u') => {
+                                        app.move_list_selection_by(-10);
+                                        send_cover_priority(app);
+                                        send_cover_prefetch(app);
+                                        continue;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
                         match key.code {
                             KeyCode::Tab => {
                                 let next_tab = match app.active_tab {
@@ -699,13 +729,6 @@ pub async fn run_event_loop(
                                     } else {
                                         app.config.model_search_cache_ttl_hours.to_string()
                                     };
-                                } else if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
-                                    app.show_model_details = !app.show_model_details;
-                                    app.status = if app.show_model_details {
-                                        "Model details panel enabled".into()
-                                    } else {
-                                        "Model details panel disabled".into()
-                                    };
                                 }
                             }
                             KeyCode::Char('b') => {
@@ -773,6 +796,7 @@ pub async fn run_event_loop(
                                     }
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
+                                        send_cover_prefetch(app);
                                     }
                                 }
                             }
@@ -789,28 +813,35 @@ pub async fn run_event_loop(
                                     app.select_previous();
                                     if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                         send_cover_priority(app);
+                                        send_cover_prefetch(app);
                                     }
                                 }
                             }
-                            KeyCode::Char('h') | KeyCode::Left => {
+                            KeyCode::Left | KeyCode::Char('[') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_previous_version();
                                     send_cover_priority(app);
+                                    send_cover_prefetch(app);
                                 }
                             },
-                            KeyCode::Char('l') | KeyCode::Right => {
+                            KeyCode::Right | KeyCode::Char(']') => {
                                 if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
                                     app.select_next_version();
                                     send_cover_priority(app);
+                                    send_cover_prefetch(app);
                                 }
                             },
                             KeyCode::Char('J') => {
-                        if app.active_tab == MainTab::Downloads {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_next_file();
+                                } else if app.active_tab == MainTab::Downloads {
                                     app.select_next_history();
                                 }
                             }
                             KeyCode::Char('K') => {
-                                if app.active_tab == MainTab::Downloads {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_previous_file();
+                                } else if app.active_tab == MainTab::Downloads {
                                     app.select_previous_history();
                                 }
                             }
@@ -909,19 +940,58 @@ pub async fn run_event_loop(
                                 }
                             }
                             KeyCode::Char('c') => {
-                                if app.active_tab == MainTab::Downloads {
+                                if app.active_tab == MainTab::Models {
+                                    if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::ClearSearchCache);
+                                        app.status = "Clearing cached search results...".into();
+                                    }
+                                } else if app.active_tab == MainTab::Downloads {
                                     if let Some(download_id) = app.selected_download_id() {
                                         if let Some(tx) = &app.tx {
                                             let _ = tx.try_send(WorkerCommand::CancelDownload(download_id));
                                         }
                                     }
-                                } else {
-                                    app.request_download();
                                 }
                             }
                             KeyCode::Char('m') => { app.show_status_modal = true; }
+                            KeyCode::Char('v') => {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.show_model_details = !app.show_model_details;
+                                    app.status = if app.show_model_details {
+                                        "Model details panel enabled".into()
+                                    } else {
+                                        "Model details panel disabled".into()
+                                    };
+                                }
+                            }
                             KeyCode::Char('r') => {
-                                if app.active_tab == MainTab::Downloads {
+                                if app.active_tab == MainTab::Models {
+                                    if let Some(tx) = &app.tx {
+                                        let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
+                                        let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
+                                        debug_fetch_log(
+                                            &app.config,
+                                            &format!(
+                                                "UI: refresh search query=\"{}\" force=true append=false",
+                                            app.search_form.query
+                                        ),
+                                    );
+                                        let _ = tx.try_send(WorkerCommand::SearchModels(
+                                            app.search_form.build_options(),
+                                            selected_model_id,
+                                            selected_version_id,
+                                            true,
+                                            false,
+                                            None,
+                                        ));
+                                        app.model_search_has_more = true;
+                                        app.model_search_loading_more = false;
+                                        app.status = format!(
+                                            "Refreshing search cache for '{}'",
+                                            app.search_form.query
+                                        );
+                                    }
+                                } else if app.active_tab == MainTab::Downloads {
                                     if let Some(entry) = app.selected_download_history_entry().cloned() {
                                         if entry.total_bytes > 0 && entry.downloaded_bytes >= entry.total_bytes {
                                             app.status = "Selected item already complete.".into();
@@ -959,61 +1029,13 @@ pub async fn run_event_loop(
                                     } else {
                                         app.status = "No download history selected".into();
                                     }
-                                } else {
-                                    app.request_download();
                                 }
                             }
-                            KeyCode::Char(' ') => {
-                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
-                                    app.show_model_details = !app.show_model_details;
-                                    app.status = if app.show_model_details {
-                                        "Model details panel enabled".into()
-                                    } else {
-                                        "Model details panel disabled".into()
-                                    };
-                                }
-                            }
-                            KeyCode::Char('R') => {
-                                if app.active_tab == MainTab::Models {
-                                    if let Some(tx) = &app.tx {
-                                        let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
-                                        let selected_version_id = app.selected_model_version().map(|(_, version_id)| version_id);
-                                        debug_fetch_log(
-                                            &app.config,
-                                            &format!(
-                                                "UI: refresh search query=\"{}\" force=true append=false",
-                                                app.search_form.query
-                                            ),
-                                        );
-                                        let _ = tx.try_send(WorkerCommand::SearchModels(
-                                            app.search_form.build_options(),
-                                            selected_model_id,
-                                            selected_version_id,
-                                            true,
-                                            false,
-                                            None,
-                                        ));
-                                        app.model_search_has_more = true;
-                                        app.model_search_loading_more = false;
-                                        app.status = format!(
-                                            "Refreshing search cache for '{}'",
-                                            app.search_form.query
-                                        );
-                                    }
-                                }
-                            }
-                            KeyCode::Char('x') | KeyCode::Char('X') => {
-                                if app.active_tab == MainTab::Models {
-                                    if let Some(tx) = &app.tx {
-                                        let _ = tx.try_send(WorkerCommand::ClearSearchCache);
-                                        app.status = "Clearing cached search results...".into();
-                                    }
-                                }
-                            }
-                            KeyCode::Char('/') | KeyCode::Char('s') => {
+                            KeyCode::Char('/') => {
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
-                                    app.status = "Configure search options. Press Enter to submit, Esc to cancel.".into();
+                                    app.search_form.focused_field = 0;
+                                    app.status = "Quick search. Type query, Enter apply, Esc cancel.".into();
                                 } else if app.active_tab == MainTab::Images {
                                     app.mode = AppMode::SearchImages;
                                     app.status = "Configure image search options. Press Enter to submit, Esc to cancel.".into();
@@ -1023,7 +1045,35 @@ pub async fn run_event_loop(
                                     app.begin_bookmark_search();
                                 }
                             }
-                                KeyCode::Char('e') => {
+                            KeyCode::Char('f') => {
+                                if app.active_tab == MainTab::Models {
+                                    app.mode = AppMode::SearchForm;
+                                    app.search_form.focused_field = 1;
+                                    app.status = "Filter options. Up/Down field, Left/Right change, Enter apply.".into();
+                                }
+                            }
+                            KeyCode::Char('g') => {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_list_first();
+                                    send_cover_priority(app);
+                                    send_cover_prefetch(app);
+                                }
+                            }
+                            KeyCode::Char('G') => {
+                                if app.active_tab == MainTab::Models || app.active_tab == MainTab::Bookmarks {
+                                    app.select_list_last();
+                                    send_cover_priority(app);
+                                    send_cover_prefetch(app);
+                                }
+                            }
+                            KeyCode::Char('?') => {
+                                if app.active_tab == MainTab::Models {
+                                    app.last_error = None;
+                                    app.status = "Model keys\nj/k move  g/G top/bottom  Ctrl-u/Ctrl-d jump  / quick search  f filters  v details  [ ] version  d download  b bookmark  r refresh  c clear cache".into();
+                                    app.show_status_modal = true;
+                                }
+                            }
+                            KeyCode::Char('e') => {
                                     if app.active_tab == MainTab::Bookmarks {
                                         app.begin_bookmark_export_prompt();
                                     }
@@ -1035,6 +1085,7 @@ pub async fn run_event_loop(
                                 }
                             _ => {}
                         }
+
                      }
                  }
              }
@@ -1127,6 +1178,7 @@ pub async fn run_event_loop(
                                  ),
                              );
                              send_cover_priority(app);
+                             send_cover_prefetch(app);
                              app.status = format!("Found {} models", app.models.len());
                          }
                      }

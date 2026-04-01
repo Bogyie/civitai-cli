@@ -365,8 +365,9 @@ pub enum WorkerCommand {
     ),
     ClearSearchCache,
     PrioritizeModelCover(u64, Option<String>),
+    PrefetchModelCovers(Vec<(u64, Option<String>)>),
     DownloadModelForImage(u64),
-    DownloadModel(Model, u64), // selected model hit, version_id
+    DownloadModel(Model, u64, usize), // selected model hit, version_id, file_index
     PauseDownload(u64),      // model_id
     ResumeDownload(u64),     // model_id
     CancelDownload(u64),     // model_id
@@ -405,6 +406,7 @@ pub struct App {
     pub interrupted_download_file_path: Option<PathBuf>,
     pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
     pub selected_version_index: HashMap<u64, usize>,
+    pub selected_file_index: HashMap<u64, usize>,
     pub model_version_image_cache: HashMap<u64, Vec<StatefulProtocol>>,
     pub model_version_image_failed: HashSet<u64>,
 
@@ -509,6 +511,7 @@ impl App {
             image_bookmark_file_path,
             download_history_file_path,
             selected_version_index: HashMap::new(),
+            selected_file_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
@@ -757,6 +760,76 @@ impl App {
         }
     }
 
+    pub fn move_list_selection_by(&mut self, delta: isize) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                    return;
+                }
+                let current = self.model_list_state.selected().unwrap_or(0) as isize;
+                let max = self.models.len().saturating_sub(1) as isize;
+                let next = (current + delta).clamp(0, max) as usize;
+                self.model_list_state.select(Some(next));
+            }
+            MainTab::Bookmarks => {
+                let visible = self.visible_bookmarks();
+                if visible.is_empty() {
+                    self.bookmark_list_state.select(None);
+                    return;
+                }
+                let current = self.bookmark_list_state.selected().unwrap_or(0) as isize;
+                let max = visible.len().saturating_sub(1) as isize;
+                let next = (current + delta).clamp(0, max) as usize;
+                self.bookmark_list_state.select(Some(next));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn select_list_first(&mut self) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                } else {
+                    self.model_list_state.select(Some(0));
+                }
+            }
+            MainTab::Bookmarks => {
+                if self.visible_bookmarks().is_empty() {
+                    self.bookmark_list_state.select(None);
+                } else {
+                    self.bookmark_list_state.select(Some(0));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn select_list_last(&mut self) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                } else {
+                    self.model_list_state
+                        .select(Some(self.models.len().saturating_sub(1)));
+                }
+            }
+            MainTab::Bookmarks => {
+                let visible = self.visible_bookmarks();
+                if visible.is_empty() {
+                    self.bookmark_list_state.select(None);
+                } else {
+                    self.bookmark_list_state
+                        .select(Some(visible.len().saturating_sub(1)));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn append_models_results(
         &mut self,
         new_models: Vec<Model>,
@@ -796,12 +869,15 @@ impl App {
 
     pub fn select_next_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
                 let model_id = model.id;
-                let version_len = model_versions(model).len();
+                let version_len = model_versions(&model).len();
                 let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
                 if *v_idx < version_len.saturating_sub(1) {
                     *v_idx += 1;
+                    if let Some(version) = selected_version(&model, *v_idx) {
+                        self.selected_file_index.entry(version.id).or_insert(0);
+                    }
                 }
             }
         }
@@ -809,11 +885,45 @@ impl App {
 
     pub fn select_previous_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
                 let model_id = model.id;
                 let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
                 if *v_idx > 0 {
                     *v_idx -= 1;
+                    if let Some(version) = selected_version(&model, *v_idx) {
+                        self.selected_file_index.entry(version.id).or_insert(0);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn select_next_file(&mut self) {
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view() {
+                let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+                if let Some(version) = selected_version(model, version_index) {
+                    let file_len = version.files.len();
+                    if file_len > 0 {
+                        let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+                        if *file_idx < file_len.saturating_sub(1) {
+                            *file_idx += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn select_previous_file(&mut self) {
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view() {
+                let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+                if let Some(version) = selected_version(model, version_index) {
+                    let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+                    if *file_idx > 0 {
+                        *file_idx -= 1;
+                    }
                 }
             }
         }
@@ -831,11 +941,18 @@ impl App {
             if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
                 let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
                 if let Some(version) = selected_version(&model, v_idx) {
+                    let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
                     if let Some(tx) = &self.tx {
-                        let _ = tx.try_send(WorkerCommand::DownloadModel(model.clone(), version.id));
+                        let _ = tx.try_send(WorkerCommand::DownloadModel(
+                            model.clone(),
+                            version.id,
+                            file_idx,
+                        ));
                         self.status = format!(
-                            "Initiated download for {} (v: {})",
-                            model_name(&model), version.name
+                            "Initiated download for {} (v: {}, file: {})",
+                            model_name(&model),
+                            version.name,
+                            file_idx + 1
                         );
                     }
                 }
@@ -963,11 +1080,49 @@ impl App {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
         let version = selected_version(model, version_index)?;
+        if self.model_version_image_cache.contains_key(&version.id)
+            || self.model_version_image_failed.contains(&version.id)
+        {
+            return None;
+        }
         Some((
             model.id,
             version.id,
             preview_image_url(model, version_index),
         ))
+    }
+
+    pub fn selected_model_neighbor_cover_urls(&self, radius: usize) -> Vec<(u64, Option<String>)> {
+        let Some(model) = self.selected_model_in_active_view() else {
+            return Vec::new();
+        };
+        let versions = model_versions(model);
+        if versions.is_empty() {
+            return Vec::new();
+        }
+
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        let center = version_index.min(versions.len().saturating_sub(1));
+        let start = center.saturating_sub(radius);
+        let end = (center + radius).min(versions.len().saturating_sub(1));
+
+        versions
+            .iter()
+            .enumerate()
+            .filter(|(_, version)| {
+                !self.model_version_image_cache.contains_key(&version.id)
+                    && !self.model_version_image_failed.contains(&version.id)
+            })
+            .filter(|(idx, _)| *idx != center && *idx >= start && *idx <= end)
+            .map(|(idx, version)| {
+                (
+                    version.id,
+                    version.images.first().map(|image| image.url.clone()).or_else(|| {
+                        preview_image_url(model, idx)
+                    }),
+                )
+            })
+            .collect()
     }
 
     pub fn visible_bookmarks(&self) -> Vec<Model> {

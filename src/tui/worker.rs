@@ -55,6 +55,7 @@ struct CachedBinaryBlob {
 enum CoverQueueCommand {
     Enqueue(Vec<(u64, String)>),
     Prioritize(u64, Option<String>),
+    Prefetch(Vec<(u64, Option<String>)>),
 }
 
 const MODEL_VERSION_COVER_IMAGE_LIMIT: usize = 1;
@@ -887,6 +888,35 @@ pub async fn spawn_worker(
                                 );
                             }
                         }
+                        CoverQueueCommand::Prefetch(jobs) => {
+                            for (version_id, image_url) in jobs {
+                                if running_ids.contains(&version_id) || queued_ids.contains(&version_id) {
+                                    continue;
+                                }
+
+                                let resolved_url = if let Some(url) =
+                                    image_url.or_else(|| known_version_urls.get(&version_id).cloned())
+                                {
+                                    Some(url)
+                                } else {
+                                    fetch_cover_urls_for_version(&api_client, version_id)
+                                        .await
+                                        .into_iter()
+                                        .next()
+                                };
+
+                                if let Some(url) = resolved_url {
+                                    known_version_urls.insert(version_id, url.clone());
+                                    enqueue_or_bump_queue(
+                                        &mut queue,
+                                        &mut queued_ids,
+                                        version_id,
+                                        url,
+                                        false,
+                                    );
+                                }
+                            }
+                        }
                         CoverQueueCommand::Prioritize(version_id, image_url) => {
                             focus_version = Some(version_id);
                             let mut resolved_urls =
@@ -989,6 +1019,35 @@ pub async fn spawn_worker(
                                         image_url,
                                         false,
                                     );
+                                }
+                            }
+                            CoverQueueCommand::Prefetch(jobs) => {
+                                for (version_id, image_url) in jobs {
+                                    if running_ids.contains(&version_id) || queued_ids.contains(&version_id) {
+                                        continue;
+                                    }
+
+                                    let resolved_url = if let Some(url) =
+                                        image_url.or_else(|| known_version_urls.get(&version_id).cloned())
+                                    {
+                                        Some(url)
+                                    } else {
+                                        fetch_cover_urls_for_version(&api_client, version_id)
+                                            .await
+                                            .into_iter()
+                                            .next()
+                                    };
+
+                                    if let Some(url) = resolved_url {
+                                        known_version_urls.insert(version_id, url.clone());
+                                        enqueue_or_bump_queue(
+                                            &mut queue,
+                                            &mut queued_ids,
+                                            version_id,
+                                            url,
+                                            false,
+                                        );
+                                    }
                                 }
                             }
                             CoverQueueCommand::Prioritize(version_id, image_url) => {
@@ -1807,6 +1866,9 @@ pub async fn spawn_worker(
                         .send(CoverQueueCommand::Prioritize(version_id, image_url))
                         .await;
                 }
+                WorkerCommand::PrefetchModelCovers(jobs) => {
+                    let _ = cover_cmd_tx.send(CoverQueueCommand::Prefetch(jobs)).await;
+                }
                 WorkerCommand::UpdateConfig(new_cfg) => {
                     let new_key = new_cfg.api_key.clone();
                     match CivitaiClient::new(new_key) {
@@ -1920,7 +1982,7 @@ pub async fn spawn_worker(
                             .await;
                     });
                 }
-                WorkerCommand::DownloadModel(model_hit, version_id) => {
+                WorkerCommand::DownloadModel(model_hit, version_id, file_index) => {
                     let tx_msg_clone = tx_msg.clone();
                     let download_client = {
                         let builder = if let Some(api_key) = downloader_config.api_key.clone() {
@@ -1952,29 +2014,32 @@ pub async fn spawn_worker(
                         if let Some(version) =
                             model_versions(&model_hit).into_iter().find(|item| item.id == version_id)
                         {
-                            let primary_file = version
+                            let selected_file = version
                                 .files
-                                .iter()
-                                .find(|file| file.primary)
+                                .get(file_index)
+                                .or_else(|| version.files.iter().find(|file| file.primary))
                                 .or_else(|| version.files.first());
-                            let filename = primary_file
+                            let filename = selected_file
                                 .map(|file| build_download_file_name(&model_hit, &version, file))
                                 .unwrap_or_else(|| model_hit.default_download_file_name());
                             let target_dir = resolve_download_target_dir(&config, &model_hit);
                             let target_path = target_dir.join(&filename);
-                            let _estimated_size_bytes = primary_file
+                            let _estimated_size_bytes = selected_file
                                 .and_then(estimated_file_size_bytes)
                                 .unwrap_or(0);
                             let auth = config
                                 .api_key
                                 .clone()
                                 .map(ModelDownloadAuth::QueryToken);
-                            let download_url = match auth.as_ref() {
-                                Some(ModelDownloadAuth::QueryToken(token)) => {
-                                    download_client.build_model_download_url_with_token(version_id, token)
-                                }
-                                _ => download_client.build_model_download_url(version_id),
-                            };
+                            let download_url = selected_file
+                                .and_then(|file| file.download_url.clone())
+                                .unwrap_or_else(|| match auth.as_ref() {
+                                    Some(ModelDownloadAuth::QueryToken(token)) => {
+                                        download_client
+                                            .build_model_download_url_with_token(version_id, token)
+                                    }
+                                    _ => download_client.build_model_download_url(version_id),
+                                });
                             let spec = DownloadSpec::new(download_url, DownloadKind::Model)
                                 .with_file_name(filename.clone());
                             let options = DownloadOptions {
