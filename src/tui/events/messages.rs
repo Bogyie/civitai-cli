@@ -1,0 +1,267 @@
+use crate::tui::app::{
+    App, AppMessage, DownloadHistoryStatus, DownloadState, NewDownloadHistoryEntry,
+};
+use crate::tui::runtime::debug_fetch_log;
+
+use super::actions::{
+    request_image_feed_if_needed, send_cover_prefetch, send_cover_priority,
+    send_image_model_detail_cover_prefetch, send_image_model_detail_cover_priority,
+};
+
+pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
+    match msg {
+        AppMessage::ImagesLoaded(new_images, append, next_page) => {
+            app.merge_image_tag_catalog_from_hits(&new_images);
+            let loaded_count = new_images.len();
+            if append {
+                let before = app.images.len();
+                app.append_image_feed_results(new_images, next_page);
+                if app.active_tab == crate::tui::app::MainTab::Images {
+                    app.status = format!(
+                        "Loaded {} more images (total {})",
+                        app.images.len().saturating_sub(before),
+                        app.images.len()
+                    );
+                }
+            } else {
+                app.set_image_feed_results(new_images, next_page);
+                if app.active_tab == crate::tui::app::MainTab::Images {
+                    app.status = format!("Loaded {} images", app.images.len());
+                }
+            }
+            if app.status.is_empty() && app.active_tab == crate::tui::app::MainTab::Images {
+                app.status = format!("Loaded {} images", app.images.len());
+            }
+            if loaded_count == 0 {
+                if let Some(next_page) = app.next_image_feed_page() {
+                    request_image_feed_if_needed(app, Some(next_page));
+                }
+            } else if app.can_request_more_images(5)
+                && let Some(next_page) = app.next_image_feed_page()
+            {
+                request_image_feed_if_needed(app, Some(next_page));
+            }
+        }
+        AppMessage::ImageDecoded(id, protocol, bytes, request_key) => {
+            app.image_cache.insert(id, protocol);
+            app.image_bytes_cache.insert(id, bytes);
+            if !request_key.is_empty() {
+                app.image_request_keys.insert(id, request_key);
+            }
+        }
+        AppMessage::ModelCoverDecoded(version_id, protocol, bytes, request_key) => {
+            app.model_version_image_cache
+                .insert(version_id, vec![protocol]);
+            app.model_version_image_bytes_cache
+                .insert(version_id, vec![bytes]);
+            if !request_key.is_empty() {
+                app.model_version_image_request_keys
+                    .insert(version_id, request_key);
+            }
+            app.model_version_image_failed.remove(&version_id);
+        }
+        AppMessage::ModelCoversDecoded(version_id, protocols, request_key) => {
+            let (protocols, bytes): (Vec<_>, Vec<_>) = protocols.into_iter().unzip();
+            app.model_version_image_cache.insert(version_id, protocols);
+            app.model_version_image_bytes_cache
+                .insert(version_id, bytes);
+            if !request_key.is_empty() {
+                app.model_version_image_request_keys
+                    .insert(version_id, request_key);
+            }
+            app.model_version_image_failed.remove(&version_id);
+        }
+        AppMessage::ModelCoverLoadFailed(version_id) => {
+            app.model_version_image_failed.insert(version_id);
+        }
+        AppMessage::ModelsSearchedChunk(results, append, has_more, next_page) => {
+            let before_count = app.models.len();
+            debug_fetch_log(
+                &app.config,
+                &format!(
+                    "UI: received ModelsSearchedChunk append={} incoming={} before={} has_more={} next_page={}",
+                    append,
+                    results.len(),
+                    before_count,
+                    has_more,
+                    next_page.is_some(),
+                ),
+            );
+            if append {
+                let appended_len = results.len();
+                app.append_models_results(results, has_more, next_page);
+                debug_fetch_log(
+                    &app.config,
+                    &format!(
+                        "UI: append done before={} after={} has_more={}",
+                        before_count,
+                        app.models.len(),
+                        app.model_search_has_more
+                    ),
+                );
+                app.status = format!(
+                    "Loaded {} more models (total {})",
+                    appended_len,
+                    app.models.len()
+                );
+            } else {
+                app.set_models_results(results, has_more, next_page);
+                debug_fetch_log(
+                    &app.config,
+                    &format!(
+                        "UI: set models done count={} has_more={}",
+                        app.models.len(),
+                        app.model_search_has_more
+                    ),
+                );
+                send_cover_priority(app);
+                send_cover_prefetch(app);
+                app.status = format!("Found {} models", app.models.len());
+            }
+        }
+        AppMessage::ModelDetailLoaded(model, version_id) => {
+            app.open_image_model_detail_modal(*model, version_id);
+            send_image_model_detail_cover_priority(app);
+            send_image_model_detail_cover_prefetch(app);
+            app.status = if let Some(model) = app.image_model_detail_model.as_ref() {
+                format!(
+                    "Loaded model details: {}",
+                    crate::tui::model::model_name(model)
+                )
+            } else {
+                "Loaded model details".to_string()
+            };
+        }
+        AppMessage::StatusUpdate(status) => {
+            app.status = status;
+            if app.status.contains("Error fetching images") {
+                app.image_feed_loading = false;
+            }
+            if is_error_status(&app.status) {
+                app.last_error = Some(app.status.clone());
+                app.show_status_modal = true;
+            } else {
+                app.last_error = None;
+                app.show_status_modal = false;
+            }
+        }
+        AppMessage::DownloadProgress(
+            model_id,
+            filename,
+            progress,
+            downloaded_bytes,
+            total_bytes,
+        ) => {
+            if let Some(existing) = app.active_downloads.get_mut(&model_id) {
+                existing.filename = filename;
+                existing.progress = progress;
+                existing.downloaded_bytes = downloaded_bytes;
+                existing.total_bytes = total_bytes;
+            }
+        }
+        AppMessage::DownloadStarted(
+            model_id,
+            filename,
+            version_id,
+            model_name,
+            total_bytes,
+            file_path,
+        ) => {
+            if !app.active_download_order.contains(&model_id) {
+                app.active_download_order.push(model_id);
+            }
+
+            app.active_downloads.insert(
+                model_id,
+                crate::tui::app::DownloadTracker {
+                    filename,
+                    progress: 0.0,
+                    downloaded_bytes: 0,
+                    total_bytes,
+                    file_path,
+                    model_name,
+                    version_id,
+                    state: DownloadState::Running,
+                },
+            );
+            app.status = format!("Download started for model {} ({})", model_id, version_id);
+        }
+        AppMessage::DownloadPaused(model_id) => {
+            if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+                tracker.state = DownloadState::Paused;
+                app.status = format!("Download paused: {}", tracker.filename);
+            }
+        }
+        AppMessage::DownloadResumed(model_id) => {
+            if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+                tracker.state = DownloadState::Running;
+                app.status = format!("Download resumed: {}", tracker.filename);
+            }
+        }
+        AppMessage::DownloadCompleted(model_id) => {
+            app.last_error = None;
+            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                app.push_download_history(NewDownloadHistoryEntry {
+                    model_id,
+                    version_id: tracker.version_id,
+                    filename: tracker.filename,
+                    model_name: tracker.model_name,
+                    file_path: tracker.file_path,
+                    downloaded_bytes: tracker.downloaded_bytes,
+                    total_bytes: tracker.total_bytes,
+                    status: DownloadHistoryStatus::Completed,
+                    progress: tracker.progress,
+                });
+            }
+            app.active_download_order.retain(|id| *id != model_id);
+            app.clamp_selected_download_index();
+            app.clamp_selected_history_index();
+            app.status = format!("Download complete: {}", model_id);
+        }
+        AppMessage::DownloadFailed(model_id, reason) => {
+            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                app.push_download_history(NewDownloadHistoryEntry {
+                    model_id,
+                    version_id: tracker.version_id,
+                    filename: tracker.filename,
+                    model_name: tracker.model_name,
+                    file_path: tracker.file_path,
+                    downloaded_bytes: tracker.downloaded_bytes,
+                    total_bytes: tracker.total_bytes,
+                    status: DownloadHistoryStatus::Failed(reason.clone()),
+                    progress: tracker.progress,
+                });
+            }
+            app.active_download_order.retain(|id| *id != model_id);
+            app.clamp_selected_download_index();
+            app.clamp_selected_history_index();
+            app.last_error = Some(reason.clone());
+            app.show_status_modal = true;
+            app.status = format!("Download failed: {}", reason);
+        }
+        AppMessage::DownloadCancelled(model_id) => {
+            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+                app.push_download_history(NewDownloadHistoryEntry {
+                    model_id,
+                    version_id: tracker.version_id,
+                    filename: tracker.filename,
+                    model_name: tracker.model_name,
+                    file_path: tracker.file_path,
+                    downloaded_bytes: tracker.downloaded_bytes,
+                    total_bytes: tracker.total_bytes,
+                    status: DownloadHistoryStatus::Cancelled,
+                    progress: tracker.progress,
+                });
+            }
+            app.active_download_order.retain(|id| *id != model_id);
+            app.clamp_selected_download_index();
+            app.clamp_selected_history_index();
+            app.status = format!("Download cancelled: {}", model_id);
+        }
+    }
+}
+
+fn is_error_status(value: &str) -> bool {
+    let lowered = value.to_lowercase();
+    lowered.contains("error") || lowered.contains("failed") || lowered.contains("fail")
+}
