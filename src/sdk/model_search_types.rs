@@ -5,7 +5,7 @@ use super::constants::DEFAULT_MODEL_SORTS;
 
 macro_rules! string_enum_with_custom {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Default)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
         pub enum $name {
             #[default]
             $($variant,)+
@@ -68,6 +68,33 @@ pub enum ModelSearchSortBy {
 }
 
 impl ModelSearchSortBy {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Relevance,
+            Self::HighestRated,
+            Self::MostDownloaded,
+            Self::MostLiked,
+            Self::MostDiscussed,
+            Self::MostCollected,
+            Self::MostBuzz,
+            Self::Newest,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        match self {
+            Self::Relevance => Cow::Borrowed("Relevance"),
+            Self::HighestRated => Cow::Borrowed("Highest Rated"),
+            Self::MostDownloaded => Cow::Borrowed("Most Downloaded"),
+            Self::MostLiked => Cow::Borrowed("Most Liked"),
+            Self::MostDiscussed => Cow::Borrowed("Most Discussed"),
+            Self::MostCollected => Cow::Borrowed("Most Collected"),
+            Self::MostBuzz => Cow::Borrowed("Most Buzz"),
+            Self::Newest => Cow::Borrowed("Newest"),
+            Self::Custom(value) => Cow::Borrowed(value.as_str()),
+        }
+    }
+
     pub fn to_query_value(&self) -> Cow<'_, str> {
         match self {
             Self::Relevance => Cow::Borrowed(DEFAULT_MODEL_SORTS[0]),
@@ -122,6 +149,77 @@ impl ModelSearchSortBy {
             Self::Newest => Some(Cow::Borrowed("createdAt:desc")),
             Self::Custom(value) => custom_model_sort_to_meili(value).map(Cow::Owned),
         }
+    }
+}
+
+impl ModelBaseModel {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Chroma,
+            Self::Flux1D,
+            Self::Flux1Kontext,
+            Self::Flux1Krea,
+            Self::Flux1S,
+            Self::Flux2D,
+            Self::HiDream,
+            Self::HunyuanVideo,
+            Self::Illustrious,
+            Self::Imagen4,
+            Self::NanoBanana,
+            Self::NoobAi,
+            Self::OpenAi,
+            Self::Pony,
+            Self::PonyV7,
+            Self::Qwen,
+            Self::Sd14,
+            Self::Sd15,
+            Self::Sd20,
+            Self::Sd3,
+            Self::Sd35Large,
+            Self::Sdxl10,
+            Self::SdxlTurbo,
+            Self::Seedream,
+            Self::Veo3,
+            Self::WanVideo22I2vA14b,
+            Self::WanVideo22T2vA14b,
+            Self::WanVideo22Ti2v5b,
+            Self::WanVideo25I2v,
+            Self::WanVideo25T2v,
+            Self::ZImageBase,
+            Self::ZImageTurbo,
+        ]
+    }
+
+    pub fn label(&self) -> &str {
+        self.as_query_value()
+    }
+}
+
+impl ModelType {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Checkpoint,
+            Self::Lora,
+            Self::LoCon,
+            Self::TextualInversion,
+            Self::Hypernetwork,
+            Self::AestheticGradient,
+            Self::Controlnet,
+            Self::Poses,
+            Self::MotionModule,
+            Self::Vae,
+            Self::Upscaler,
+            Self::Workflows,
+            Self::Tool,
+            Self::Wildcards,
+            Self::Detection,
+            Self::DoRa,
+            Self::Other,
+        ]
+    }
+
+    pub fn label(&self) -> &str {
+        self.as_query_value()
     }
 }
 

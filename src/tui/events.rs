@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::tui::app::{
-    App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, MainTab, WorkerCommand,
+    App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, MainTab, SearchFormMode,
+    SearchFormSection, WorkerCommand,
 };
 use crate::tui::ui;
 
@@ -132,46 +133,6 @@ pub async fn run_event_loop(
                                 KeyCode::Esc => {
                                     app.mode = AppMode::Browsing;
                                 }
-                                KeyCode::Up => {
-                                    if app.search_form.focused_field > 0 {
-                                        app.search_form.focused_field -= 1;
-                                    }
-                                }
-                                KeyCode::Down => {
-                                    if app.search_form.focused_field < 4 {
-                                        app.search_form.focused_field += 1;
-                                    }
-                                }
-                                KeyCode::Left => {
-                                    match app.search_form.focused_field {
-                                        1 => {
-                                            if app.search_form.selected_type > 0 { app.search_form.selected_type -= 1; }
-                                            else { app.search_form.selected_type = app.search_form.types.len() - 1; }
-                                        }
-                                        2 => {
-                                            if app.search_form.selected_sort > 0 { app.search_form.selected_sort -= 1; }
-                                            else { app.search_form.selected_sort = app.search_form.sorts.len() - 1; }
-                                        }
-                                        3 => {
-                                            if app.search_form.selected_base > 0 { app.search_form.selected_base -= 1; }
-                                            else { app.search_form.selected_base = app.search_form.bases.len() - 1; }
-                                        }
-                                        4 => {
-                                            if app.search_form.selected_period > 0 { app.search_form.selected_period -= 1; }
-                                            else { app.search_form.selected_period = app.search_form.periods.len() - 1; }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                KeyCode::Right => {
-                                    match app.search_form.focused_field {
-                                        1 => app.search_form.selected_type = (app.search_form.selected_type + 1) % app.search_form.types.len(),
-                                        2 => app.search_form.selected_sort = (app.search_form.selected_sort + 1) % app.search_form.sorts.len(),
-                                        3 => app.search_form.selected_base = (app.search_form.selected_base + 1) % app.search_form.bases.len(),
-                                        4 => app.search_form.selected_period = (app.search_form.selected_period + 1) % app.search_form.periods.len(),
-                                        _ => {}
-                                    }
-                                }
                                 KeyCode::Enter => {
                                     app.mode = AppMode::Browsing;
                                     let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
@@ -199,13 +160,128 @@ pub async fn run_event_loop(
                                         app.status = format!("Searching for models: '{}'...", app.search_form.query);
                                     }
                                 }
+                                KeyCode::Tab => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        app.search_form.focused_section = match app.search_form.focused_section {
+                                            SearchFormSection::Query => SearchFormSection::Sort,
+                                            SearchFormSection::Sort => SearchFormSection::Period,
+                                            SearchFormSection::Period => SearchFormSection::Type,
+                                            SearchFormSection::Type => SearchFormSection::BaseModel,
+                                            SearchFormSection::BaseModel => SearchFormSection::Query,
+                                        };
+                                    }
+                                }
+                                KeyCode::Up => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        app.search_form.focused_section = match app.search_form.focused_section {
+                                            SearchFormSection::Query => SearchFormSection::BaseModel,
+                                            SearchFormSection::Sort => SearchFormSection::Query,
+                                            SearchFormSection::Period => SearchFormSection::Sort,
+                                            SearchFormSection::Type => SearchFormSection::Period,
+                                            SearchFormSection::BaseModel => SearchFormSection::Type,
+                                        };
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        app.search_form.focused_section = match app.search_form.focused_section {
+                                            SearchFormSection::Query => SearchFormSection::Sort,
+                                            SearchFormSection::Sort => SearchFormSection::Period,
+                                            SearchFormSection::Period => SearchFormSection::Type,
+                                            SearchFormSection::Type => SearchFormSection::BaseModel,
+                                            SearchFormSection::BaseModel => SearchFormSection::Query,
+                                        };
+                                    }
+                                }
+                                KeyCode::Left => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        match app.search_form.focused_section {
+                                            SearchFormSection::Sort => {
+                                                if app.search_form.selected_sort > 0 {
+                                                    app.search_form.selected_sort -= 1;
+                                                } else {
+                                                    app.search_form.selected_sort = app.search_form.sort_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::Period => {
+                                                if app.search_form.selected_period > 0 {
+                                                    app.search_form.selected_period -= 1;
+                                                } else {
+                                                    app.search_form.selected_period = app.search_form.periods.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::Type => {
+                                                if app.search_form.type_cursor > 0 {
+                                                    app.search_form.type_cursor -= 1;
+                                                } else {
+                                                    app.search_form.type_cursor = app.search_form.type_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                if app.search_form.base_cursor > 0 {
+                                                    app.search_form.base_cursor -= 1;
+                                                } else {
+                                                    app.search_form.base_cursor = app.search_form.base_options.len().saturating_sub(1);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Right => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        match app.search_form.focused_section {
+                                            SearchFormSection::Sort => {
+                                                app.search_form.selected_sort =
+                                                    (app.search_form.selected_sort + 1) % app.search_form.sort_options.len();
+                                            }
+                                            SearchFormSection::Period => {
+                                                app.search_form.selected_period =
+                                                    (app.search_form.selected_period + 1) % app.search_form.periods.len();
+                                            }
+                                            SearchFormSection::Type => {
+                                                app.search_form.type_cursor =
+                                                    (app.search_form.type_cursor + 1) % app.search_form.type_options.len();
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                app.search_form.base_cursor =
+                                                    (app.search_form.base_cursor + 1) % app.search_form.base_options.len();
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                KeyCode::Char('f') => {
+                                    app.search_form.begin_builder();
+                                }
+                                KeyCode::Char(' ') => {
+                                    if app.search_form.mode == SearchFormMode::Builder {
+                                        match app.search_form.focused_section {
+                                            SearchFormSection::Type => {
+                                                if let Some(item) = app.search_form.type_options.get(app.search_form.type_cursor).cloned() {
+                                                    if !app.search_form.selected_types.insert(item.clone()) {
+                                                        app.search_form.selected_types.remove(&item);
+                                                    }
+                                                }
+                                            }
+                                            SearchFormSection::BaseModel => {
+                                                if let Some(item) = app.search_form.base_options.get(app.search_form.base_cursor).cloned() {
+                                                    if !app.search_form.selected_base_models.insert(item.clone()) {
+                                                        app.search_form.selected_base_models.remove(&item);
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
                                 KeyCode::Char(c) => {
-                                    if app.search_form.focused_field == 0 {
+                                    if app.search_form.focused_section == SearchFormSection::Query {
                                         app.search_form.query.push(c);
                                     }
                                 }
                                 KeyCode::Backspace => {
-                                    if app.search_form.focused_field == 0 {
+                                    if app.search_form.focused_section == SearchFormSection::Query {
                                         app.search_form.query.pop();
                                     }
                                 }
@@ -1034,7 +1110,7 @@ pub async fn run_event_loop(
                             KeyCode::Char('/') => {
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
-                                    app.search_form.focused_field = 0;
+                                    app.search_form.begin_quick_search();
                                     app.status = "Quick search. Type query, Enter apply, Esc cancel.".into();
                                 } else if app.active_tab == MainTab::Images {
                                     app.mode = AppMode::SearchImages;
@@ -1048,8 +1124,8 @@ pub async fn run_event_loop(
                             KeyCode::Char('f') => {
                                 if app.active_tab == MainTab::Models {
                                     app.mode = AppMode::SearchForm;
-                                    app.search_form.focused_field = 1;
-                                    app.status = "Filter options. Up/Down field, Left/Right change, Enter apply.".into();
+                                    app.search_form.begin_builder();
+                                    app.status = "Search builder. Tab section, arrows move, Space toggle, Enter apply.".into();
                                 }
                             }
                             KeyCode::Char('g') => {

@@ -7,7 +7,7 @@ use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -39,17 +39,60 @@ pub enum BookmarkPathAction {
     Import,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchFormMode {
+    Quick,
+    Builder,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchFormSection {
+    Query,
+    Sort,
+    Type,
+    BaseModel,
+    Period,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchPeriod {
+    AllTime,
+    Year,
+    Month,
+    Week,
+    Day,
+}
+
+impl SearchPeriod {
+    pub fn all() -> Vec<Self> {
+        vec![Self::AllTime, Self::Year, Self::Month, Self::Week, Self::Day]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::AllTime => "AllTime",
+            Self::Year => "Year",
+            Self::Month => "Month",
+            Self::Week => "Week",
+            Self::Day => "Day",
+        }
+    }
+}
+
 pub struct SearchFormState {
     pub query: String,
-    pub focused_field: usize, // 0: Query, 1: Type, 2: Sort, 3: BaseModel, 4: Period
-    pub selected_type: usize,
-    pub types: Vec<String>,
+    pub mode: SearchFormMode,
+    pub focused_section: SearchFormSection,
+    pub sort_options: Vec<ModelSearchSortBy>,
     pub selected_sort: usize,
-    pub sorts: Vec<String>,
-    pub selected_base: usize,
-    pub bases: Vec<String>,
+    pub type_options: Vec<ModelType>,
+    pub type_cursor: usize,
+    pub selected_types: BTreeSet<ModelType>,
+    pub base_options: Vec<ModelBaseModel>,
+    pub base_cursor: usize,
+    pub selected_base_models: BTreeSet<ModelBaseModel>,
+    pub periods: Vec<SearchPeriod>,
     pub selected_period: usize,
-    pub periods: Vec<String>,
 }
 
 pub struct SettingsFormState {
@@ -129,117 +172,53 @@ impl SearchFormState {
     pub fn new() -> Self {
         Self {
             query: String::new(),
-            focused_field: 0,
-            selected_type: 0,
-            types: vec![
-                "All".into(),
-                "Checkpoint".into(),
-                "TextualInversion".into(),
-                "Hypernetwork".into(),
-                "AestheticGradient".into(),
-                "LORA".into(),
-                "Controlnet".into(),
-                "Poses".into(),
-            ],
-            selected_sort: 0,
-            sorts: vec![
-                "Highest Rated".into(),
-                "Most Downloaded".into(),
-                "Newest".into(),
-            ],
-            selected_base: 0,
-            bases: vec![
-                "All".into(),
-                "Anima".into(),
-                "AuraFlow".into(),
-                "Chroma".into(),
-                "CogVideoX".into(),
-                "Flux.1 S".into(),
-                "Flux.1 D".into(),
-                "Flux.1 Krea".into(),
-                "Flux.1 Kontext".into(),
-                "Flux.2 D".into(),
-                "Flux.2 Klein 9B".into(),
-                "Flux.2 Klein 9B-base".into(),
-                "Flux.2 Klein 4B".into(),
-                "Flux.2 Klein 4B-base".into(),
-                "Grok".into(),
-                "HiDream".into(),
-                "Hunyuan 1".into(),
-                "Hunyuan Video".into(),
-                "Illustrious".into(),
-                "NoobAI".into(),
-                "Kolors".into(),
-                "LTXV".into(),
-                "LTXV2".into(),
-                "LTXV 2.3".into(),
-                "Lumina".into(),
-                "Mochi".into(),
-                "Other".into(),
-                "PixArt a".into(),
-                "PixArt E".into(),
-                "Pony".into(),
-                "Pony V7".into(),
-                "Qwen".into(),
-                "Qwen 2".into(),
-                "Wan Video 1.3B t2v".into(),
-                "Wan Video 14B t2v".into(),
-                "Wan Video 14B i2v 480p".into(),
-                "Wan Video 14B i2v 720p".into(),
-                "Wan Video 2.2 TI2V-5B".into(),
-                "Wan Video 2.2 I2V-A14B".into(),
-                "Wan Video 2.2 T2V-A14B".into(),
-                "Wan Video 2.5 T2V".into(),
-                "Wan Video 2.5 I2V".into(),
-                "SD 1.4".into(),
-                "SD 1.5".into(),
-                "SD 1.5 LCM".into(),
-                "SD 1.5 Hyper".into(),
-                "SD 2.0".into(),
-                "SD 2.1".into(),
-                "SDXL 1.0".into(),
-                "SDXL Lightning".into(),
-                "SDXL Hyper".into(),
-                "ZImageTurbo".into(),
-                "ZImageBase".into(),
-            ],
+            mode: SearchFormMode::Quick,
+            focused_section: SearchFormSection::Query,
+            sort_options: ModelSearchSortBy::all(),
+            selected_sort: ModelSearchSortBy::all()
+                .iter()
+                .position(|sort| *sort == ModelSearchSortBy::Relevance)
+                .unwrap_or(0),
+            type_options: ModelType::all(),
+            type_cursor: 0,
+            selected_types: BTreeSet::new(),
+            base_options: ModelBaseModel::all(),
+            base_cursor: 0,
+            selected_base_models: BTreeSet::new(),
+            periods: SearchPeriod::all(),
             selected_period: 0,
-            periods: vec![
-                "AllTime".into(),
-                "Year".into(),
-                "Month".into(),
-                "Week".into(),
-                "Day".into(),
-            ],
         }
     }
 
     pub fn build_options(&self) -> ModelSearchState {
-        let selected_type = self.types[self.selected_type].trim();
-        let selected_base = self.bases[self.selected_base].trim();
-        let selected_period = self.periods[self.selected_period].trim();
-
         ModelSearchState {
             query: (!self.query.trim().is_empty()).then(|| self.query.trim().to_string()),
-            sort_by: match self.sorts[self.selected_sort].as_str() {
-                "Highest Rated" => ModelSearchSortBy::HighestRated,
-                "Most Downloaded" => ModelSearchSortBy::MostDownloaded,
-                "Newest" => ModelSearchSortBy::Newest,
-                value => ModelSearchSortBy::Custom(value.to_string()),
-            },
-            base_models: if selected_base.eq_ignore_ascii_case("all") {
-                Vec::new()
-            } else {
-                vec![ModelBaseModel::from_query_value(selected_base)]
-            },
-            types: if selected_type.eq_ignore_ascii_case("all") {
-                Vec::new()
-            } else {
-                vec![ModelType::from_query_value(selected_type)]
-            },
-            created_at: period_to_created_at(selected_period),
+            sort_by: self
+                .sort_options
+                .get(self.selected_sort)
+                .cloned()
+                .unwrap_or_default(),
+            base_models: self.selected_base_models.iter().cloned().collect(),
+            types: self.selected_types.iter().cloned().collect(),
+            created_at: self
+                .periods
+                .get(self.selected_period)
+                .map(|period| period_to_created_at(period.label()))
+                .unwrap_or(None),
             limit: Some(50),
             ..Default::default()
+        }
+    }
+
+    pub fn begin_quick_search(&mut self) {
+        self.mode = SearchFormMode::Quick;
+        self.focused_section = SearchFormSection::Query;
+    }
+
+    pub fn begin_builder(&mut self) {
+        self.mode = SearchFormMode::Builder;
+        if self.focused_section == SearchFormSection::Query {
+            self.focused_section = SearchFormSection::Sort;
         }
     }
 }
