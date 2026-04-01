@@ -24,15 +24,13 @@ pub enum DownloadControl {
 
 impl DownloadManager {
     pub fn new(config: AppConfig) -> Result<Self> {
-        let client = Client::builder()
-            .user_agent("civitai-cli/0.1")
-            .build()?;
+        let client = Client::builder().user_agent("civitai-cli/0.1").build()?;
         Ok(Self { client, config })
     }
 
     pub fn resolve_comfy_path(&self, model: &Model) -> Option<PathBuf> {
         let base = self.config.comfyui_path.as_ref()?;
-        
+
         // Follow standard ComfyUI directory structure
         let sub_dir = match model.r#type.as_str() {
             "Checkpoint" => "models/checkpoints",
@@ -52,10 +50,15 @@ impl DownloadManager {
         Some(target_dir)
     }
 
-    pub fn generate_smart_filename(&self, _model: &Model, version: &ModelVersion, original_filename: &str) -> String {
+    pub fn generate_smart_filename(
+        &self,
+        _model: &Model,
+        version: &ModelVersion,
+        original_filename: &str,
+    ) -> String {
         // e.g. [SDXL]_my_lora.safetensors
         let base_model_tag = format!("[{}]", version.base_model.replace(" ", ""));
-        
+
         let path = Path::new(original_filename);
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
         let ext = path.extension().unwrap_or_default().to_string_lossy();
@@ -137,19 +140,23 @@ impl DownloadManager {
     }
 
     pub async fn download_version(
-        &self, 
-        model: &Model, 
+        &self,
+        model: &Model,
         version: &ModelVersion,
         tx: Option<tokio::sync::mpsc::Sender<crate::tui::app::AppMessage>>,
     ) -> Result<PathBuf> {
-        let file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first())
+        let file = version
+            .files
+            .iter()
+            .find(|f| f.primary)
+            .or_else(|| version.files.first())
             .context("No files found across this model version")?;
 
         let url = &file.download_url;
         let original_filename = &file.name;
 
         let smart_filename = self.generate_smart_filename(model, version, original_filename);
-        
+
         let dest_dir = self.resolve_comfy_path(model).unwrap_or_else(|| {
             // fallback to current directory
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
@@ -212,21 +219,28 @@ impl DownloadManager {
         resume_from_bytes: Option<u64>,
         expected_total_bytes: Option<u64>,
     ) -> Result<PathBuf> {
-        let file = version.files.iter().find(|f| f.primary).or_else(|| version.files.first())
+        let file = version
+            .files
+            .iter()
+            .find(|f| f.primary)
+            .or_else(|| version.files.first())
             .context("No files found across this model version")?;
 
         let url = &file.download_url;
         let original_filename = &file.name;
         let smart_filename = self.generate_smart_filename(model, version, original_filename);
         let target_path = existing_file_path.unwrap_or_else(|| {
-            let dest_dir = self.resolve_comfy_path(model).unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
+            let dest_dir = self
+                .resolve_comfy_path(model)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             dest_dir.join(&smart_filename)
         });
 
         let existing_metadata = tokio::fs::metadata(&target_path).await.ok();
-        let existing_size = existing_metadata.as_ref().map(|entry| entry.len()).unwrap_or(0);
+        let existing_size = existing_metadata
+            .as_ref()
+            .map(|entry| entry.len())
+            .unwrap_or(0);
         let resume_hint = resume_from_bytes.unwrap_or(0);
         let mut downloaded = if resume_hint > 0 && existing_size > 0 {
             existing_size.min(resume_hint)
@@ -307,7 +321,9 @@ impl DownloadManager {
                                 paused = false;
                                 break;
                             }
-                            Some(DownloadControl::Cancel) => return Err(anyhow::anyhow!("download cancelled")),
+                            Some(DownloadControl::Cancel) => {
+                                return Err(anyhow::anyhow!("download cancelled"));
+                            }
                             None => return Err(anyhow::anyhow!("control channel closed")),
                         }
                     }
@@ -317,23 +333,21 @@ impl DownloadManager {
             }
 
             match control.as_mut() {
-                None => {
-                    match stream.next().await {
-                        Some(chunk_result) => {
-                            let chunk = chunk_result?;
-                            file_obj.write_all(&chunk).await?;
-                            downloaded += chunk.len() as u64;
-                            if total_size > 0 {
-                                let percent = (downloaded as f64 / total_size as f64) * 100.0;
-                                if percent - last_percent >= 1.0 {
-                                    last_percent = percent;
-                                    send_progress(percent, downloaded, total_size);
-                                }
+                None => match stream.next().await {
+                    Some(chunk_result) => {
+                        let chunk = chunk_result?;
+                        file_obj.write_all(&chunk).await?;
+                        downloaded += chunk.len() as u64;
+                        if total_size > 0 {
+                            let percent = (downloaded as f64 / total_size as f64) * 100.0;
+                            if percent - last_percent >= 1.0 {
+                                last_percent = percent;
+                                send_progress(percent, downloaded, total_size);
                             }
                         }
-                        None => break,
                     }
-                }
+                    None => break,
+                },
                 Some(control_rx) => {
                     tokio::select! {
                         chunk = stream.next() => {

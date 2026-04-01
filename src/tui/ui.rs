@@ -1,21 +1,23 @@
 use anyhow::{Context, Result};
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap},
-    Frame, Terminal,
+    widgets::{
+        Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap,
+    },
 };
-use ratatui_image::{protocol::StatefulProtocol, StatefulImage};
+use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use std::io::{self, Stdout};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::tui::app::{App, AppMode, DownloadState, DownloadHistoryStatus, MainTab};
+use crate::tui::app::{App, AppMode, DownloadHistoryStatus, DownloadState, MainTab};
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = io::stdout();
@@ -65,17 +67,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             | AppMode::SearchImageBookmarks
             | AppMode::BookmarkPathPrompt
     );
-    
+
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Civitai CLI | [1-6] Switch tab | Tab: cycle tabs "),
         )
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .select(active_idx)
         .divider(" | ");
-    
+
     f.render_widget(tabs, chunks[0]);
 
     match app.active_tab {
@@ -117,7 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     enable_name_rolling,
                 );
             }
-            
+
             if app.mode == AppMode::SearchForm {
                 draw_search_popup(f, app);
             }
@@ -223,7 +229,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_resume_download_modal {
         draw_resume_download_modal(f, app);
     }
-
 }
 
 fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
@@ -284,12 +289,13 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Active Downloads ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Active Downloads ");
     f.render_widget(&block, area);
     let inner_area = block.inner(area);
 
-    let mut tracked_rows =
-        Vec::<(u64, &str, &str, u64, f64, u64, u64, DownloadState)>::new();
+    let mut tracked_rows = Vec::<(u64, &str, &str, u64, f64, u64, u64, DownloadState)>::new();
     for model_id in &app.active_download_order {
         if let Some(tracker) = app.active_downloads.get(model_id) {
             tracked_rows.push((
@@ -306,7 +312,10 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     }
 
     if tracked_rows.is_empty() {
-        f.render_widget(Paragraph::new("No active download tasks.").alignment(Alignment::Center), inner_area);
+        f.render_widget(
+            Paragraph::new("No active download tasks.").alignment(Alignment::Center),
+            inner_area,
+        );
         return;
     }
 
@@ -338,8 +347,19 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let mut rows: Vec<ListItem> = Vec::with_capacity(tracked_rows.len());
-    for (i, (_model_id, model_name, filename, version_id, progress, downloaded_bytes, total_bytes, state)) in
-        tracked_rows.iter().enumerate()
+    for (
+        i,
+        (
+            _model_id,
+            model_name,
+            filename,
+            version_id,
+            progress,
+            downloaded_bytes,
+            total_bytes,
+            state,
+        ),
+    ) in tracked_rows.iter().enumerate()
     {
         let state_text = if *state == DownloadState::Running {
             "RUN"
@@ -354,7 +374,7 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
         };
         let downloaded_text = compact_cell_text(downloaded_text, size_width);
         let total_text = compact_cell_text(total_text, size_width);
-    let status = format!(
+        let status = format!(
             "{:<3} {:<4} {:<w1$} {:<w2$} {:>6.1}% {:>w4$} {:>w4$}",
             i + 1,
             state_text,
@@ -371,7 +391,9 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let visible_height = header_area[1].height.max(1) as usize;
-    let selected_idx = app.selected_download_index.min(tracked_rows.len().saturating_sub(1));
+    let selected_idx = app
+        .selected_download_index
+        .min(tracked_rows.len().saturating_sub(1));
     let total = rows.len();
     let start_idx = if total <= visible_height {
         0
@@ -394,7 +416,12 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
         .collect::<Vec<_>>();
     let list = List::new(visible_items)
         .block(Block::default())
-        .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("");
 
     let mut list_state = ListState::default();
@@ -405,7 +432,9 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_download_history_list(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Download History ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Download History ");
 
     if app.download_history.is_empty() {
         f.render_widget(&block, area);
@@ -424,12 +453,7 @@ fn draw_download_history_list(f: &mut Frame, app: &App, area: Rect) {
         .split(inner_area);
     let header = format!(
         "{:<5} {:<10} {:<9} {:<10} {:>6} {:<34} Size",
-        "Age",
-        "Status",
-        "Model",
-        "Version",
-        "Prog",
-        "File",
+        "Age", "Status", "Model", "Version", "Prog", "File",
     );
     f.render_widget(
         Paragraph::new(header).style(Style::default().fg(Color::DarkGray)),
@@ -468,7 +492,9 @@ fn draw_download_history_list(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let visible_rows = history_layout[1].height.saturating_sub(1) as usize;
-    let selected_idx = app.selected_history_index.min(items.len().saturating_sub(1));
+    let selected_idx = app
+        .selected_history_index
+        .min(items.len().saturating_sub(1));
     let total = items.len();
     let start_idx = if total <= visible_rows {
         0
@@ -490,7 +516,12 @@ fn draw_download_history_list(f: &mut Frame, app: &App, area: Rect) {
         .cloned()
         .collect::<Vec<_>>();
     let list = List::new(visible_items)
-        .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("");
     let mut list_state = ListState::default();
     if !items.is_empty() {
@@ -517,34 +548,80 @@ fn format_time_ago(ts: SystemTime) -> String {
 fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Settings ");
     let fm = &app.settings_form;
-    
+
     let mut lines = vec![
-        Line::from(Span::styled("--- Civitai CLI Configuration ---", Style::default().add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "--- Civitai CLI Configuration ---",
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
     ];
 
     let api_key_val = if fm.editing && fm.focused_field == 0 {
         format!("{}█", fm.input_buffer)
     } else if let Some(key) = &app.config.api_key {
-        format!("Present (starts with {})", &key.chars().take(5).collect::<String>())
+        format!(
+            "Present (starts with {})",
+            &key.chars().take(5).collect::<String>()
+        )
     } else {
         "None (Restricted search and downloads)".to_string()
     };
 
     lines.push(Line::from(vec![
-        Span::styled(if fm.focused_field == 0 { "> API Key: " } else { "  API Key: " }, Style::default().fg(if fm.focused_field == 0 { Color::Yellow } else { Color::White })),
-        Span::styled(api_key_val, if fm.focused_field == 0 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) })
+        Span::styled(
+            if fm.focused_field == 0 {
+                "> API Key: "
+            } else {
+                "  API Key: "
+            },
+            Style::default().fg(if fm.focused_field == 0 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
+        ),
+        Span::styled(
+            api_key_val,
+            if fm.focused_field == 0 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
+        ),
     ]));
 
     let path_val = if fm.editing && fm.focused_field == 1 {
         format!("{}█", fm.input_buffer)
     } else {
-        app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "Not Configured".to_string())
+        app.config
+            .comfyui_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Not Configured".to_string())
     };
 
     lines.push(Line::from(vec![
-        Span::styled(if fm.focused_field == 1 { "> ComfyUI Path: " } else { "  ComfyUI Path: " }, Style::default().fg(if fm.focused_field == 1 { Color::Yellow } else { Color::White })),
-        Span::styled(path_val, if fm.focused_field == 1 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) })
+        Span::styled(
+            if fm.focused_field == 1 {
+                "> ComfyUI Path: "
+            } else {
+                "  ComfyUI Path: "
+            },
+            Style::default().fg(if fm.focused_field == 1 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
+        ),
+        Span::styled(
+            path_val,
+            if fm.focused_field == 1 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
+        ),
     ]));
 
     let bookmark_path_val = if fm.editing && fm.focused_field == 2 {
@@ -554,18 +631,33 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
             .bookmark_file_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| crate::config::AppConfig::bookmark_path().map(|path| path.to_string_lossy().to_string()))
+            .or_else(|| {
+                crate::config::AppConfig::bookmark_path()
+                    .map(|path| path.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "Not Configured".to_string())
     };
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 2 { "> Bookmark File: " } else { "  Bookmark File: " },
-            Style::default().fg(if fm.focused_field == 2 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 2 {
+                "> Bookmark File: "
+            } else {
+                "  Bookmark File: "
+            },
+            Style::default().fg(if fm.focused_field == 2 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             bookmark_path_val,
-            if fm.focused_field == 2 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 2 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -576,18 +668,34 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
             .model_search_cache_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| app.config.search_cache_path().map(|path| path.to_string_lossy().to_string()))
+            .or_else(|| {
+                app.config
+                    .search_cache_path()
+                    .map(|path| path.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "Not Configured".to_string())
     };
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 3 { "> Model Search Cache Folder: " } else { "  Model Search Cache Folder: " },
-            Style::default().fg(if fm.focused_field == 3 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 3 {
+                "> Model Search Cache Folder: "
+            } else {
+                "  Model Search Cache Folder: "
+            },
+            Style::default().fg(if fm.focused_field == 3 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             model_search_cache_path_val,
-            if fm.focused_field == 3 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 3 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -599,12 +707,24 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 4 { "> Model Search Cache TTL (hours): " } else { "  Model Search Cache TTL (hours): " },
-            Style::default().fg(if fm.focused_field == 4 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 4 {
+                "> Model Search Cache TTL (hours): "
+            } else {
+                "  Model Search Cache TTL (hours): "
+            },
+            Style::default().fg(if fm.focused_field == 4 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             cache_ttl_val,
-            if fm.focused_field == 4 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 4 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -615,18 +735,34 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
             .image_cache_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| app.config.image_cache_path().map(|path| path.to_string_lossy().to_string()))
+            .or_else(|| {
+                app.config
+                    .image_cache_path()
+                    .map(|path| path.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "Not Configured".to_string())
     };
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 5 { "> Image Cache Folder: " } else { "  Image Cache Folder: " },
-            Style::default().fg(if fm.focused_field == 5 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 5 {
+                "> Image Cache Folder: "
+            } else {
+                "  Image Cache Folder: "
+            },
+            Style::default().fg(if fm.focused_field == 5 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             image_cache_path_val,
-            if fm.focused_field == 5 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 5 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -638,12 +774,24 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 6 { "> Image Search Cache TTL (minutes): " } else { "  Image Search Cache TTL (minutes): " },
-            Style::default().fg(if fm.focused_field == 6 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 6 {
+                "> Image Search Cache TTL (minutes): "
+            } else {
+                "  Image Search Cache TTL (minutes): "
+            },
+            Style::default().fg(if fm.focused_field == 6 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             image_search_ttl_val,
-            if fm.focused_field == 6 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 6 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -655,12 +803,24 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 7 { "> Image Cache TTL (minutes, 0 = persistent): " } else { "  Image Cache TTL (minutes, 0 = persistent): " },
-            Style::default().fg(if fm.focused_field == 7 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 7 {
+                "> Image Cache TTL (minutes, 0 = persistent): "
+            } else {
+                "  Image Cache TTL (minutes, 0 = persistent): "
+            },
+            Style::default().fg(if fm.focused_field == 7 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             image_cache_ttl_val,
-            if fm.focused_field == 7 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 7 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -671,18 +831,34 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
             .download_history_file_path
             .as_ref()
             .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| app.config.download_history_path().map(|path| path.to_string_lossy().to_string()))
+            .or_else(|| {
+                app.config
+                    .download_history_path()
+                    .map(|path| path.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "Not Configured".to_string())
     };
 
     lines.push(Line::from(vec![
         Span::styled(
-            if fm.focused_field == 8 { "> Download History File: " } else { "  Download History File: " },
-            Style::default().fg(if fm.focused_field == 8 { Color::Yellow } else { Color::White }),
+            if fm.focused_field == 8 {
+                "> Download History File: "
+            } else {
+                "  Download History File: "
+            },
+            Style::default().fg(if fm.focused_field == 8 {
+                Color::Yellow
+            } else {
+                Color::White
+            }),
         ),
         Span::styled(
             download_history_path_val,
-            if fm.focused_field == 8 && fm.editing { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Cyan) },
+            if fm.focused_field == 8 && fm.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default().fg(Color::Cyan)
+            },
         ),
     ]));
 
@@ -693,7 +869,10 @@ fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        lines.push(Line::from(Span::styled(" [Up/Down] Highlight | [Enter] Edit string", Style::default().fg(Color::DarkGray))));
+        lines.push(Line::from(Span::styled(
+            " [Up/Down] Highlight | [Enter] Edit string",
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 
     f.render_widget(Paragraph::new(lines).block(block), area);
@@ -748,7 +927,10 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 .join(", ")
         };
         let mut lines = vec![
-            Line::from(vec![Span::styled("ID: ", Style::default().add_modifier(Modifier::BOLD)), Span::raw(img.id.to_string())]),
+            Line::from(vec![
+                Span::styled("ID: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(img.id.to_string()),
+            ]),
             Line::from(vec![
                 Span::styled("Link: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(format!("https://civitai.com/images/{}", img.id)),
@@ -766,7 +948,10 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw(img.r#type.as_deref().unwrap_or("<none>")),
             ]),
             Line::from(vec![
-                Span::styled("Dimensions: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Dimensions: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(dimensions),
             ]),
             Line::from(vec![
@@ -778,15 +963,24 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 ),
             ]),
             Line::from(vec![
-                Span::styled("NSFW Level: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "NSFW Level: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(img.nsfw_level.as_deref().unwrap_or("<none>")),
             ]),
             Line::from(vec![
-                Span::styled("Browsing Level: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Browsing Level: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(img.browsing_level.to_string()),
             ]),
             Line::from(vec![
-                Span::styled("Created At: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Created At: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(img.created_at.as_deref().unwrap_or("<none>")),
             ]),
             Line::from(vec![
@@ -802,11 +996,17 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 Span::raw(img.username.as_deref().unwrap_or("<none>")),
             ]),
             Line::from(vec![
-                Span::styled("Base Model: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Base Model: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(img.base_model.as_deref().unwrap_or("<none>")),
             ]),
             Line::from(vec![
-                Span::styled("ModelVersionIds: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "ModelVersionIds: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(model_version_ids),
             ]),
         ];
@@ -815,7 +1015,9 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Stats:",
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Cyan),
             )));
             lines.push(Line::from(format!(
                 "cry={} laugh={} like={} dislike={} heart={} comment={}",
@@ -832,7 +1034,9 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "Meta:",
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Yellow),
             )));
             match serde_json::to_string_pretty(meta) {
                 Ok(pretty) => {
@@ -845,7 +1049,10 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
-        f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: true }), area);
+        f.render_widget(
+            Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+            area,
+        );
     } else {
         f.render_widget(Paragraph::new("No metadata available.").block(block), area);
     }
@@ -860,14 +1067,30 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     let summary = format!(
         "🔍 Query: \"{}\" | Type: {} | Sort: {} | Base: {}",
         model_query,
-        app.search_form.types.get(app.search_form.selected_type).cloned().unwrap_or_else(|| "All".into()),
-        app.search_form.sorts.get(app.search_form.selected_sort).cloned().unwrap_or_else(|| "Highest Rated".into()),
-        app.search_form.bases.get(app.search_form.selected_base).cloned().unwrap_or_else(|| "All".into()),
+        app.search_form
+            .types
+            .get(app.search_form.selected_type)
+            .cloned()
+            .unwrap_or_else(|| "All".into()),
+        app.search_form
+            .sorts
+            .get(app.search_form.selected_sort)
+            .cloned()
+            .unwrap_or_else(|| "Highest Rated".into()),
+        app.search_form
+            .bases
+            .get(app.search_form.selected_base)
+            .cloned()
+            .unwrap_or_else(|| "All".into()),
     );
 
     let para = Paragraph::new(summary)
         .alignment(Alignment::Left)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::ITALIC),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(para, area);
 }
@@ -886,7 +1109,11 @@ fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(summary)
         .alignment(Alignment::Left)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::ITALIC),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(para, area);
 }
@@ -905,7 +1132,11 @@ fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(summary)
         .alignment(Alignment::Left)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::ITALIC),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(para, area);
 }
@@ -951,7 +1182,11 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
 
     let para = Paragraph::new(summary)
         .alignment(Alignment::Left)
-        .style(Style::default().fg(Color::White).add_modifier(Modifier::ITALIC))
+        .style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::ITALIC),
+        )
         .wrap(Wrap { trim: true });
     f.render_widget(para, area);
 }
@@ -965,10 +1200,15 @@ fn draw_model_list(
     bookmarked_ids: &[u64],
     enable_name_rolling: bool,
 ) {
-    let block = Block::default().borders(Borders::ALL).title(" Searched Models ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Searched Models ");
 
     if models.is_empty() {
-        f.render_widget(Paragraph::new("No models found. Press '/' to search.").block(block), area);
+        f.render_widget(
+            Paragraph::new("No models found. Press '/' to search.").block(block),
+            area,
+        );
         return;
     }
 
@@ -977,7 +1217,8 @@ fn draw_model_list(
         .unwrap_or(0)
         .min(models.len().saturating_sub(1));
     let show_metadata = !show_model_details;
-    let mut rows_cache: Vec<(String, String, String, bool, bool)> = Vec::with_capacity(models.len());
+    let mut rows_cache: Vec<(String, String, String, bool, bool)> =
+        Vec::with_capacity(models.len());
     let mut down_width = "⬇".chars().count();
     let mut thumbs_width = "👍".chars().count();
 
@@ -998,7 +1239,13 @@ fn draw_model_list(
         down_width = down_width.max(down_text.chars().count());
         thumbs_width = thumbs_width.max(rate_text.chars().count());
         let is_bookmarked = bookmarked_ids.contains(&model.id);
-        rows_cache.push((down_text, rate_text, model.name.clone(), model.nsfw, is_bookmarked));
+        rows_cache.push((
+            down_text,
+            rate_text,
+            model.name.clone(),
+            model.nsfw,
+            is_bookmarked,
+        ));
     }
 
     if down_width < 6 {
@@ -1036,10 +1283,7 @@ fn draw_model_list(
             name
         };
 
-        if enable_name_rolling
-            && is_selected
-            && display_name.chars().count() > name_width
-        {
+        if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_else(|_| Duration::from_millis(0))
@@ -1058,20 +1302,12 @@ fn draw_model_list(
             };
             let spans = vec![
                 Span::styled(
-                    format!(
-                        "{:>width$}",
-                        down_text,
-                        width = down_width
-                    ),
+                    format!("{:>width$}", down_text, width = down_width),
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!(
-                        "{:>width$}",
-                        rate_text,
-                        width = thumbs_width
-                    ),
+                    format!("{:>width$}", rate_text, width = thumbs_width),
                     Style::default().fg(Color::White),
                 ),
                 Span::styled(" | ", Style::default().fg(Color::DarkGray)),
@@ -1119,7 +1355,12 @@ fn draw_model_list(
 
     let list = List::new(visible_items)
         .block(block)
-        .highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
         .highlight_symbol("");
     let mut state = list_state.clone();
     if !models.is_empty() {
@@ -1150,7 +1391,10 @@ fn draw_model_sidebar(
         let selected_version = model.model_versions.get(safe_v_idx);
 
         let model_url = if let Some(version) = selected_version {
-            format!("https://civitai.com/models/{}?modelVersionId={}", model.id, version.id)
+            format!(
+                "https://civitai.com/models/{}?modelVersionId={}",
+                model.id, version.id
+            )
         } else {
             format!("https://civitai.com/models/{}", model.id)
         };
@@ -1175,10 +1419,8 @@ fn draw_model_sidebar(
         } else {
             " (0 / 0)".to_string()
         };
-        let version_window = build_horizontal_item_window(
-            &version_data,
-            split[1].width.saturating_sub(2) as usize,
-        );
+        let version_window =
+            build_horizontal_item_window(&version_data, split[1].width.saturating_sub(2) as usize);
         let mut version_spans = Vec::with_capacity(version_window.len() + 2);
         for (i, (text, is_selected)) in version_window.iter().enumerate() {
             if !text.is_empty() {
@@ -1188,7 +1430,9 @@ fn draw_model_sidebar(
                 version_spans.push(Span::styled(
                     text,
                     if *is_selected {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     },
@@ -1197,19 +1441,31 @@ fn draw_model_sidebar(
         }
 
         if version_spans.is_empty() {
-            version_spans.push(Span::styled("No versions", Style::default().fg(Color::DarkGray)));
+            version_spans.push(Span::styled(
+                "No versions",
+                Style::default().fg(Color::DarkGray),
+            ));
         }
         let version_row = Paragraph::new(Line::from(version_spans))
             .alignment(Alignment::Left)
-            .block(Block::default().borders(Borders::ALL).title(format!(" Versions{}", version_position)));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Versions{}", version_position)),
+            );
         f.render_widget(version_row, split[1]);
 
         let stats = selected_version.and_then(|version| version.stats.as_ref());
         let down_val = compact_number(stats.map(|s| s.download_count).unwrap_or(0));
         let rate_val = normalized_version_rating(stats);
         let thumbs_up_val = compact_number(stats.map(|s| s.thumbs_up_count).unwrap_or(0));
-        let active_file = selected_version
-            .and_then(|version| version.files.iter().find(|f| f.primary).or_else(|| version.files.first()));
+        let active_file = selected_version.and_then(|version| {
+            version
+                .files
+                .iter()
+                .find(|f| f.primary)
+                .or_else(|| version.files.first())
+        });
         let format_value = active_file
             .and_then(|file| file.metadata.as_ref())
             .and_then(|meta| meta.format.as_deref())
@@ -1230,7 +1486,15 @@ fn draw_model_sidebar(
             base_model,
             file_size,
         ];
-        let headers = ["Down", "Rate", "Thumbs Up", "Type", "Format", "Base Model", "File Size"];
+        let headers = [
+            "Down",
+            "Rate",
+            "Thumbs Up",
+            "Type",
+            "Format",
+            "Base Model",
+            "File Size",
+        ];
         let mut widths = [5usize; 7];
         for i in 0..7 {
             widths[i] = widths[i]
@@ -1314,10 +1578,16 @@ fn draw_model_sidebar(
         let description_lines = render_description_lines(version_description);
         let description_text = Paragraph::new(description_lines)
             .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title(" Description "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Description "),
+            );
         f.render_widget(description_text, desc_split[0]);
 
-        let image_block = Block::default().borders(Borders::ALL).title(" Cover Image ");
+        let image_block = Block::default()
+            .borders(Borders::ALL)
+            .title(" Cover Image ");
         let image_area = desc_split[1];
         let image_inner = image_block.inner(image_area);
         f.render_widget(&image_block, image_area);
@@ -1349,16 +1619,13 @@ fn draw_model_sidebar(
 
         let mut image_version_id = selected_version.map(|version| version.id);
         if image_version_id.is_none() {
-            image_version_id = model
-                .model_versions
-                .iter()
-                .find_map(|version| {
-                    if app.model_version_image_cache.contains_key(&version.id) {
-                        Some(version.id)
-                    } else {
-                        None
-                    }
-                });
+            image_version_id = model.model_versions.iter().find_map(|version| {
+                if app.model_version_image_cache.contains_key(&version.id) {
+                    Some(version.id)
+                } else {
+                    None
+                }
+            });
         }
 
         if let Some(image_version_id) = image_version_id {
@@ -1368,59 +1635,140 @@ fn draw_model_sidebar(
                 f.render_stateful_widget(image_widget, inner_img_area, &mut protocol);
             } else {
                 if !selected_version_has_image {
-                    f.render_widget(Paragraph::new("No thumbnail available.").alignment(Alignment::Center), inner_img_area);
+                    f.render_widget(
+                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                        inner_img_area,
+                    );
                 } else if app.model_version_image_failed.contains(&image_version_id) {
-                    f.render_widget(Paragraph::new("No thumbnail available.").alignment(Alignment::Center), inner_img_area);
+                    f.render_widget(
+                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                        inner_img_area,
+                    );
                 } else if has_any_version_image {
-                    f.render_widget(Paragraph::new("Loading thumbnail...").alignment(Alignment::Center), inner_img_area);
+                    f.render_widget(
+                        Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
+                        inner_img_area,
+                    );
                 } else {
-                    f.render_widget(Paragraph::new("No thumbnail available.").alignment(Alignment::Center), inner_img_area);
+                    f.render_widget(
+                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                        inner_img_area,
+                    );
                 }
             }
         } else {
             if has_any_version_image {
-                f.render_widget(Paragraph::new("Loading thumbnail...").alignment(Alignment::Center), inner_img_area);
+                f.render_widget(
+                    Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
+                    inner_img_area,
+                );
             } else {
-                f.render_widget(Paragraph::new("No thumbnail available.").alignment(Alignment::Center), inner_img_area);
+                f.render_widget(
+                    Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                    inner_img_area,
+                );
             }
         }
     } else {
-        f.render_widget(Paragraph::new("Select a model.").block(Block::default().borders(Borders::ALL).title(" Model Details ")), area);
+        f.render_widget(
+            Paragraph::new("Select a model.").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Model Details "),
+            ),
+            area,
+        );
     }
 }
-
-
 
 fn draw_search_popup(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Search Filter Options ");
-    
+
     let fm = &app.search_form;
 
     let list = vec![
         Line::from(vec![
-            Span::styled(if fm.focused_field == 0 { "> Query: " } else { "  Query: " }, Style::default().fg(if fm.focused_field == 0 { Color::Yellow } else { Color::White })),
+            Span::styled(
+                if fm.focused_field == 0 {
+                    "> Query: "
+                } else {
+                    "  Query: "
+                },
+                Style::default().fg(if fm.focused_field == 0 {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ),
             Span::raw(format!("{}█", fm.query)),
         ]),
         Line::from(vec![
-            Span::styled(if fm.focused_field == 1 { "> Type: " } else { "  Type: " }, Style::default().fg(if fm.focused_field == 1 { Color::Yellow } else { Color::White })),
+            Span::styled(
+                if fm.focused_field == 1 {
+                    "> Type: "
+                } else {
+                    "  Type: "
+                },
+                Style::default().fg(if fm.focused_field == 1 {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ),
             Span::raw(format!("< {} >", fm.types[fm.selected_type])),
         ]),
         Line::from(vec![
-            Span::styled(if fm.focused_field == 2 { "> Sort: " } else { "  Sort: " }, Style::default().fg(if fm.focused_field == 2 { Color::Yellow } else { Color::White })),
+            Span::styled(
+                if fm.focused_field == 2 {
+                    "> Sort: "
+                } else {
+                    "  Sort: "
+                },
+                Style::default().fg(if fm.focused_field == 2 {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ),
             Span::raw(format!("< {} >", fm.sorts[fm.selected_sort])),
         ]),
         Line::from(vec![
-            Span::styled(if fm.focused_field == 3 { "> Base: " } else { "  Base: " }, Style::default().fg(if fm.focused_field == 3 { Color::Yellow } else { Color::White })),
+            Span::styled(
+                if fm.focused_field == 3 {
+                    "> Base: "
+                } else {
+                    "  Base: "
+                },
+                Style::default().fg(if fm.focused_field == 3 {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ),
             Span::raw(format!("< {} >", fm.bases[fm.selected_base])),
         ]),
         Line::from(vec![
-            Span::styled(if fm.focused_field == 4 { "> Period: " } else { "  Period: " }, Style::default().fg(if fm.focused_field == 4 { Color::Yellow } else { Color::White })),
+            Span::styled(
+                if fm.focused_field == 4 {
+                    "> Period: "
+                } else {
+                    "  Period: "
+                },
+                Style::default().fg(if fm.focused_field == 4 {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            ),
             Span::raw(format!("< {} >", fm.periods[fm.selected_period])),
         ]),
         Line::from(""),
-        Line::from(Span::styled(" [Up/Down] Select Field | [Left/Right] Cycle Options | [Enter] Search", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            " [Up/Down] Select Field | [Left/Right] Cycle Options | [Enter] Search",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
 
     let p = Paragraph::new(list).block(block);
@@ -1488,7 +1836,10 @@ fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     };
     let lines = vec![
         Line::from(vec![
-            Span::styled(format!("{} Path: ", action), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{} Path: ", action),
+                Style::default().fg(Color::Yellow),
+            ),
             Span::raw(format!("{}█", app.bookmark_path_draft)),
         ]),
         Line::from(""),
@@ -1512,7 +1863,9 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     let form = &app.image_search_form;
     let field_style = |focused: bool| {
         if focused {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         }
@@ -1533,11 +1886,19 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         ]),
         Line::from(vec![
             Span::styled(" ModelVersionId: ", field_style(form.focused_field == 3)),
-            Span::raw(format!("{}{}", form.model_version_id, if form.focused_field == 3 { "█" } else { "" })),
+            Span::raw(format!(
+                "{}{}",
+                form.model_version_id,
+                if form.focused_field == 3 { "█" } else { "" }
+            )),
         ]),
         Line::from(vec![
             Span::styled(" Tag: ", field_style(form.focused_field == 4)),
-            Span::raw(format!("{}{}", form.tag_text, if form.focused_field == 4 { "█" } else { "" })),
+            Span::raw(format!(
+                "{}{}",
+                form.tag_text,
+                if form.focused_field == 4 { "█" } else { "" }
+            )),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -1560,7 +1921,7 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Full Status Message ");
-        
+
     let err_msg = app.last_error.as_deref().unwrap_or("");
     let full_text = if !err_msg.is_empty() {
         format!("{}\n\nERROR:\n{}", app.status, err_msg)
@@ -1571,7 +1932,12 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     let text = vec![
         Line::from(full_text),
         Line::from(""),
-        Line::from(Span::styled(" [m] Close | [Esc] Close ", Style::default().add_modifier(Modifier::BOLD).fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            " [m] Close | [Esc] Close ",
+            Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::DarkGray),
+        )),
     ];
 
     let p = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
@@ -1593,9 +1959,14 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     let lines = vec![
         Line::from(format!("Remove bookmark: {}", name)),
         Line::from(""),
-        Line::from(Span::styled("Press Y to confirm, N or Esc to cancel.", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled(
+            "Press Y to confirm, N or Esc to cancel.",
+            Style::default().fg(Color::DarkGray),
+        )),
     ];
-    let p = Paragraph::new(lines).block(block).alignment(Alignment::Center);
+    let p = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Center);
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
     f.render_widget(p, area);
@@ -1670,15 +2041,25 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details",
-        MainTab::Bookmarks => "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details",
+        MainTab::Models => {
+            "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details"
+        }
+        MainTab::Bookmarks => {
+            "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details"
+        }
         MainTab::Images => "[/] Search | [b] Bookmark | [d] Download | [m] Status",
         MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
-        MainTab::Downloads => "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel",
+        MainTab::Downloads => {
+            "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel"
+        }
         MainTab::Settings => "[Enter] Edit | [m] Status",
     };
 
-    let shortcuts_row = Paragraph::new(Span::styled(shortcuts, Style::default().fg(Color::DarkGray))).alignment(Alignment::Left);
+    let shortcuts_row = Paragraph::new(Span::styled(
+        shortcuts,
+        Style::default().fg(Color::DarkGray),
+    ))
+    .alignment(Alignment::Left);
     f.render_widget(shortcuts_row, rows[1]);
 }
 
@@ -1712,7 +2093,11 @@ fn build_horizontal_item_window(items: &[(String, bool)], max_width: usize) -> V
     }
 
     let item_count = items.len();
-    let selected_idx = items.iter().position(|(_, selected)| *selected).unwrap_or(0).min(item_count - 1);
+    let selected_idx = items
+        .iter()
+        .position(|(_, selected)| *selected)
+        .unwrap_or(0)
+        .min(item_count - 1);
     let separator = 2usize;
 
     let prepared: Vec<(String, bool, usize)> = items
@@ -1813,9 +2198,9 @@ fn compact_file_size(size_kb: f64) -> String {
         return "0.0 MB".to_string();
     }
 
-    let mb = 1024.0;             // 1 MB = 1024 KB
-    let gb = mb * 1024.0;        // 1 GB = 1024 MB
-    let tb = gb * 1024.0;        // 1 TB = 1024 GB
+    let mb = 1024.0; // 1 MB = 1024 KB
+    let gb = mb * 1024.0; // 1 GB = 1024 MB
+    let tb = gb * 1024.0; // 1 TB = 1024 GB
 
     if size_kb >= tb {
         format!("{:.1} TB", size_kb / tb)
@@ -1909,19 +2294,28 @@ fn render_description_lines(raw: &str) -> Vec<Line<'static>> {
 
         if line.starts_with("• ") {
             let mut spans = vec![Span::styled("• ", Style::default().fg(Color::LightGreen))];
-            spans.extend(parse_styled_markdown(&line[3..], Style::default().fg(Color::White)));
+            spans.extend(parse_styled_markdown(
+                &line[3..],
+                Style::default().fg(Color::White),
+            ));
             lines.push(Line::from(spans));
             continue;
         }
 
         if line.starts_with("› ") {
             let mut spans = vec![Span::styled("› ", Style::default().fg(Color::DarkGray))];
-            spans.extend(parse_styled_markdown(&line[3..], Style::default().fg(Color::Gray)));
+            spans.extend(parse_styled_markdown(
+                &line[3..],
+                Style::default().fg(Color::Gray),
+            ));
             lines.push(Line::from(spans));
             continue;
         }
 
-        lines.push(Line::from(parse_styled_markdown(line, Style::default().fg(Color::White))));
+        lines.push(Line::from(parse_styled_markdown(
+            line,
+            Style::default().fg(Color::White),
+        )));
     }
 
     if lines.is_empty() {
@@ -1959,7 +2353,10 @@ fn parse_styled_markdown(raw: &str, base_style: Style) -> Vec<Span<'static>> {
                 if let Some(end) = body.find("**") {
                     let styled = &body[..end];
                     if !styled.is_empty() {
-                        spans.push(Span::styled(styled.to_string(), base_style.add_modifier(Modifier::BOLD)));
+                        spans.push(Span::styled(
+                            styled.to_string(),
+                            base_style.add_modifier(Modifier::BOLD),
+                        ));
                     }
                     2 + end + 2
                 } else {
@@ -1972,7 +2369,10 @@ fn parse_styled_markdown(raw: &str, base_style: Style) -> Vec<Span<'static>> {
                 if let Some(end) = body.find("__") {
                     let styled = &body[..end];
                     if !styled.is_empty() {
-                        spans.push(Span::styled(styled.to_string(), base_style.add_modifier(Modifier::BOLD)));
+                        spans.push(Span::styled(
+                            styled.to_string(),
+                            base_style.add_modifier(Modifier::BOLD),
+                        ));
                     }
                     2 + end + 2
                 } else {
@@ -2024,7 +2424,9 @@ fn parse_styled_markdown(raw: &str, base_style: Style) -> Vec<Span<'static>> {
                 }
 
                 let raw_url = &rest[..end];
-                let trimmed = raw_url.trim_end_matches(|ch| ch == '.' || ch == ',' || ch == ')' || ch == ']' || ch == '}' || ch == '>' );
+                let trimmed = raw_url.trim_end_matches(|ch| {
+                    ch == '.' || ch == ',' || ch == ')' || ch == ']' || ch == '}' || ch == '>'
+                });
                 if !trimmed.is_empty() {
                     spans.push(Span::styled(
                         trimmed.to_string(),

@@ -1,13 +1,13 @@
 use crate::api::{ImageItem, Model};
+use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-use ratatui::widgets::ListState;
-use serde_json;
-use serde::{Deserialize, Serialize};
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
@@ -50,7 +50,7 @@ pub struct SearchFormState {
 
 pub struct SettingsFormState {
     pub editing: bool,
-    pub focused_field: usize, 
+    pub focused_field: usize,
     pub input_buffer: String,
 }
 
@@ -127,9 +127,22 @@ impl SearchFormState {
             query: String::new(),
             focused_field: 0,
             selected_type: 0,
-            types: vec!["All".into(), "Checkpoint".into(), "TextualInversion".into(), "Hypernetwork".into(), "AestheticGradient".into(), "LORA".into(), "Controlnet".into(), "Poses".into()],
+            types: vec![
+                "All".into(),
+                "Checkpoint".into(),
+                "TextualInversion".into(),
+                "Hypernetwork".into(),
+                "AestheticGradient".into(),
+                "LORA".into(),
+                "Controlnet".into(),
+                "Poses".into(),
+            ],
             selected_sort: 0,
-            sorts: vec!["Highest Rated".into(), "Most Downloaded".into(), "Newest".into()],
+            sorts: vec![
+                "Highest Rated".into(),
+                "Most Downloaded".into(),
+                "Newest".into(),
+            ],
             selected_base: 0,
             bases: vec![
                 "All".into(),
@@ -187,7 +200,13 @@ impl SearchFormState {
                 "ZImageBase".into(),
             ],
             selected_period: 0,
-            periods: vec!["AllTime".into(), "Year".into(), "Month".into(), "Week".into(), "Day".into()],
+            periods: vec![
+                "AllTime".into(),
+                "Year".into(),
+                "Month".into(),
+                "Week".into(),
+                "Day".into(),
+            ],
         }
     }
 
@@ -265,12 +284,12 @@ pub enum AppMessage {
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
     DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>), // model_id, filename, version_id, model_name, total_bytes, file_path
-    DownloadProgress(u64, String, f64, u64, u64),   // model_id, filename, percentage, downloaded_bytes, total_bytes
+    DownloadProgress(u64, String, f64, u64, u64), // model_id, filename, percentage, downloaded_bytes, total_bytes
     DownloadPaused(u64),
     DownloadResumed(u64),
-    DownloadCompleted(u64),                    // model_id
-    DownloadFailed(u64, String),               // model_id, reason
-    DownloadCancelled(u64),                    // model_id
+    DownloadCompleted(u64),      // model_id
+    DownloadFailed(u64, String), // model_id, reason
+    DownloadCancelled(u64),      // model_id
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -353,7 +372,7 @@ pub struct App {
     pub search_form: SearchFormState,
     pub image_search_form: ImageSearchFormState,
     pub settings_form: SettingsFormState,
-    
+
     pub models: Vec<Model>,
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
@@ -387,7 +406,7 @@ pub struct App {
     pub image_feed_loading: bool,
     pub image_feed_next_page: Option<String>,
     pub image_feed_has_more: bool,
-    
+
     pub active_downloads: HashMap<u64, DownloadTracker>,
     pub active_download_order: Vec<u64>,
     pub selected_download_index: usize,
@@ -509,14 +528,11 @@ impl App {
 
         if !interrupted_download_sessions.is_empty() {
             for session in interrupted_download_sessions.iter() {
-                let existing_paused = app
-                    .download_history
-                    .iter()
-                    .any(|entry| {
-                        entry.model_id == session.model_id
-                            && entry.version_id == session.version_id
-                            && matches!(entry.status, DownloadHistoryStatus::Paused)
-                    });
+                let existing_paused = app.download_history.iter().any(|entry| {
+                    entry.model_id == session.model_id
+                        && entry.version_id == session.version_id
+                        && matches!(entry.status, DownloadHistoryStatus::Paused)
+                });
                 if !existing_paused {
                     app.record_interrupted_session_to_history(session);
                 }
@@ -558,8 +574,16 @@ impl App {
             self.image_bookmarks
                 .iter()
                 .filter(|image| {
-                    let username = image.username.as_deref().unwrap_or_default().to_ascii_lowercase();
-                    let base_model = image.base_model.as_deref().unwrap_or_default().to_ascii_lowercase();
+                    let username = image
+                        .username
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    let base_model = image
+                        .base_model
+                        .as_deref()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
                     image.id.to_string().contains(&query)
                         || username.contains(&query)
                         || base_model.contains(&query)
@@ -654,13 +678,18 @@ impl App {
         }
     }
 
-    pub fn next_model_search_options_if_needed(&mut self) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
+    pub fn next_model_search_options_if_needed(
+        &mut self,
+    ) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
         if !self.can_request_more_models() {
             return None;
         }
 
         self.model_search_loading_more = true;
-        Some((self.search_form.build_options(), self.model_search_next_page.clone()))
+        Some((
+            self.search_form.build_options(),
+            self.model_search_next_page.clone(),
+        ))
     }
 
     pub fn select_next(&mut self) {
@@ -718,7 +747,12 @@ impl App {
         }
     }
 
-    pub fn append_models_results(&mut self, mut new_models: Vec<Model>, has_more: bool, next_page: Option<String>) {
+    pub fn append_models_results(
+        &mut self,
+        mut new_models: Vec<Model>,
+        has_more: bool,
+        next_page: Option<String>,
+    ) {
         if new_models.is_empty() {
             self.model_search_has_more = has_more;
             self.model_search_loading_more = false;
@@ -732,7 +766,12 @@ impl App {
         self.model_search_next_page = next_page;
     }
 
-    pub fn set_models_results(&mut self, models: Vec<Model>, has_more: bool, next_page: Option<String>) {
+    pub fn set_models_results(
+        &mut self,
+        models: Vec<Model>,
+        has_more: bool,
+        next_page: Option<String>,
+    ) {
         self.models = models;
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
@@ -779,7 +818,10 @@ impl App {
                 if let Some(version) = model.model_versions.get(v_idx) {
                     if let Some(tx) = &self.tx {
                         let _ = tx.try_send(WorkerCommand::DownloadModel(model.id, version.id));
-                        self.status = format!("Initiated download for {} (v: {})", model.name, version.name);
+                        self.status = format!(
+                            "Initiated download for {} (v: {})",
+                            model.name, version.name
+                        );
                     }
                 }
             }
@@ -787,7 +829,9 @@ impl App {
     }
 
     pub fn select_next_download(&mut self) {
-        if !self.active_download_order.is_empty() && self.selected_download_index + 1 < self.active_download_order.len() {
+        if !self.active_download_order.is_empty()
+            && self.selected_download_index + 1 < self.active_download_order.len()
+        {
             self.selected_download_index += 1;
         }
     }
@@ -818,7 +862,9 @@ impl App {
         if self.selected_download_index >= self.active_download_order.len() {
             self.selected_download_index = self.active_download_order.len() - 1;
         }
-        self.active_download_order.get(self.selected_download_index).copied()
+        self.active_download_order
+            .get(self.selected_download_index)
+            .copied()
     }
 
     pub fn push_download_history(
@@ -857,7 +903,9 @@ impl App {
         if self.download_history.is_empty() {
             return None;
         }
-        let idx = self.selected_history_index.min(self.download_history.len().saturating_sub(1));
+        let idx = self
+            .selected_history_index
+            .min(self.download_history.len().saturating_sub(1));
         Some(self.download_history.len() - 1 - idx)
     }
 
@@ -967,7 +1015,9 @@ impl App {
     }
 
     pub fn is_image_bookmarked(&self, image_id: u64) -> bool {
-        self.image_bookmarks.iter().any(|image| image.id == image_id)
+        self.image_bookmarks
+            .iter()
+            .any(|image| image.id == image_id)
     }
 
     pub fn toggle_bookmark_for_selected_image(&mut self, image: &ImageItem) {
@@ -1156,7 +1206,11 @@ impl App {
     pub fn collect_interrupt_sessions_from_active(&self) -> Vec<InterruptedDownloadSession> {
         self.active_download_order
             .iter()
-            .filter_map(|model_id| self.active_downloads.get(model_id).map(|tracker| (*model_id, tracker)))
+            .filter_map(|model_id| {
+                self.active_downloads
+                    .get(model_id)
+                    .map(|tracker| (*model_id, tracker))
+            })
             .map(|(model_id, tracker)| InterruptedDownloadSession {
                 model_id,
                 version_id: tracker.version_id,
@@ -1176,12 +1230,11 @@ impl App {
     }
 
     pub fn upsert_download_history(&mut self, entry: DownloadHistoryEntry) {
-        self.download_history
-            .retain(|existing| {
-                !(existing.model_id == entry.model_id
-                    && existing.version_id == entry.version_id
-                    && matches!(existing.status, DownloadHistoryStatus::Paused))
-            });
+        self.download_history.retain(|existing| {
+            !(existing.model_id == entry.model_id
+                && existing.version_id == entry.version_id
+                && matches!(existing.status, DownloadHistoryStatus::Paused))
+        });
 
         self.download_history.push(entry);
 
@@ -1237,7 +1290,9 @@ impl App {
 
     pub fn persist_interrupted_downloads(&mut self) {
         if let Some(path) = &self.interrupted_download_file_path {
-            if let Err(err) = save_interrupted_downloads_to_file(path, &self.interrupted_download_sessions) {
+            if let Err(err) =
+                save_interrupted_downloads_to_file(path, &self.interrupted_download_sessions)
+            {
                 self.last_error = Some(err.to_string());
             } else {
                 self.last_error = None;
@@ -1258,7 +1313,10 @@ impl App {
     }
 
     pub fn is_bookmark_export_prompt(&self) -> bool {
-        matches!(self.bookmark_path_prompt_action, Some(BookmarkPathAction::Export))
+        matches!(
+            self.bookmark_path_prompt_action,
+            Some(BookmarkPathAction::Export)
+        )
     }
 
     pub fn apply_bookmark_query(&mut self) {
@@ -1313,7 +1371,10 @@ impl App {
         self.persist_bookmarks();
 
         if self.bookmarks.len() > before {
-            self.status = format!("Imported {} new bookmark(s).", self.bookmarks.len() - before);
+            self.status = format!(
+                "Imported {} new bookmark(s).",
+                self.bookmarks.len() - before
+            );
             self.last_error = None;
         } else {
             self.status = "Import completed, no new bookmarks.".to_string();
@@ -1515,7 +1576,10 @@ fn load_interrupted_downloads(path: Option<&Path>) -> Vec<InterruptedDownloadSes
     serde_json::from_str::<Vec<InterruptedDownloadSession>>(&content).unwrap_or_default()
 }
 
-fn save_download_history_to_file(path: &Path, history: &[DownloadHistoryEntry]) -> Result<(), String> {
+fn save_download_history_to_file(
+    path: &Path,
+    history: &[DownloadHistoryEntry],
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }

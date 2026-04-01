@@ -8,9 +8,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
+use api::CivitaiClient;
 use cli::{Cli, Commands};
 use config::AppConfig;
-use api::CivitaiClient;
 use download::DownloadManager;
 
 #[tokio::main]
@@ -19,7 +19,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Config { api_key, comfyui_path }) => {
+        Some(Commands::Config {
+            api_key,
+            comfyui_path,
+        }) => {
             if let Some(key) = api_key {
                 app_config.api_key = Some(key.clone());
                 println!("API key updated.");
@@ -37,7 +40,7 @@ async fn main() -> Result<()> {
             if let Some(model_id) = id {
                 println!("Fetching model {} metadata...", model_id);
                 let model = client.get_model(*model_id).await?;
-                
+
                 // For simplicity, download the latest or primary version
                 if let Some(version) = model.model_versions.first() {
                     let path = manager.download_version(&model, &version, None).await?;

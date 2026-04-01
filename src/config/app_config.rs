@@ -39,14 +39,14 @@ impl AppConfig {
     /// Loads the configuration from the standardized OS config path.
     pub fn load() -> Result<Self> {
         let config_file = Self::config_path().context("Unable to determine config directory")?;
-        
+
         if !config_file.exists() {
             return Ok(Self::default());
         }
 
         let content = fs::read_to_string(&config_file)
             .with_context(|| format!("Failed to read config file at {:?}", config_file))?;
-            
+
         let config: AppConfig = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file at {:?}", config_file))?;
 
@@ -56,7 +56,7 @@ impl AppConfig {
     /// Saves the configuration to disk.
     pub fn save(&self) -> Result<()> {
         let config_file = Self::config_path().context("Unable to determine config directory")?;
-        
+
         if let Some(parent) = config_file.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory at {:?}", parent))?;
@@ -76,7 +76,8 @@ impl AppConfig {
     }
 
     pub fn config_dir() -> Option<PathBuf> {
-        ProjectDirs::from("com", "civitai", "civitai-cli").map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
+        ProjectDirs::from("com", "civitai", "civitai-cli")
+            .map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
     }
 
     pub fn bookmark_path() -> Option<PathBuf> {
@@ -106,15 +107,15 @@ impl AppConfig {
     }
 
     pub fn download_history_path(&self) -> Option<PathBuf> {
-        self.download_history_file_path
-            .clone()
-            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("download_history.json")))
+        self.download_history_file_path.clone().or_else(|| {
+            Self::config_dir().map(|config_dir| config_dir.join("download_history.json"))
+        })
     }
 
     pub fn interrupted_download_path(&self) -> Option<PathBuf> {
-        self.interrupted_download_file_path
-            .clone()
-            .or_else(|| Self::config_dir().map(|config_dir| config_dir.join("interrupted_downloads.json")))
+        self.interrupted_download_file_path.clone().or_else(|| {
+            Self::config_dir().map(|config_dir| config_dir.join("interrupted_downloads.json"))
+        })
     }
 }
 

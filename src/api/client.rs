@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, IntoUrl};
 
-use super::types::{Model, ModelVersion, ImageResponse, PaginatedResponse};
+use super::types::{ImageResponse, Model, ModelVersion, PaginatedResponse};
 
 #[derive(Clone, Default, Debug)]
 pub struct SearchOptions {
@@ -47,7 +47,7 @@ impl CivitaiClient {
             .user_agent("civitai-cli/0.1")
             .build()
             .context("Failed to build HTTP client")?;
-        
+
         Ok(Self { client, api_key })
     }
 
@@ -78,10 +78,14 @@ impl CivitaiClient {
             }
         }
         if let Some(s) = &opts.sort {
-            if s != "All" { url.push_str(&format!("&sort={}", s.replace(" ", "%20"))); }
+            if s != "All" {
+                url.push_str(&format!("&sort={}", s.replace(" ", "%20")));
+            }
         }
         if let Some(t) = &opts.types {
-            if t != "All" { url.push_str(&format!("&types={}", t.replace(" ", "%20"))); }
+            if t != "All" {
+                url.push_str(&format!("&types={}", t.replace(" ", "%20")));
+            }
         }
         if let Some(period) = &opts.period {
             if !period.is_empty() {
@@ -137,7 +141,9 @@ impl CivitaiClient {
             }
         }
         if let Some(b) = &opts.base_models {
-            if b != "All" { url.push_str(&format!("&baseModels={}", b.replace(" ", "%20"))); }
+            if b != "All" {
+                url.push_str(&format!("&baseModels={}", b.replace(" ", "%20")));
+            }
         }
 
         self.fetch(&url).await
@@ -153,7 +159,7 @@ impl CivitaiClient {
 
     async fn fetch<T: serde::de::DeserializeOwned, U: IntoUrl>(&self, url: U) -> Result<T> {
         let mut req = self.client.get(url);
-        
+
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }

@@ -7,6 +7,10 @@ license = "Apache-2.0"
 repository = "https://github.com/Bogyie/civitai-cli"
 homepage = "https://github.com/Bogyie/civitai-cli"
 
+[lib]
+name = "civitai_cli"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0.102"
 bytes = "1.11.1"
