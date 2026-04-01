@@ -69,21 +69,6 @@ pub enum SearchPeriod {
     Day,
 }
 
-pub const SETTINGS_FIELD_API_KEY: usize = 0;
-pub const SETTINGS_FIELD_COMFYUI_PATH: usize = 1;
-pub const SETTINGS_FIELD_BOOKMARK_FILE: usize = 2;
-pub const SETTINGS_FIELD_MODEL_CACHE_PATH: usize = 3;
-pub const SETTINGS_FIELD_MODEL_CACHE_TTL_HOURS: usize = 4;
-pub const SETTINGS_FIELD_IMAGE_CACHE_PATH: usize = 5;
-pub const SETTINGS_FIELD_IMAGE_SEARCH_TTL_MINUTES: usize = 6;
-pub const SETTINGS_FIELD_IMAGE_DETAIL_TTL_MINUTES: usize = 7;
-pub const SETTINGS_FIELD_IMAGE_CACHE_TTL_MINUTES: usize = 8;
-pub const SETTINGS_FIELD_MEDIA_QUALITY: usize = 10;
-pub const SETTINGS_FIELD_HIDE_NSFW: usize = 9;
-pub const SETTINGS_FIELD_DOWNLOAD_HISTORY_FILE: usize = 11;
-pub const SETTINGS_FIELD_CLEAR_CACHES: usize = 12;
-pub const SETTINGS_FIELD_MAX_INDEX: usize = SETTINGS_FIELD_CLEAR_CACHES;
-
 impl SearchPeriod {
     pub fn all() -> Vec<Self> {
         vec![Self::AllTime, Self::Year, Self::Month, Self::Week, Self::Day]
@@ -116,7 +101,6 @@ pub struct SearchFormState {
     pub selected_base_models: BTreeSet<ModelBaseModel>,
     pub periods: Vec<SearchPeriod>,
     pub selected_period: usize,
-    pub hide_nsfw: bool,
 }
 
 pub struct SettingsFormState {
@@ -161,7 +145,6 @@ pub struct ImageSearchFormState {
     pub aspect_ratio_options: Vec<ImageAspectRatio>,
     pub aspect_ratio_cursor: usize,
     pub selected_aspect_ratios: BTreeSet<String>,
-    pub hide_nsfw: bool,
     pub linked_model_version_id: Option<u64>,
 }
 
@@ -199,7 +182,6 @@ impl ImageSearchFormState {
             aspect_ratio_options: ImageAspectRatio::all(),
             aspect_ratio_cursor: 0,
             selected_aspect_ratios: BTreeSet::new(),
-            hide_nsfw: false,
             linked_model_version_id: None,
         }
     }
@@ -239,7 +221,6 @@ impl ImageSearchFormState {
                 .get(self.selected_period)
                 .and_then(|period| period_to_created_at(period.label())),
             limit: Some(50),
-            nsfw: self.hide_nsfw.then_some(false),
             extras: self
                 .linked_model_version_id
                 .map(|id| vec![("modelVersionId".to_string(), id.to_string())])
@@ -285,7 +266,6 @@ impl SearchFormState {
             selected_base_models: BTreeSet::new(),
             periods: SearchPeriod::all(),
             selected_period: 0,
-            hide_nsfw: false,
         }
     }
 
@@ -312,7 +292,6 @@ impl SearchFormState {
                 .map(|period| period_to_created_at(period.label()))
                 .unwrap_or(None),
             limit: Some(50),
-            nsfw: self.hide_nsfw.then_some(false),
             ..Default::default()
         }
     }
@@ -621,7 +600,6 @@ impl App {
             bookmark_path_draft: String::new(),
             tx: None,
         };
-        app.sync_nsfw_settings();
 
         if !interrupted_download_sessions.is_empty() {
             for session in interrupted_download_sessions.iter() {
@@ -637,48 +615,6 @@ impl App {
         }
 
         app
-    }
-
-    pub fn sync_nsfw_settings(&mut self) {
-        let hide_nsfw = self.config.hide_nsfw;
-        self.search_form.hide_nsfw = hide_nsfw;
-        self.bookmark_search_form.hide_nsfw = hide_nsfw;
-        self.bookmark_search_form_draft.hide_nsfw = hide_nsfw;
-        self.image_search_form.hide_nsfw = hide_nsfw;
-    }
-
-    fn should_hide_model(&self, model: &Model) -> bool {
-        if !self.config.hide_nsfw {
-            return false;
-        }
-        model.nsfw.unwrap_or(false)
-    }
-
-    fn should_hide_image(&self, image: &ImageItem) -> bool {
-        if !self.config.hide_nsfw {
-            return false;
-        }
-        let nsfw_level = image
-            .combined_nsfw_level
-            .or(image.nsfw_level)
-            .or(image.ai_nsfw_level);
-        nsfw_level.unwrap_or(0) > 0
-    }
-
-    fn filter_nsfw_model_results(&self, mut models: Vec<Model>) -> Vec<Model> {
-        if !self.config.hide_nsfw {
-            return models;
-        }
-        models.retain(|model| !self.should_hide_model(model));
-        models
-    }
-
-    fn filter_nsfw_images(&self, mut images: Vec<ImageItem>) -> Vec<ImageItem> {
-        if !self.config.hide_nsfw {
-            return images;
-        }
-        images.retain(|image| !self.should_hide_image(image));
-        images
     }
 
     pub fn set_worker_tx(&mut self, tx: mpsc::Sender<WorkerCommand>) {
@@ -708,11 +644,7 @@ impl App {
     pub fn visible_image_bookmarks(&self) -> Vec<ImageItem> {
         let query = self.image_bookmark_query.trim().to_ascii_lowercase();
         if query.is_empty() {
-            self.image_bookmarks
-                .iter()
-                .filter(|image| !self.should_hide_image(image))
-                .cloned()
-                .collect()
+            self.image_bookmarks.clone()
         } else {
             self.image_bookmarks
                 .iter()
@@ -728,15 +660,14 @@ impl App {
                         .as_deref()
                         .unwrap_or_default()
                         .to_ascii_lowercase();
-                    !self.should_hide_image(image)
-                        && (image.id.to_string().contains(&query)
+                    image.id.to_string().contains(&query)
                         || username.contains(&query)
                         || base_model.contains(&query)
                         || image
                             .metadata
                             .as_ref()
                             .map(|meta| meta.to_string().to_ascii_lowercase().contains(&query))
-                            .unwrap_or(false))
+                            .unwrap_or(false)
                 })
                 .cloned()
                 .collect()
@@ -792,7 +723,6 @@ impl App {
         mut images: Vec<ImageItem>,
         next_page: Option<u32>,
     ) {
-        images = self.filter_nsfw_images(images);
         let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
         self.image_cache.retain(|id, _| new_ids.contains(id));
         self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
@@ -816,7 +746,6 @@ impl App {
         mut images: Vec<ImageItem>,
         next_page: Option<u32>,
     ) {
-        images = self.filter_nsfw_images(images);
         if !self.images.is_empty() && !images.is_empty() {
             let known_ids: HashSet<u64> = self.images.iter().map(|item| item.id).collect();
             images.retain(|item| !known_ids.contains(&item.id));
@@ -1098,7 +1027,6 @@ impl App {
         has_more: bool,
         next_page: Option<u32>,
     ) {
-        new_models = self.filter_nsfw_model_results(new_models);
         if new_models.is_empty() {
             self.model_search_has_more = has_more;
             self.model_search_loading_more = false;
@@ -1124,7 +1052,6 @@ impl App {
         has_more: bool,
         next_page: Option<u32>,
     ) {
-        models = self.filter_nsfw_model_results(models);
         models.sort_by_key(|model| !has_displayable_model_version(model));
         let known_version_ids = models
             .iter()
@@ -1510,8 +1437,7 @@ impl App {
             .bookmarks
             .iter()
             .filter(|model| {
-                !self.should_hide_model(model)
-                    && bookmark_matches_query(model, &query)
+                bookmark_matches_query(model, &query)
                     && bookmark_matches_type(model, &self.bookmark_search_form.selected_types)
                     && bookmark_matches_base_model(
                         model,

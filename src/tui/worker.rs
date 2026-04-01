@@ -269,7 +269,6 @@ fn cache_key_for_options(opts: &ModelSearchState) -> String {
         "created={}",
         normalize_cache_segment(opts.created_at.as_deref().unwrap_or_default())
     ));
-    parts.push(format!("nsfw={}", opts.nsfw.unwrap_or(false)));
     parts.join("|")
 }
 

@@ -14,24 +14,10 @@ use tokio::sync::mpsc;
 use crate::tui::app::{
     App, AppMessage, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection,
     MainTab, MediaRenderRequest, SearchFormMode, SearchFormSection, WorkerCommand,
-    SETTINGS_FIELD_API_KEY, SETTINGS_FIELD_BOOKMARK_FILE, SETTINGS_FIELD_CLEAR_CACHES,
-    SETTINGS_FIELD_COMFYUI_PATH, SETTINGS_FIELD_DOWNLOAD_HISTORY_FILE,
-    SETTINGS_FIELD_HIDE_NSFW, SETTINGS_FIELD_IMAGE_CACHE_PATH,
-    SETTINGS_FIELD_IMAGE_CACHE_TTL_MINUTES, SETTINGS_FIELD_IMAGE_DETAIL_TTL_MINUTES,
-    SETTINGS_FIELD_IMAGE_SEARCH_TTL_MINUTES, SETTINGS_FIELD_MEDIA_QUALITY,
-    SETTINGS_FIELD_MODEL_CACHE_PATH, SETTINGS_FIELD_MODEL_CACHE_TTL_HOURS,
-    SETTINGS_FIELD_MAX_INDEX,
 };
 use crate::tui::image::comfy_workflow_json;
 use crate::tui::model::{model_versions, preview_image_info};
 use crate::tui::ui;
-
-const SETTINGS_FIELD_MODEL_TTL: usize = SETTINGS_FIELD_MODEL_CACHE_TTL_HOURS;
-const SETTINGS_FIELD_IMAGE_SEARCH_TTL: usize = SETTINGS_FIELD_IMAGE_SEARCH_TTL_MINUTES;
-const SETTINGS_FIELD_IMAGE_DETAIL_TTL: usize = SETTINGS_FIELD_IMAGE_DETAIL_TTL_MINUTES;
-const SETTINGS_FIELD_IMAGE_BINARY_TTL: usize = SETTINGS_FIELD_IMAGE_CACHE_TTL_MINUTES;
-const SETTINGS_FIELD_DOWNLOAD_HISTORY: usize = SETTINGS_FIELD_DOWNLOAD_HISTORY_FILE;
-const SETTINGS_FIELD_CLEAR_CACHE: usize = SETTINGS_FIELD_CLEAR_CACHES;
 
 fn debug_fetch_log_path(config: &crate::config::AppConfig) -> Option<PathBuf> {
     crate::config::AppConfig::config_dir()
@@ -1260,7 +1246,7 @@ pub async fn run_event_loop(
                                     app.settings_form.editing = false;
                                 }
                                 KeyCode::Enter => {
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_CLEAR_CACHE {
+                                    if app.settings_form.focused_field == 11 {
                                         app.image_cache.clear();
                                         app.image_bytes_cache.clear();
                                         app.image_request_keys.clear();
@@ -1274,25 +1260,17 @@ pub async fn run_event_loop(
                                         app.status = "Clearing cache storage...".into();
                                         continue;
                                     }
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_API_KEY {
-                                        app.config.api_key = if app.settings_form.input_buffer.is_empty() {
-                                            None
-                                        } else {
-                                            Some(app.settings_form.input_buffer.clone())
-                                        };
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_COMFYUI_PATH {
-                                        app.config.comfyui_path = if app.settings_form.input_buffer.is_empty() {
-                                            None
-                                        } else {
-                                            Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
-                                        };
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_MODEL_CACHE_PATH {
+                                    if app.settings_form.focused_field == 0 {
+                                        app.config.api_key = if app.settings_form.input_buffer.is_empty() { None } else { Some(app.settings_form.input_buffer.clone()) };
+                                    } else if app.settings_form.focused_field == 1 {
+                                        app.config.comfyui_path = if app.settings_form.input_buffer.is_empty() { None } else { Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone())) };
+                                    } else if app.settings_form.focused_field == 3 {
                                         app.config.model_search_cache_path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
                                             Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
                                         };
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_MODEL_TTL {
+                                    } else if app.settings_form.focused_field == 4 {
                                         match app.settings_form.input_buffer.trim().parse::<u64>() {
                                             Ok(value) if value > 0 => {
                                                 app.config.model_search_cache_ttl_hours = value;
@@ -1304,13 +1282,13 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_CACHE_PATH {
+                                    } else if app.settings_form.focused_field == 5 {
                                         app.config.image_cache_path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
                                             Some(std::path::PathBuf::from(app.settings_form.input_buffer.clone()))
                                         };
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_SEARCH_TTL {
+                                    } else if app.settings_form.focused_field == 6 {
                                         match app.settings_form.input_buffer.trim().parse::<u64>() {
                                             Ok(value) if value > 0 => {
                                                 app.config.image_search_cache_ttl_minutes = value;
@@ -1322,7 +1300,7 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_DETAIL_TTL {
+                                    } else if app.settings_form.focused_field == 7 {
                                         match app.settings_form.input_buffer.trim().parse::<u64>() {
                                             Ok(value) if value > 0 => {
                                                 app.config.image_detail_cache_ttl_minutes = value;
@@ -1334,7 +1312,7 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_BINARY_TTL {
+                                    } else if app.settings_form.focused_field == 8 {
                                         match app.settings_form.input_buffer.trim().parse::<u64>() {
                                             Ok(value) => {
                                                 app.config.image_cache_ttl_minutes = value;
@@ -1346,7 +1324,7 @@ pub async fn run_event_loop(
                                                 continue;
                                             }
                                         }
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_BOOKMARK_FILE {
+                                    } else if app.settings_form.focused_field == 2 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -1354,7 +1332,7 @@ pub async fn run_event_loop(
                                         };
                                         app.config.bookmark_file_path = path.clone();
                                         app.bookmark_file_path = path;
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_DOWNLOAD_HISTORY {
+                                    } else if app.settings_form.focused_field == 10 {
                                         let path = if app.settings_form.input_buffer.is_empty() {
                                             None
                                         } else {
@@ -1366,12 +1344,9 @@ pub async fn run_event_loop(
                                             app.config.download_history_file_path = None;
                                             app.download_history_file_path = None;
                                         }
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_MEDIA_QUALITY {
+                                    } else if app.settings_form.focused_field == 9 {
                                         app.config.media_quality = app.config.media_quality.next();
                                         refresh_visible_media(app);
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_HIDE_NSFW {
-                                        app.config.hide_nsfw = !app.config.hide_nsfw;
-                                        app.sync_nsfw_settings();
                                     }
                                     if let Err(e) = app.config.save() {
                                         app.last_error = Some(format!("Failed to save config: {}", e));
@@ -1380,7 +1355,6 @@ pub async fn run_event_loop(
                                         app.last_error = None;
                                         app.show_status_modal = false;
                                         app.status = "Settings saved to config.json".into();
-                                        app.sync_nsfw_settings();
                                         if let Some(tx) = &app.tx {
                                             let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
                                         }
@@ -1546,7 +1520,7 @@ pub async fn run_event_loop(
                                         continue;
                                     }
                                 } else if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_MEDIA_QUALITY {
+                                    if app.settings_form.focused_field == 9 {
                                         app.config.media_quality = app.config.media_quality.next();
                                         refresh_visible_media(app);
                                         if let Err(e) = app.config.save() {
@@ -1554,31 +1528,13 @@ pub async fn run_event_loop(
                                             app.show_status_modal = true;
                                         } else {
                                             app.last_error = None;
-                                            app.sync_nsfw_settings();
-                                            app.status = "Settings saved to config.json".into();
                                             if let Some(tx) = &app.tx {
                                                 let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
                                             }
                                         }
                                         continue;
                                     }
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_HIDE_NSFW {
-                                        app.config.hide_nsfw = !app.config.hide_nsfw;
-                                        if let Err(e) = app.config.save() {
-                                            app.last_error = Some(format!("Failed to save config: {}", e));
-                                            app.show_status_modal = true;
-                                        } else {
-                                            app.last_error = None;
-                                            app.show_status_modal = false;
-                                            app.status = "Settings saved to config.json".into();
-                                            app.sync_nsfw_settings();
-                                            if let Some(tx) = &app.tx {
-                                                let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
-                                            }
-                                        }
-                                        continue;
-                                    }
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_CLEAR_CACHE {
+                                    if app.settings_form.focused_field == 11 {
                                         app.image_cache.clear();
                                         app.image_bytes_cache.clear();
                                         app.image_request_keys.clear();
@@ -1593,40 +1549,40 @@ pub async fn run_event_loop(
                                         continue;
                                     }
                                     app.settings_form.editing = true;
-                                    app.settings_form.input_buffer = if app.settings_form.focused_field == SETTINGS_FIELD_API_KEY {
+                                    app.settings_form.input_buffer = if app.settings_form.focused_field == 0 {
                                         app.config.api_key.clone().unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_COMFYUI_PATH {
+                                    } else if app.settings_form.focused_field == 1 {
                                         app.config.comfyui_path.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_BOOKMARK_FILE {
+                                    } else if app.settings_form.focused_field == 2 {
                                         app.config.bookmark_file_path.as_ref().map(|path| path.to_string_lossy().to_string()).unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_MODEL_CACHE_PATH {
+                                    } else if app.settings_form.focused_field == 3 {
                                         app.config
                                             .model_search_cache_path
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_CACHE_PATH {
+                                    } else if app.settings_form.focused_field == 5 {
                                         app.config
                                             .image_cache_path
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_SEARCH_TTL {
+                                    } else if app.settings_form.focused_field == 6 {
                                         app.config.image_search_cache_ttl_minutes.to_string()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_DETAIL_TTL {
+                                    } else if app.settings_form.focused_field == 7 {
                                         app.config.image_detail_cache_ttl_minutes.to_string()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_IMAGE_BINARY_TTL {
+                                    } else if app.settings_form.focused_field == 8 {
                                         app.config.image_cache_ttl_minutes.to_string()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_DOWNLOAD_HISTORY {
+                                    } else if app.settings_form.focused_field == 10 {
                                         app.config
                                             .download_history_file_path
                                             .as_ref()
                                             .map(|path| path.to_string_lossy().to_string())
                                             .unwrap_or_default()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_HIDE_NSFW {
+                                    } else if app.settings_form.focused_field == 11 {
                                         String::new()
-                                    } else if app.settings_form.focused_field == SETTINGS_FIELD_MODEL_TTL {
-                                        app.config.model_search_cache_ttl_hours.to_string()
+                                    } else if app.settings_form.focused_field == 9 {
+                                        String::new()
                                     } else {
                                         app.config.model_search_cache_ttl_hours.to_string()
                                     };
@@ -1635,40 +1591,17 @@ pub async fn run_event_loop(
                             KeyCode::Left | KeyCode::Char('h') => {
                                 if app.active_tab == MainTab::Settings
                                     && !app.settings_form.editing
+                                    && app.settings_form.focused_field == 9
                                 {
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_MEDIA_QUALITY {
-                                        app.config.media_quality = app.config.media_quality.previous();
-                                        refresh_visible_media(app);
-                                        if let Err(e) = app.config.save() {
-                                            app.last_error = Some(format!("Failed to save config: {}", e));
-                                            app.show_status_modal = true;
-                                        } else {
-                                            app.last_error = None;
-                                            app.show_status_modal = false;
-                                            app.status = "Settings saved to config.json".into();
-                                            app.sync_nsfw_settings();
-                                            if let Some(tx) = &app.tx {
-                                                let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
-                                            }
-                                        }
-                                        continue;
+                                    app.config.media_quality = app.config.media_quality.previous();
+                                    refresh_visible_media(app);
+                                    if let Err(e) = app.config.save() {
+                                        app.last_error = Some(format!("Failed to save config: {}", e));
+                                        app.show_status_modal = true;
+                                    } else if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
                                     }
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_HIDE_NSFW {
-                                        app.config.hide_nsfw = !app.config.hide_nsfw;
-                                        if let Err(e) = app.config.save() {
-                                            app.last_error = Some(format!("Failed to save config: {}", e));
-                                            app.show_status_modal = true;
-                                        } else {
-                                            app.last_error = None;
-                                            app.show_status_modal = false;
-                                            app.status = "Settings saved to config.json".into();
-                                            app.sync_nsfw_settings();
-                                            if let Some(tx) = &app.tx {
-                                                let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
-                                            }
-                                        }
-                                        continue;
-                                    }
+                                    continue;
                                 }
 
                                 if app.active_tab == MainTab::Images
@@ -1687,34 +1620,17 @@ pub async fn run_event_loop(
                             KeyCode::Right | KeyCode::Char('l') => {
                                 if app.active_tab == MainTab::Settings
                                     && !app.settings_form.editing
+                                    && app.settings_form.focused_field == 9
                                 {
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_MEDIA_QUALITY {
-                                        app.config.media_quality = app.config.media_quality.next();
-                                        refresh_visible_media(app);
-                                        if let Err(e) = app.config.save() {
-                                            app.last_error = Some(format!("Failed to save config: {}", e));
-                                            app.show_status_modal = true;
-                                        } else if let Some(tx) = &app.tx {
-                                            let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
-                                        }
-                                        continue;
+                                    app.config.media_quality = app.config.media_quality.next();
+                                    refresh_visible_media(app);
+                                    if let Err(e) = app.config.save() {
+                                        app.last_error = Some(format!("Failed to save config: {}", e));
+                                        app.show_status_modal = true;
+                                    } else if let Some(tx) = &app.tx {
+                                        let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
                                     }
-                                    if app.settings_form.focused_field == SETTINGS_FIELD_HIDE_NSFW {
-                                        app.config.hide_nsfw = !app.config.hide_nsfw;
-                                        if let Err(e) = app.config.save() {
-                                            app.last_error = Some(format!("Failed to save config: {}", e));
-                                            app.show_status_modal = true;
-                                        } else {
-                                            app.last_error = None;
-                                            app.show_status_modal = false;
-                                            app.status = "Settings saved to config.json".into();
-                                            app.sync_nsfw_settings();
-                                            if let Some(tx) = &app.tx {
-                                                let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
-                                            }
-                                        }
-                                        continue;
-                                    }
+                                    continue;
                                 }
 
                                 if app.active_tab == MainTab::Images
@@ -1750,9 +1666,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Char('j') => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < SETTINGS_FIELD_MAX_INDEX {
-                                        app.settings_form.focused_field += 1;
-                                    }
+                                    if app.settings_form.focused_field < 11 { app.settings_form.focused_field += 1; }
                                 } else if app.active_tab == MainTab::Downloads {
                                     if app.active_downloads.is_empty() {
                                         app.select_next_history();
@@ -1827,7 +1741,7 @@ pub async fn run_event_loop(
                             }
                             KeyCode::Down => {
                                 if app.active_tab == MainTab::Settings {
-                                    if app.settings_form.focused_field < SETTINGS_FIELD_MAX_INDEX {
+                                    if app.settings_form.focused_field < 11 {
                                         app.settings_form.focused_field += 1;
                                     }
                                 } else if app.active_tab == MainTab::Downloads {
