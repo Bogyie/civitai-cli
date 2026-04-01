@@ -1656,7 +1656,8 @@ pub async fn spawn_worker(
                             Ok((items, next_page)) => {
                                 let total_items = items.len();
                                 let detail_cache_root = image_detail_cache_path.lock().await.clone();
-                                let hydrated_items = stream::iter(items.into_iter().map(|item| {
+                                let mut visible_items =
+                                    stream::iter(items.into_iter().map(|item| {
                                     let sdk_clone = sdk_clone.clone();
                                     let detail_cache_root = detail_cache_root.clone();
                                     async move {
@@ -1672,11 +1673,8 @@ pub async fn spawn_worker(
                                 .buffered(6)
                                 .collect::<Vec<_>>()
                                 .await;
-                                let visible_items = hydrated_items
-                                    .clone()
-                                    .into_iter()
-                                    .filter(|item| item.r#type.as_deref() != Some("video"))
-                                    .collect::<Vec<_>>();
+                                visible_items
+                                    .retain(|item| item.r#type.as_deref() != Some("video"));
                                 let skipped_videos = total_items.saturating_sub(visible_items.len());
 
                                 debug_fetch_log(
@@ -1697,7 +1695,7 @@ pub async fn spawn_worker(
                                             current_url.clone(),
                                             CachedImageSearchResult {
                                                 cache_key: current_url.clone(),
-                                                items: hydrated_items.clone(),
+                                                items: visible_items.clone(),
                                                 cached_at_unix_secs: now_unix_secs(),
                                             },
                                         );
@@ -1730,41 +1728,45 @@ pub async fn spawn_worker(
                             }
                         };
 
+                        let image_jobs = visible_items
+                            .iter()
+                            .filter_map(|item| {
+                                build_image_display_url(item, render_request, media_quality)
+                                    .map(|image_url| (item.id, image_url))
+                            })
+                            .collect::<Vec<_>>();
+
                         let _ = tx_msg_clone
                             .send(AppMessage::ImagesLoaded(
-                                visible_items.clone(),
+                                visible_items,
                                 is_append,
                                 final_next_page,
                             ))
                             .await;
 
                         let fetch_semaphore = Arc::new(Semaphore::new(3));
-                        let mut handles = Vec::with_capacity(visible_items.len());
-                        for item in visible_items {
+                        let mut handles = Vec::with_capacity(image_jobs.len());
+                        for (image_id, image_url) in image_jobs {
                             debug_fetch_log(
                                 &debug_config,
-                                &format!("FetchImages: enqueue image id={}", item.id),
+                                &format!("FetchImages: enqueue image id={}", image_id),
                             );
                             let image_bytes_cache_root =
                                 image_bytes_cache_path.lock().await.clone();
                             let use_binary_cache = image_bytes_cache_root.is_some();
-                            if let Some(image_url) =
-                                build_image_display_url(&item, render_request, media_quality)
-                            {
-                                handles.push(tokio::spawn(load_feed_image(
-                                    item.id,
-                                    image_url,
-                                    request_key.clone(),
-                                    req_client.clone(),
-                                    picker.clone(),
-                                    tx_msg_clone.clone(),
-                                    fetch_semaphore.clone(),
-                                    debug_config.clone(),
-                                    image_bytes_cache_root,
-                                    image_cache_ttl_minutes,
-                                    use_binary_cache,
-                                )));
-                            }
+                            handles.push(tokio::spawn(load_feed_image(
+                                image_id,
+                                image_url,
+                                request_key.clone(),
+                                req_client.clone(),
+                                picker.clone(),
+                                tx_msg_clone.clone(),
+                                fetch_semaphore.clone(),
+                                debug_config.clone(),
+                                image_bytes_cache_root,
+                                image_cache_ttl_minutes,
+                                use_binary_cache,
+                            )));
                         }
                         for handle in handles {
                             let _ = handle.await;
