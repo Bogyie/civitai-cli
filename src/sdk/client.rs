@@ -1,11 +1,19 @@
-use anyhow::{Context, Result};
-use reqwest::Client;
+use anyhow::{Context, Result, anyhow};
+use futures_util::StreamExt;
+use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 use super::constants::{
     CIVITAI_IMAGE_SEARCH_CLIENT_KEY, CIVITAI_IMAGE_SEARCH_MEILI_URL,
     CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL,
     CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL, IMAGES_SEARCH_INDEX, MODELS_SEARCH_INDEX,
+};
+use super::download::{
+    authorization_header_value, content_disposition_file_name, content_range_total, emit_event,
+    ensure_parent_dir, DownloadControl, DownloadDestination, DownloadEvent, DownloadKind,
+    DownloadOptions, DownloadResult, DownloadSpec,
 };
 use super::image_search::{ImageSearchState, SearchImageHit, SearchImageResponse};
 use super::model_search::{
@@ -306,6 +314,38 @@ impl SearchSdkClient {
         request
     }
 
+    pub fn build_download_request(
+        &self,
+        url: &str,
+        auth: Option<&ModelDownloadAuth>,
+        range_start: Option<u64>,
+    ) -> Result<reqwest::RequestBuilder> {
+        let request_url = match auth {
+            Some(ModelDownloadAuth::QueryToken(token)) => {
+                append_query_token(url, token)?
+            }
+            _ => url.to_string(),
+        };
+
+        let mut request = self.client.get(request_url);
+
+        if let Some(ModelDownloadAuth::BearerToken(token)) = auth {
+            let token = token.trim();
+            if !token.is_empty() {
+                request = request.header(
+                    reqwest::header::AUTHORIZATION,
+                    authorization_header_value(token)?,
+                );
+            }
+        }
+
+        if let Some(start) = range_start {
+            request = request.header(reqwest::header::RANGE, format!("bytes={start}-"));
+        }
+
+        Ok(request)
+    }
+
     pub fn image_page_url(&self, hit: &SearchImageHit) -> String {
         hit.image_page_url_with_base(&self.config.civitai_web_url)
     }
@@ -352,5 +392,337 @@ impl SearchSdkClient {
         token: &str,
     ) -> Option<String> {
         hit.model_download_url_with_token_and_base(&self.config.model_download_api_url, token)
+    }
+
+    pub fn build_media_download_spec(&self, hit: &SearchImageHit) -> Option<DownloadSpec> {
+        let url = self.original_media_url(hit)?;
+        Some(
+            DownloadSpec::new(url, hit.download_kind())
+                .with_file_name(hit.default_download_file_name()),
+        )
+    }
+
+    pub fn build_image_download_spec(&self, hit: &SearchImageHit) -> Option<DownloadSpec> {
+        let spec = self.build_media_download_spec(hit)?;
+        if spec.kind == DownloadKind::Image {
+            Some(spec)
+        } else {
+            None
+        }
+    }
+
+    pub fn build_video_download_spec(&self, hit: &SearchImageHit) -> Option<DownloadSpec> {
+        let spec = self.build_media_download_spec(hit)?;
+        if spec.kind == DownloadKind::Video {
+            Some(spec)
+        } else {
+            None
+        }
+    }
+
+    pub fn build_model_download_spec(
+        &self,
+        hit: &SearchModelHit,
+        auth: Option<ModelDownloadAuth>,
+    ) -> Option<DownloadSpec> {
+        let url = match auth.as_ref() {
+            Some(ModelDownloadAuth::QueryToken(token)) => {
+                self.model_download_url_with_token(hit, token)?
+            }
+            _ => self.model_download_url(hit)?,
+        };
+
+        Some(DownloadSpec {
+            url,
+            kind: DownloadKind::Model,
+            file_name: Some(hit.default_download_file_name()),
+            auth: match auth {
+                Some(ModelDownloadAuth::QueryToken(_)) => None,
+                value => value,
+            },
+        })
+    }
+
+    pub async fn download(
+        &self,
+        spec: &DownloadSpec,
+        options: &DownloadOptions,
+        progress_tx: Option<mpsc::Sender<DownloadEvent>>,
+        mut control_rx: Option<mpsc::Receiver<DownloadControl>>,
+    ) -> Result<DownloadResult> {
+        let target_path = match &options.destination {
+            DownloadDestination::File(path) => path.clone(),
+            DownloadDestination::Directory(path) => path.join(spec.suggested_file_name()),
+        };
+
+        if options.create_parent_dirs {
+            ensure_parent_dir(&target_path).await?;
+        }
+
+        let existing_size = if options.resume {
+            tokio::fs::metadata(&target_path)
+                .await
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let resumable = options.resume && existing_size > 0;
+
+        let response = self
+            .build_download_request(
+                &spec.url,
+                spec.auth.as_ref(),
+                if resumable { Some(existing_size) } else { None },
+            )?
+            .send()
+            .await
+            .context("Failed to send download request")?;
+
+        let response = response
+            .error_for_status()
+            .context("Download endpoint returned error")?;
+
+        let status = response.status();
+        let headers = response.headers().clone();
+        let content_type = headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+
+        let actual_target_path = match &options.destination {
+            DownloadDestination::File(_) => target_path,
+            DownloadDestination::Directory(path) => {
+                let file_name = content_disposition_file_name(&headers)
+                    .or_else(|| {
+                        target_path
+                            .file_name()
+                            .map(|value| value.to_string_lossy().to_string())
+                    })
+                    .unwrap_or_else(|| spec.suggested_file_name());
+                path.join(file_name)
+            }
+        };
+
+        if options.create_parent_dirs {
+            ensure_parent_dir(&actual_target_path).await?;
+        }
+
+        let resumed = resumable && status == StatusCode::PARTIAL_CONTENT;
+        let total_bytes = if resumed {
+            content_range_total(&headers).or_else(|| {
+                response
+                    .content_length()
+                    .map(|length| length.saturating_add(existing_size))
+            })
+        } else {
+            response.content_length()
+        };
+
+        let mut downloaded_bytes = if resumed { existing_size } else { 0 };
+        let mut file = if resumed {
+            tokio::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&actual_target_path)
+                .await
+                .with_context(|| format!("Failed to open {}", actual_target_path.display()))?
+        } else {
+            if !options.overwrite && tokio::fs::try_exists(&actual_target_path).await.unwrap_or(false) {
+                return Err(anyhow!("Refusing to overwrite {}", actual_target_path.display()));
+            }
+            tokio::fs::File::create(&actual_target_path)
+                .await
+                .with_context(|| format!("Failed to create {}", actual_target_path.display()))?
+        };
+
+        emit_event(
+            &progress_tx,
+            DownloadEvent::Started {
+                path: actual_target_path.clone(),
+                total_bytes,
+                resumed,
+            },
+        )
+        .await;
+
+        let mut stream = response.bytes_stream();
+        let mut paused = false;
+        let mut last_percent = -1.0f64;
+
+        loop {
+            if paused {
+                if let Some(control) = control_rx.as_mut() {
+                    match control.recv().await {
+                        Some(DownloadControl::Pause) => continue,
+                        Some(DownloadControl::Resume) => {
+                            paused = false;
+                            emit_event(
+                                &progress_tx,
+                                DownloadEvent::Resumed {
+                                    downloaded_bytes,
+                                    total_bytes,
+                                },
+                            )
+                            .await;
+                        }
+                        Some(DownloadControl::Cancel) => {
+                            emit_event(
+                                &progress_tx,
+                                DownloadEvent::Cancelled {
+                                    path: actual_target_path.clone(),
+                                    downloaded_bytes,
+                                    total_bytes,
+                                },
+                            )
+                            .await;
+                            return Err(anyhow!("download cancelled"));
+                        }
+                        None => return Err(anyhow!("control channel closed")),
+                    }
+                } else {
+                    paused = false;
+                }
+            }
+
+            match control_rx.as_mut() {
+                None => match stream.next().await {
+                    Some(chunk) => {
+                        let chunk = chunk.context("Failed to stream response body")?;
+                        file.write_all(&chunk).await?;
+                        downloaded_bytes += chunk.len() as u64;
+                        maybe_emit_progress(
+                            &progress_tx,
+                            downloaded_bytes,
+                            total_bytes,
+                            options.progress_step_percent,
+                            &mut last_percent,
+                        )
+                        .await;
+                    }
+                    None => break,
+                },
+                Some(control) => {
+                    tokio::select! {
+                        chunk = stream.next() => {
+                            match chunk {
+                                Some(chunk) => {
+                                    let chunk = chunk.context("Failed to stream response body")?;
+                                    file.write_all(&chunk).await?;
+                                    downloaded_bytes += chunk.len() as u64;
+                                    maybe_emit_progress(
+                                        &progress_tx,
+                                        downloaded_bytes,
+                                        total_bytes,
+                                        options.progress_step_percent,
+                                        &mut last_percent,
+                                    ).await;
+                                }
+                                None => break,
+                            }
+                        }
+                        Some(cmd) = control.recv() => {
+                            match cmd {
+                                DownloadControl::Pause => {
+                                    paused = true;
+                                    emit_event(
+                                        &progress_tx,
+                                        DownloadEvent::Paused {
+                                            downloaded_bytes,
+                                            total_bytes,
+                                        },
+                                    ).await;
+                                }
+                                DownloadControl::Resume => {}
+                                DownloadControl::Cancel => {
+                                    emit_event(
+                                        &progress_tx,
+                                        DownloadEvent::Cancelled {
+                                            path: actual_target_path.clone(),
+                                            downloaded_bytes,
+                                            total_bytes,
+                                        },
+                                    ).await;
+                                    return Err(anyhow!("download cancelled"));
+                                }
+                            }
+                        }
+                        else => return Err(anyhow!("control channel closed")),
+                    }
+                }
+            }
+        }
+
+        emit_event(
+            &progress_tx,
+            DownloadEvent::Completed {
+                path: actual_target_path.clone(),
+                downloaded_bytes,
+                total_bytes,
+            },
+        )
+        .await;
+
+        Ok(DownloadResult {
+            path: actual_target_path,
+            downloaded_bytes,
+            total_bytes,
+            resumed,
+            content_type,
+        })
+    }
+}
+
+fn append_query_token(url: &str, token: &str) -> Result<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return Ok(url.to_string());
+    }
+
+    let mut parsed = reqwest::Url::parse(url).context("Failed to parse download URL")?;
+    if !parsed
+        .query_pairs()
+        .any(|(key, value)| key == "token" && !value.is_empty())
+    {
+        parsed.query_pairs_mut().append_pair("token", token);
+    }
+    Ok(parsed.into())
+}
+
+async fn maybe_emit_progress(
+    progress_tx: &Option<mpsc::Sender<DownloadEvent>>,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    progress_step_percent: f64,
+    last_percent: &mut f64,
+) {
+    let percent = total_bytes.and_then(|total| {
+        if total == 0 {
+            None
+        } else {
+            Some((downloaded_bytes as f64 / total as f64) * 100.0)
+        }
+    });
+
+    let should_emit = match percent {
+        Some(percent) => {
+            progress_step_percent <= 0.0 || *last_percent < 0.0 || percent - *last_percent >= progress_step_percent
+        }
+        None => true,
+    };
+
+    if should_emit {
+        if let Some(percent) = percent {
+            *last_percent = percent;
+        }
+        emit_event(
+            progress_tx,
+            DownloadEvent::Progress {
+                downloaded_bytes,
+                total_bytes,
+                percent,
+            },
+        )
+        .await;
     }
 }

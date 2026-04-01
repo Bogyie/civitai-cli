@@ -10,6 +10,8 @@
 - 모델 검색 URL 파싱/생성
 - Civitai 웹 검색 백엔드(`models_v9`) 호출
 - 모델 page URL / download URL helper
+- 모델 / 이미지 / 비디오용 범용 다운로드 spec / request / stream helper
+- pause / resume / cancel 제어와 progress event 전송
 
 파일 구성:
 
@@ -19,6 +21,7 @@
 - `shared.rs`: 공통 URL/filter/query 유틸
 - `image_search.rs`: 이미지 검색 state/sort/response 타입
 - `model_search.rs`: 모델 검색 state/sort/response 타입과 다운로드 helper
+- `download.rs`: 범용 다운로드 spec/options/event 타입
 
 ## Example
 
@@ -63,6 +66,21 @@ async fn demo() -> anyhow::Result<()> {
     );
     let _request = request.build()?;
 
+    if let Some(spec) = sdk.build_model_download_spec(
+        &model_response.hits[0],
+        Some(ModelDownloadAuth::BearerToken("your-token".to_string())),
+    ) {
+        let result = sdk
+            .download(
+                &spec,
+                &crate::sdk::DownloadOptions::to_file("./model.bin"),
+                None,
+                None,
+            )
+            .await?;
+        println!("saved={}", result.path.display());
+    }
+
     Ok(())
 }
 ```
@@ -98,5 +116,6 @@ let sdk = SearchSdkClient::with_config(
 
 - 이 SDK는 현재 Civitai 공개 웹 검색 페이지가 사용하는 검색 백엔드를 직접 호출합니다.
 - 기본 상수값은 유지하지만, 실제 사용 설정은 `SearchSdkClient`가 소유하며 `with_config()`로 주입할 수 있습니다.
+- 다운로드 계층은 ComfyUI 같은 외부 프레임워크 경로 규칙을 직접 알지 않습니다. 저장 위치/파일명/이벤트 연결은 SDK를 사용하는 쪽에서 주입하는 방향입니다.
 - 기존 앱 코드와는 아직 느슨하게 분리되어 있어서, 나중에 adapter 레이어를 통해 연결하는 방향을 전제로 합니다.
 - 인증이 필요 없는 모델에도 `token` 또는 `Authorization: Bearer <token>`을 포함해 요청할 수 있습니다.
