@@ -15,6 +15,7 @@ pub struct DownloadManager {
     config: AppConfig,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub enum DownloadControl {
     Pause,
@@ -209,6 +210,7 @@ impl DownloadManager {
         Ok(target_path)
     }
 
+    #[allow(dead_code)]
     pub async fn download_version_with_control(
         &self,
         model: &Model,

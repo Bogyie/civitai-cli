@@ -69,6 +69,7 @@ mod fixtures {
             can_generate: Some(false),
             nsfw: Some(false),
             nsfw_level: None,
+            extras: json!({}),
         }
     }
 
@@ -818,9 +819,9 @@ mod live_tests {
     {
         let sdk = WebSearchClient::new()?;
         let state = ModelSearchState {
-            query: Some("hello".to_string()),
-            tags: vec!["anime".to_string()],
-            sort_by: ModelSearchSortBy::MostDownloaded,
+            // query: Some("hello".to_string()),
+            // tags: vec!["anime".to_string()],
+            sort_by: ModelSearchSortBy::HighestRated,
             limit: Some(2),
             ..Default::default()
         };

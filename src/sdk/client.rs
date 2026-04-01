@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use reqwest::{Client, IntoUrl, StatusCode};
+use reqwest::{Client, IntoUrl, StatusCode, Url};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -20,7 +20,9 @@ use super::download::{
     DownloadResult, DownloadSpec, authorization_header_value, content_disposition_file_name,
     content_range_total, emit_event, ensure_parent_dir,
 };
-use super::image_search::{ImageSearchState, SearchImageHit, SearchImageResponse};
+use super::image_search::{
+    ImageGenerationData, ImageSearchState, MediaUrlOptions, SearchImageHit, SearchImageResponse,
+};
 use super::model_search::{
     ModelDownloadAuth, ModelSearchState, SearchModelHit, SearchModelResponse,
     build_model_download_url_with_token_and_base,
@@ -268,6 +270,39 @@ impl WebSearchClient {
             .context("Failed to decode typed web image search response")
     }
 
+    pub async fn get_generation_data(&self, image_id: u64) -> Result<ImageGenerationData> {
+        let base = self.config.civitai_web_url.trim_end_matches('/');
+        let input = json!({ "json": { "id": image_id } }).to_string();
+        let url = Url::parse_with_params(
+            &format!("{base}/api/trpc/image.getGenerationData"),
+            [("input", input.as_str())],
+        )
+        .with_context(|| format!("Failed to build generation data URL for image {image_id}"))?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .with_context(|| format!("Failed to request generation data for image {image_id}"))?
+            .error_for_status()
+            .with_context(|| format!("Generation data endpoint returned error for image {image_id}"))?;
+
+        let payload = response
+            .json::<Value>()
+            .await
+            .with_context(|| format!("Failed to decode generation data response for image {image_id}"))?;
+
+        serde_json::from_value(
+            payload
+                .get("result")
+                .and_then(|value| value.get("data"))
+                .and_then(|value| value.get("json"))
+                .cloned()
+                .ok_or_else(|| anyhow!("Missing result.data.json in generation data response"))?,
+        )
+        .with_context(|| format!("Failed to parse generation data payload for image {image_id}"))
+    }
+
     pub async fn search_models_raw(&self, state: &ModelSearchState) -> Result<Value> {
         let url = format!(
             "{}/indexes/{}/search",
@@ -431,9 +466,18 @@ impl DownloadClient {
     }
 
     pub fn original_media_url(&self, hit: &SearchImageHit) -> Option<String> {
-        hit.media_url_with_base_and_namespace(
+        hit.media_url_with_options_and_base_and_namespace(
             &self.config.media_delivery_url,
             &self.config.media_delivery_namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url(&self, hit: &SearchImageHit, options: &MediaUrlOptions) -> Option<String> {
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            &self.config.media_delivery_namespace,
+            options,
         )
     }
 
@@ -442,7 +486,24 @@ impl DownloadClient {
         hit: &SearchImageHit,
         namespace: &str,
     ) -> Option<String> {
-        hit.media_url_with_base_and_namespace(&self.config.media_delivery_url, namespace)
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url_with_namespace_and_options(
+        &self,
+        hit: &SearchImageHit,
+        namespace: &str,
+        options: &MediaUrlOptions,
+    ) -> Option<String> {
+        hit.media_url_with_options_and_base_and_namespace(
+            &self.config.media_delivery_url,
+            namespace,
+            options,
+        )
     }
 
     pub fn model_page_url(&self, hit: &SearchModelHit) -> String {
@@ -859,6 +920,25 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
         filters.push(format!("id = {image_id}"));
     }
 
+    for (key, value) in &state.extras {
+        let normalized_key = key.trim();
+        let trimmed_value = value.trim();
+        if trimmed_value.is_empty() {
+            continue;
+        }
+
+        let target_key = match normalized_key {
+            "modelVersionId" => "modelVersionIds",
+            other => other,
+        };
+
+        if let Ok(number) = trimmed_value.parse::<u64>() {
+            filters.push(format!("{target_key} = {number}"));
+        } else {
+            filters.push(format!("{target_key} = \"{}\"", trimmed_value.replace('"', "\\\"")));
+        }
+    }
+
     let mut payload = json!({
         "q": state.query.clone().unwrap_or_default(),
         "limit": limit,
@@ -918,6 +998,25 @@ fn build_model_meili_payload(state: &ModelSearchState) -> Value {
 
     if let Some(created_at) = state.created_at.as_ref() {
         filters.extend(build_created_at_filters(created_at, "lastVersionAtUnix"));
+    }
+
+    for (key, value) in &state.extras {
+        let normalized_key = key.trim();
+        let trimmed_value = value.trim();
+        if trimmed_value.is_empty() {
+            continue;
+        }
+
+        let target_key = match normalized_key {
+            "modelVersionId" => "version.id",
+            other => other,
+        };
+
+        if let Ok(number) = trimmed_value.parse::<u64>() {
+            filters.push(format!("{target_key} = {number}"));
+        } else {
+            filters.push(format!("{target_key} = \"{}\"", trimmed_value.replace('"', "\\\"")));
+        }
     }
 
     let mut payload = json!({

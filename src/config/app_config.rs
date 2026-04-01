@@ -9,11 +9,57 @@ fn default_model_search_cache_ttl_hours() -> u64 {
 }
 
 fn default_image_search_cache_ttl_minutes() -> u64 {
-    10
+    15
+}
+
+fn default_image_detail_cache_ttl_minutes() -> u64 {
+    60
 }
 
 fn default_image_cache_ttl_minutes() -> u64 {
     0
+}
+
+fn default_media_quality() -> MediaQualityPreference {
+    MediaQualityPreference::Medium
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaQualityPreference {
+    Low,
+    Medium,
+    High,
+    Original,
+}
+
+impl MediaQualityPreference {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::Original => "Original",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Low => Self::Medium,
+            Self::Medium => Self::High,
+            Self::High => Self::Original,
+            Self::Original => Self::Low,
+        }
+    }
+
+    pub fn previous(self) -> Self {
+        match self {
+            Self::Low => Self::Original,
+            Self::Medium => Self::Low,
+            Self::High => Self::Medium,
+            Self::Original => Self::High,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,8 +77,12 @@ pub struct AppConfig {
     pub model_search_cache_ttl_hours: u64,
     #[serde(default = "default_image_search_cache_ttl_minutes")]
     pub image_search_cache_ttl_minutes: u64,
+    #[serde(default = "default_image_detail_cache_ttl_minutes")]
+    pub image_detail_cache_ttl_minutes: u64,
     #[serde(default = "default_image_cache_ttl_minutes")]
     pub image_cache_ttl_minutes: u64,
+    #[serde(default = "default_media_quality")]
+    pub media_quality: MediaQualityPreference,
 }
 
 impl AppConfig {
@@ -88,6 +138,10 @@ impl AppConfig {
         Self::config_dir().map(|config_dir| config_dir.join("image_bookmarks.json"))
     }
 
+    pub fn image_tag_catalog_path(&self) -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("image_tags.json"))
+    }
+
     pub fn model_cover_cache_path(&self) -> Option<PathBuf> {
         self.model_cover_cache_path
             .clone()
@@ -133,7 +187,9 @@ impl Default for AppConfig {
             interrupted_download_file_path: None,
             model_search_cache_ttl_hours: default_model_search_cache_ttl_hours(),
             image_search_cache_ttl_minutes: default_image_search_cache_ttl_minutes(),
+            image_detail_cache_ttl_minutes: default_image_detail_cache_ttl_minutes(),
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
+            media_quality: default_media_quality(),
         }
     }
 }

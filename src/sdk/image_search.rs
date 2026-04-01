@@ -229,6 +229,100 @@ fn is_known_image_key(key: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaUrlOptions {
+    /// `original=true` returns the original asset; for videos this keeps the source mp4.
+    pub original: Option<bool>,
+    /// Video-specific variant selection. In live tests this gates transcoded mp4 delivery.
+    pub transcode: Option<bool>,
+    /// Resize target width for transformed variants.
+    pub width: Option<u32>,
+    /// Resize target height for transformed variants.
+    pub height: Option<u32>,
+    /// Quality hint used by transformed image/video variants.
+    pub quality: Option<u8>,
+    /// Prefers optimized delivery formats such as webp/transcoded mp4 when supported.
+    pub optimized: Option<bool>,
+    /// Disables animation in image-derived variants when the backend supports it.
+    pub anim: Option<bool>,
+}
+
+impl MediaUrlOptions {
+    pub fn original() -> Self {
+        Self {
+            original: Some(true),
+            ..Self::default()
+        }
+    }
+
+    pub fn default_variant() -> Self {
+        Self {
+            original: Some(false),
+            ..Self::default()
+        }
+    }
+
+    pub fn to_path_segment(&self) -> String {
+        let mut parts = Vec::new();
+
+        if let Some(original) = self.original {
+            parts.push(format!("original={original}"));
+        }
+        if let Some(transcode) = self.transcode {
+            parts.push(format!("transcode={transcode}"));
+        }
+        if let Some(width) = self.width {
+            parts.push(format!("width={width}"));
+        }
+        if let Some(height) = self.height {
+            parts.push(format!("height={height}"));
+        }
+        if let Some(quality) = self.quality {
+            parts.push(format!("quality={quality}"));
+        }
+        if let Some(optimized) = self.optimized {
+            parts.push(format!("optimized={optimized}"));
+        }
+        if let Some(anim) = self.anim {
+            parts.push(format!("anim={anim}"));
+        }
+
+        // Default to the original asset so existing callers keep their prior behavior.
+        if parts.is_empty() {
+            "original=true".to_string()
+        } else {
+            parts.join(",")
+        }
+    }
+}
+
+pub fn media_url_from_raw_with_options(raw_url: &str, options: &MediaUrlOptions) -> Option<String> {
+    let url = Url::parse(raw_url).ok()?;
+    let mut segments = url
+        .path_segments()
+        .map(|parts| parts.map(str::to_string).collect::<Vec<_>>())?;
+    if segments.len() < 3 {
+        return None;
+    }
+
+    let namespace = segments.remove(0);
+    let token = segments.remove(0);
+    let mut rebuilt = format!(
+        "{}/{}/{}/{}",
+        url.origin().ascii_serialization().trim_end_matches('/'),
+        namespace,
+        token,
+        options.to_path_segment()
+    );
+
+    if !segments.is_empty() {
+        rebuilt.push('/');
+        rebuilt.push_str(&segments.join("/"));
+    }
+
+    Some(rebuilt)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchImageHit {
@@ -290,9 +384,10 @@ impl SearchImageHit {
     }
 
     pub fn original_media_url(&self) -> Option<String> {
-        self.media_url_with_base_and_namespace(
+        self.media_url_with_options_and_base_and_namespace(
             CIVITAI_MEDIA_DELIVERY_URL,
             CIVITAI_MEDIA_DELIVERY_NAMESPACE,
+            &MediaUrlOptions::original(),
         )
     }
 
@@ -306,13 +401,50 @@ impl SearchImageHit {
     }
 
     pub fn media_url_with_namespace(&self, namespace: &str) -> Option<String> {
-        self.media_url_with_base_and_namespace(CIVITAI_MEDIA_DELIVERY_URL, namespace)
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
     }
 
     pub fn media_url_with_base_and_namespace(
         &self,
         base_url: &str,
         namespace: &str,
+    ) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            base_url,
+            namespace,
+            &MediaUrlOptions::original(),
+        )
+    }
+
+    pub fn media_url_with_options(&self, options: &MediaUrlOptions) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            CIVITAI_MEDIA_DELIVERY_NAMESPACE,
+            options,
+        )
+    }
+
+    pub fn media_url_with_options_and_namespace(
+        &self,
+        namespace: &str,
+        options: &MediaUrlOptions,
+    ) -> Option<String> {
+        self.media_url_with_options_and_base_and_namespace(
+            CIVITAI_MEDIA_DELIVERY_URL,
+            namespace,
+            options,
+        )
+    }
+
+    pub fn media_url_with_options_and_base_and_namespace(
+        &self,
+        base_url: &str,
+        namespace: &str,
+        options: &MediaUrlOptions,
     ) -> Option<String> {
         let token = self.media_token()?;
         let base_url = base_url.trim_end_matches('/');
@@ -321,7 +453,11 @@ impl SearchImageHit {
             return None;
         }
 
-        Some(format!("{base_url}/{namespace}/{token}/original=true"))
+        // Civitai media variants are encoded as a comma-separated path segment.
+        Some(format!(
+            "{base_url}/{namespace}/{token}/{}",
+            options.to_path_segment()
+        ))
     }
 }
 
@@ -354,4 +490,187 @@ pub struct SearchImageResponse {
     pub offset: Option<u32>,
     #[serde(flatten, default)]
     pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationData {
+    #[serde(default)]
+    pub r#type: Option<String>,
+    #[serde(default)]
+    pub on_site: Option<bool>,
+    #[serde(default)]
+    pub process: Option<String>,
+    #[serde(default)]
+    pub meta: Option<ImageGenerationMeta>,
+    #[serde(default)]
+    pub resources: Vec<ImageGenerationResource>,
+    #[serde(default)]
+    pub tools: Vec<ImageGenerationTool>,
+    #[serde(default)]
+    pub techniques: Vec<ImageGenerationTechnique>,
+    #[serde(default)]
+    pub external: Option<Value>,
+    #[serde(default)]
+    pub can_remix: Option<bool>,
+    #[serde(default)]
+    pub remix_of_id: Option<u64>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationMeta {
+    #[serde(default)]
+    pub prompt: Option<String>,
+    #[serde(default)]
+    pub negative_prompt: Option<String>,
+    #[serde(default)]
+    pub cfg_scale: Option<f64>,
+    #[serde(default)]
+    pub steps: Option<u64>,
+    #[serde(default)]
+    pub sampler: Option<String>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub scheduler: Option<String>,
+    #[serde(default)]
+    pub denoise: Option<f64>,
+    #[serde(default, rename = "Model")]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub models: Option<Value>,
+    #[serde(default)]
+    pub upscalers: Option<Value>,
+    #[serde(default)]
+    pub width: Option<Value>,
+    #[serde(default)]
+    pub height: Option<Value>,
+    #[serde(default)]
+    pub comfy: Option<ImageGenerationComfy>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationComfy {
+    #[serde(default)]
+    pub prompt: Option<Value>,
+    #[serde(default)]
+    pub workflow: Option<Value>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationResource {
+    #[serde(default)]
+    pub image_id: Option<u64>,
+    #[serde(default)]
+    pub model_version_id: Option<u64>,
+    #[serde(default)]
+    pub strength: Option<Value>,
+    #[serde(default)]
+    pub model_id: Option<u64>,
+    #[serde(default)]
+    pub model_name: Option<String>,
+    #[serde(default)]
+    pub model_type: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<u64>,
+    #[serde(default)]
+    pub version_name: Option<String>,
+    #[serde(default)]
+    pub base_model: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationTool {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageGenerationTechnique {
+    #[serde(default)]
+    pub id: Option<u64>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(flatten, default)]
+    pub extras: Value,
+}
+
+impl ImageGenerationData {
+    pub fn as_metadata_attachment(&self) -> Value {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "_generationData".to_string(),
+            serde_json::to_value(self).unwrap_or(Value::Null),
+        );
+
+        if let Some(process) = self.process.as_ref() {
+            object.insert("process".to_string(), Value::String(process.clone()));
+        }
+        if let Some(meta) = self.meta.as_ref() {
+            let meta_value = serde_json::to_value(meta).unwrap_or(Value::Null);
+            if let Some(meta_object) = meta_value.as_object() {
+                for (key, value) in meta_object {
+                    object.insert(key.clone(), value.clone());
+                }
+            } else {
+                object.insert("meta".to_string(), meta_value);
+            }
+        }
+        if !self.resources.is_empty() {
+            object.insert(
+                "resources".to_string(),
+                serde_json::to_value(&self.resources).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if !self.tools.is_empty() {
+            object.insert(
+                "tools".to_string(),
+                serde_json::to_value(&self.tools).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if !self.techniques.is_empty() {
+            object.insert(
+                "techniques".to_string(),
+                serde_json::to_value(&self.techniques).unwrap_or(Value::Array(Vec::new())),
+            );
+        }
+        if let Some(external) = self.external.as_ref() {
+            object.insert("external".to_string(), external.clone());
+        }
+        if let Some(can_remix) = self.can_remix {
+            object.insert("canRemix".to_string(), Value::Bool(can_remix));
+        }
+        if let Some(remix_of_id) = self.remix_of_id {
+            object.insert("remixOfId".to_string(), Value::Number(remix_of_id.into()));
+        }
+
+        Value::Object(object)
+    }
 }

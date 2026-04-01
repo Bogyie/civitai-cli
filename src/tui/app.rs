@@ -1,9 +1,18 @@
-use crate::api::{ImageItem, Model};
+use civitai_cli::sdk::{
+    ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageSearchState,
+    ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType, SearchImageHit as ImageItem,
+    SearchModelHit as Model,
+};
+use crate::tui::model::{
+    default_base_model, model_metrics, model_name, model_versions, preview_image_info,
+    selected_version,
+};
+use crate::tui::image::{image_tags, image_used_model_entries, image_used_models, ParsedUsedModel};
 use ratatui::widgets::ListState;
 use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -35,17 +44,63 @@ pub enum BookmarkPathAction {
     Import,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchFormMode {
+    Quick,
+    Builder,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchFormSection {
+    Query,
+    Sort,
+    Period,
+    Type,
+    Tag,
+    BaseModel,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SearchPeriod {
+    AllTime,
+    Year,
+    Month,
+    Week,
+    Day,
+}
+
+impl SearchPeriod {
+    pub fn all() -> Vec<Self> {
+        vec![Self::AllTime, Self::Year, Self::Month, Self::Week, Self::Day]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::AllTime => "AllTime",
+            Self::Year => "Year",
+            Self::Month => "Month",
+            Self::Week => "Week",
+            Self::Day => "Day",
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct SearchFormState {
     pub query: String,
-    pub focused_field: usize, // 0: Query, 1: Type, 2: Sort, 3: BaseModel, 4: Period
-    pub selected_type: usize,
-    pub types: Vec<String>,
+    pub mode: SearchFormMode,
+    pub focused_section: SearchFormSection,
+    pub sort_options: Vec<ModelSearchSortBy>,
     pub selected_sort: usize,
-    pub sorts: Vec<String>,
-    pub selected_base: usize,
-    pub bases: Vec<String>,
+    pub type_options: Vec<ModelType>,
+    pub type_cursor: usize,
+    pub selected_types: BTreeSet<ModelType>,
+    pub tag_query: String,
+    pub base_options: Vec<ModelBaseModel>,
+    pub base_cursor: usize,
+    pub selected_base_models: BTreeSet<ModelBaseModel>,
+    pub periods: Vec<SearchPeriod>,
     pub selected_period: usize,
-    pub periods: Vec<String>,
 }
 
 pub struct SettingsFormState {
@@ -54,16 +109,43 @@ pub struct SettingsFormState {
     pub input_buffer: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MediaRenderRequest {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ImageSearchFormSection {
+    Query,
+    Sort,
+    Period,
+    MediaType,
+    Tag,
+    BaseModel,
+    AspectRatio,
+}
+
+#[derive(Clone)]
 pub struct ImageSearchFormState {
-    pub focused_field: usize, // 0: NSFW, 1: Sort, 2: Period, 3: ModelVersionId, 4: Tag
-    pub selected_nsfw: usize,
-    pub nsfw_options: Vec<String>,
+    pub query: String,
+    pub mode: SearchFormMode,
+    pub focused_section: ImageSearchFormSection,
+    pub sort_options: Vec<ImageSearchSortBy>,
     pub selected_sort: usize,
-    pub sort_options: Vec<String>,
+    pub periods: Vec<SearchPeriod>,
     pub selected_period: usize,
-    pub period_options: Vec<String>,
-    pub model_version_id: String,
-    pub tag_text: String,
+    pub media_type_options: Vec<ImageMediaType>,
+    pub media_type_cursor: usize,
+    pub selected_media_types: BTreeSet<String>,
+    pub tag_query: String,
+    pub base_options: Vec<ImageBaseModel>,
+    pub base_cursor: usize,
+    pub selected_base_models: BTreeSet<String>,
+    pub aspect_ratio_options: Vec<ImageAspectRatio>,
+    pub aspect_ratio_cursor: usize,
+    pub selected_aspect_ratios: BTreeSet<String>,
+    pub linked_model_version_id: Option<u64>,
 }
 
 impl SettingsFormState {
@@ -79,45 +161,88 @@ impl SettingsFormState {
 impl ImageSearchFormState {
     pub fn new() -> Self {
         Self {
-            focused_field: 0,
-            selected_nsfw: 0,
-            nsfw_options: vec![
-                "All".into(),
-                "None".into(),
-                "Soft".into(),
-                "Mature".into(),
-                "X".into(),
-            ],
+            query: String::new(),
+            mode: SearchFormMode::Quick,
+            focused_section: ImageSearchFormSection::Query,
+            sort_options: ImageSearchSortBy::all(),
             selected_sort: 0,
-            sort_options: vec![
-                "Most Collected".into(),
-                "Most Reactions".into(),
-                "Most Comments".into(),
-                "Newest".into(),
-                "Oldest".into(),
-            ],
+            periods: SearchPeriod::all(),
             selected_period: 0,
-            period_options: vec![
-                "AllTime".into(),
-                "Year".into(),
-                "Month".into(),
-                "Week".into(),
-                "Day".into(),
-            ],
-            model_version_id: String::new(),
-            tag_text: String::new(),
+            media_type_options: ImageMediaType::all(),
+            media_type_cursor: 0,
+            selected_media_types: {
+                let mut set = BTreeSet::new();
+                set.insert(ImageMediaType::Image.as_query_value().to_string());
+                set
+            },
+            tag_query: String::new(),
+            base_options: ImageBaseModel::all(),
+            base_cursor: 0,
+            selected_base_models: BTreeSet::new(),
+            aspect_ratio_options: ImageAspectRatio::all(),
+            aspect_ratio_cursor: 0,
+            selected_aspect_ratios: BTreeSet::new(),
+            linked_model_version_id: None,
         }
     }
 
-    pub fn build_options(&self) -> crate::api::client::ImageSearchOptions {
-        crate::api::client::ImageSearchOptions {
-            limit: 10,
-            nsfw: Some(self.nsfw_options[self.selected_nsfw].clone()),
-            sort: Some(self.sort_options[self.selected_sort].clone()),
-            period: Some(self.period_options[self.selected_period].clone()),
-            model_version_id: self.model_version_id.trim().parse::<u64>().ok(),
-            tags: image_tag_to_id(self.tag_text.trim()),
+    pub fn build_options(&self) -> ImageSearchState {
+        ImageSearchState {
+            query: (!self.query.trim().is_empty()).then(|| self.query.trim().to_string()),
+            sort_by: self
+                .sort_options
+                .get(self.selected_sort)
+                .cloned()
+                .unwrap_or_default(),
+            media_types: self
+                .selected_media_types
+                .iter()
+                .map(|value| ImageMediaType::from_query_value(value))
+                .collect(),
+            tags: self
+                .tag_query
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect(),
+            base_models: self
+                .selected_base_models
+                .iter()
+                .map(|value| ImageBaseModel::from_query_value(value))
+                .collect(),
+            aspect_ratios: self
+                .selected_aspect_ratios
+                .iter()
+                .map(|value| ImageAspectRatio::from_query_value(value))
+                .collect(),
+            created_at: self
+                .periods
+                .get(self.selected_period)
+                .and_then(|period| period_to_created_at(period.label())),
+            limit: Some(50),
+            extras: self
+                .linked_model_version_id
+                .map(|id| vec![("modelVersionId".to_string(), id.to_string())])
+                .unwrap_or_default(),
+            ..Default::default()
         }
+    }
+
+    pub fn begin_quick_search(&mut self) {
+        self.mode = SearchFormMode::Quick;
+        self.focused_section = ImageSearchFormSection::Query;
+    }
+
+    pub fn begin_builder(&mut self) {
+        self.mode = SearchFormMode::Builder;
+        if self.focused_section == ImageSearchFormSection::Query {
+            self.focused_section = ImageSearchFormSection::Sort;
+        }
+    }
+
+    pub fn set_linked_model_version(&mut self, version_id: Option<u64>) {
+        self.linked_model_version_id = version_id;
     }
 }
 
@@ -125,162 +250,72 @@ impl SearchFormState {
     pub fn new() -> Self {
         Self {
             query: String::new(),
-            focused_field: 0,
-            selected_type: 0,
-            types: vec![
-                "All".into(),
-                "Checkpoint".into(),
-                "TextualInversion".into(),
-                "Hypernetwork".into(),
-                "AestheticGradient".into(),
-                "LORA".into(),
-                "Controlnet".into(),
-                "Poses".into(),
-            ],
-            selected_sort: 0,
-            sorts: vec![
-                "Highest Rated".into(),
-                "Most Downloaded".into(),
-                "Newest".into(),
-            ],
-            selected_base: 0,
-            bases: vec![
-                "All".into(),
-                "Anima".into(),
-                "AuraFlow".into(),
-                "Chroma".into(),
-                "CogVideoX".into(),
-                "Flux.1 S".into(),
-                "Flux.1 D".into(),
-                "Flux.1 Krea".into(),
-                "Flux.1 Kontext".into(),
-                "Flux.2 D".into(),
-                "Flux.2 Klein 9B".into(),
-                "Flux.2 Klein 9B-base".into(),
-                "Flux.2 Klein 4B".into(),
-                "Flux.2 Klein 4B-base".into(),
-                "Grok".into(),
-                "HiDream".into(),
-                "Hunyuan 1".into(),
-                "Hunyuan Video".into(),
-                "Illustrious".into(),
-                "NoobAI".into(),
-                "Kolors".into(),
-                "LTXV".into(),
-                "LTXV2".into(),
-                "LTXV 2.3".into(),
-                "Lumina".into(),
-                "Mochi".into(),
-                "Other".into(),
-                "PixArt a".into(),
-                "PixArt E".into(),
-                "Pony".into(),
-                "Pony V7".into(),
-                "Qwen".into(),
-                "Qwen 2".into(),
-                "Wan Video 1.3B t2v".into(),
-                "Wan Video 14B t2v".into(),
-                "Wan Video 14B i2v 480p".into(),
-                "Wan Video 14B i2v 720p".into(),
-                "Wan Video 2.2 TI2V-5B".into(),
-                "Wan Video 2.2 I2V-A14B".into(),
-                "Wan Video 2.2 T2V-A14B".into(),
-                "Wan Video 2.5 T2V".into(),
-                "Wan Video 2.5 I2V".into(),
-                "SD 1.4".into(),
-                "SD 1.5".into(),
-                "SD 1.5 LCM".into(),
-                "SD 1.5 Hyper".into(),
-                "SD 2.0".into(),
-                "SD 2.1".into(),
-                "SDXL 1.0".into(),
-                "SDXL Lightning".into(),
-                "SDXL Hyper".into(),
-                "ZImageTurbo".into(),
-                "ZImageBase".into(),
-            ],
+            mode: SearchFormMode::Quick,
+            focused_section: SearchFormSection::Query,
+            sort_options: ModelSearchSortBy::all(),
+            selected_sort: ModelSearchSortBy::all()
+                .iter()
+                .position(|sort| *sort == ModelSearchSortBy::Relevance)
+                .unwrap_or(0),
+            type_options: ModelType::all(),
+            type_cursor: 0,
+            selected_types: BTreeSet::new(),
+            tag_query: String::new(),
+            base_options: ModelBaseModel::all(),
+            base_cursor: 0,
+            selected_base_models: BTreeSet::new(),
+            periods: SearchPeriod::all(),
             selected_period: 0,
-            periods: vec![
-                "AllTime".into(),
-                "Year".into(),
-                "Month".into(),
-                "Week".into(),
-                "Day".into(),
-            ],
         }
     }
 
-    pub fn build_options(&self) -> crate::api::client::SearchOptions {
-        crate::api::client::SearchOptions {
-            query: self.query.clone(),
-            limit: 50,
-            tag: None,
-            username: None,
-            types: Some(self.types[self.selected_type].clone()),
-            sort: Some(self.sorts[self.selected_sort].clone()),
-            period: Some(self.periods[self.selected_period].clone()),
-            rating: None,
-            favorites: None,
-            hidden: None,
-            primary_file_only: None,
-            allow_no_credit: None,
-            allow_derivatives: None,
-            allow_different_licenses: None,
-            allow_commercial_use: None,
-            nsfw: None,
-            supports_generation: None,
-            ids: None,
-            base_models: Some(self.bases[self.selected_base].clone()),
+    pub fn build_options(&self) -> ModelSearchState {
+        ModelSearchState {
+            query: (!self.query.trim().is_empty()).then(|| self.query.trim().to_string()),
+            sort_by: self
+                .sort_options
+                .get(self.selected_sort)
+                .cloned()
+                .unwrap_or_default(),
+            tags: self
+                .tag_query
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect(),
+            base_models: self.selected_base_models.iter().cloned().collect(),
+            types: self.selected_types.iter().cloned().collect(),
+            created_at: self
+                .periods
+                .get(self.selected_period)
+                .map(|period| period_to_created_at(period.label()))
+                .unwrap_or(None),
+            limit: Some(50),
+            ..Default::default()
         }
     }
-}
 
-fn image_tag_to_id(value: &str) -> Option<u64> {
-    let normalized = value.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "" => None,
-        "animal" => Some(111768),
-        "architecture" => Some(414),
-        "armor" => Some(5169),
-        "astronomy" => Some(111767),
-        "car" => Some(111805),
-        "cartoon" => Some(5186),
-        "cat" => Some(5132),
-        "celebrity" => Some(5188),
-        "city" => Some(55),
-        "clothing" => Some(5193),
-        "comics" => Some(2397),
-        "costume" => Some(2435),
-        "dog" => Some(2539),
-        "dragon" => Some(5499),
-        "fantasy" => Some(5207),
-        "food" => Some(3915),
-        "game character" => Some(5211),
-        "landscape" => Some(8363),
-        "latex clothing" => Some(111935),
-        "man" => Some(5232),
-        "modern art" => Some(617),
-        "outdoors" => Some(111763),
-        "photography" => Some(5241),
-        "photorealistic" => Some(172),
-        "post apocalyptic" => Some(213),
-        "realistic" => Some(5248),
-        "robot" => Some(6594),
-        "sci-fi" => Some(3060),
-        "sports car" => Some(111833),
-        "swimwear" => Some(111943),
-        "transportation" => Some(111757),
-        "nude" => Some(304),
-        "woman" => Some(5133),
-        _ => normalized.parse::<u64>().ok(),
+    pub fn begin_quick_search(&mut self) {
+        self.mode = SearchFormMode::Quick;
+        self.focused_section = SearchFormSection::Query;
+    }
+
+    pub fn begin_builder(&mut self) {
+        self.mode = SearchFormMode::Builder;
+        if self.focused_section == SearchFormSection::Query {
+            self.focused_section = SearchFormSection::Sort;
+        }
     }
 }
 
 pub enum AppMessage {
-    ImagesLoaded(Vec<ImageItem>, bool, Option<String>),
-    ImageDecoded(u64, StatefulProtocol),
-    ModelsSearchedChunk(Vec<Model>, bool, bool, Option<String>),
-    ModelCoverDecoded(u64, StatefulProtocol), // version_id, protocol
+    ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
+    ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
+    ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
+    ModelDetailLoaded(Model, Option<u64>),
+    ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String), // version_id, protocol, bytes, request_key
+    ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String), // version_id, protocols+bytes, request_key
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
     DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>), // model_id, filename, version_id, model_name, total_bytes, file_path
@@ -344,19 +379,28 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages(crate::api::client::ImageSearchOptions, Option<String>),
+    FetchImages(ImageSearchState, Option<u32>, MediaRenderRequest),
+    LoadImage(ImageItem, MediaRenderRequest),
+    RebuildImageProtocol(u64, Vec<u8>),
+    RebuildModelCover(u64, Vec<u8>),
     SearchModels(
-        crate::api::client::SearchOptions,
+        ModelSearchState,
         Option<u64>,
         Option<u64>,
         bool,
         bool,
-        Option<String>,
+        Option<u32>,
     ),
+    FetchModelDetail(u64, Option<u64>, String),
     ClearSearchCache,
-    PrioritizeModelCover(u64, Option<String>),
-    DownloadModelForImage(u64),
-    DownloadModel(u64, u64), // model_id, version_id
+    ClearAllCaches,
+    PrioritizeModelCover(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
+    PrefetchModelCovers(
+        Vec<(u64, Option<String>, Option<(u32, u32)>)>,
+        MediaRenderRequest,
+    ),
+    DownloadImage(ImageItem),
+    DownloadModel(Model, u64, usize), // selected model hit, version_id, file_index
     PauseDownload(u64),      // model_id
     ResumeDownload(u64),     // model_id
     CancelDownload(u64),     // model_id
@@ -370,15 +414,18 @@ pub struct App {
     pub mode: AppMode,
     pub config: crate::config::AppConfig,
     pub search_form: SearchFormState,
+    pub bookmark_search_form: SearchFormState,
+    pub bookmark_search_form_draft: SearchFormState,
     pub image_search_form: ImageSearchFormState,
     pub settings_form: SettingsFormState,
 
     pub models: Vec<Model>,
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
-    pub model_search_next_page: Option<String>,
+    pub model_search_next_page: Option<u32>,
     pub bookmarks: Vec<Model>,
     pub image_bookmarks: Vec<ImageItem>,
+    pub image_tag_catalog: Vec<String>,
     pub show_model_details: bool,
     pub model_list_state: ListState,
     pub bookmark_list_state: ListState,
@@ -395,17 +442,28 @@ pub struct App {
     pub interrupted_download_file_path: Option<PathBuf>,
     pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
     pub selected_version_index: HashMap<u64, usize>,
-    pub model_version_image_cache: HashMap<u64, StatefulProtocol>,
+    pub selected_file_index: HashMap<u64, usize>,
+    pub model_version_image_cache: HashMap<u64, Vec<StatefulProtocol>>,
+    pub model_version_image_bytes_cache: HashMap<u64, Vec<Vec<u8>>>,
+    pub model_version_image_request_keys: HashMap<u64, String>,
     pub model_version_image_failed: HashSet<u64>,
 
     pub images: Vec<ImageItem>,
     pub selected_index: usize,
     pub selected_image_bookmark_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
+    pub image_bytes_cache: HashMap<u64, Vec<u8>>,
+    pub image_request_keys: HashMap<u64, String>,
+    pub selected_image_model_index: HashMap<u64, usize>,
     pub image_feed_loaded: bool,
     pub image_feed_loading: bool,
-    pub image_feed_next_page: Option<String>,
+    pub image_feed_next_page: Option<u32>,
     pub image_feed_has_more: bool,
+    pub image_advanced_visible: bool,
+    pub show_image_prompt_modal: bool,
+    pub show_image_model_detail_modal: bool,
+    pub image_model_detail_model: Option<Model>,
+    pub image_prompt_scroll: u16,
 
     pub active_downloads: HashMap<u64, DownloadTracker>,
     pub active_download_order: Vec<u64>,
@@ -415,6 +473,7 @@ pub struct App {
 
     pub status: String,
     pub last_error: Option<String>,
+    pub show_help_modal: bool,
     pub show_status_modal: bool,
     pub show_exit_confirm_modal: bool,
     pub show_resume_download_modal: bool,
@@ -435,6 +494,7 @@ impl App {
             .clone()
             .or_else(crate::config::AppConfig::image_bookmark_path);
         let image_bookmarks = load_image_bookmarks(image_bookmark_file_path.as_deref());
+        let image_tag_catalog = load_image_tag_catalog(config.image_tag_catalog_path().as_deref());
         let download_history_file_path = config
             .download_history_file_path
             .clone()
@@ -477,6 +537,8 @@ impl App {
             mode: AppMode::Browsing,
             config,
             search_form: SearchFormState::new(),
+            bookmark_search_form: SearchFormState::new(),
+            bookmark_search_form_draft: SearchFormState::new(),
             image_search_form: ImageSearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
@@ -485,6 +547,7 @@ impl App {
             model_search_next_page: None,
             bookmarks,
             image_bookmarks,
+            image_tag_catalog,
             show_model_details: false,
             model_list_state,
             bookmark_list_state,
@@ -499,16 +562,27 @@ impl App {
             image_bookmark_file_path,
             download_history_file_path,
             selected_version_index: HashMap::new(),
+            selected_file_index: HashMap::new(),
             model_version_image_cache: HashMap::new(),
+            model_version_image_bytes_cache: HashMap::new(),
+            model_version_image_request_keys: HashMap::new(),
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
             selected_index: 0,
             selected_image_bookmark_index: 0,
             image_cache: HashMap::new(),
+            image_bytes_cache: HashMap::new(),
+            image_request_keys: HashMap::new(),
+            selected_image_model_index: HashMap::new(),
             image_feed_loaded: false,
             image_feed_loading: false,
             image_feed_next_page: None,
             image_feed_has_more: true,
+            image_advanced_visible: false,
+            show_image_prompt_modal: false,
+            show_image_model_detail_modal: false,
+            image_model_detail_model: None,
+            image_prompt_scroll: 0,
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,
@@ -519,6 +593,7 @@ impl App {
             show_resume_download_modal,
             status: "Initializing App...".to_string(),
             last_error: None,
+            show_help_modal: false,
             show_status_modal: false,
             show_exit_confirm_modal: false,
             bookmark_path_prompt_action: None,
@@ -562,7 +637,7 @@ impl App {
             && self.selected_index + threshold >= self.images.len()
     }
 
-    pub fn next_image_feed_page(&self) -> Option<String> {
+    pub fn next_image_feed_page(&self) -> Option<u32> {
         self.image_feed_next_page.clone()
     }
 
@@ -575,8 +650,9 @@ impl App {
                 .iter()
                 .filter(|image| {
                     let username = image
-                        .username
-                        .as_deref()
+                        .user
+                        .as_ref()
+                        .and_then(|user| user.username.as_deref())
                         .unwrap_or_default()
                         .to_ascii_lowercase();
                     let base_model = image
@@ -588,7 +664,7 @@ impl App {
                         || username.contains(&query)
                         || base_model.contains(&query)
                         || image
-                            .meta
+                            .metadata
                             .as_ref()
                             .map(|meta| meta.to_string().to_ascii_lowercase().contains(&query))
                             .unwrap_or(false)
@@ -645,8 +721,14 @@ impl App {
     pub fn set_image_feed_results(
         &mut self,
         mut images: Vec<ImageItem>,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
+        let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
+        self.image_cache.retain(|id, _| new_ids.contains(id));
+        self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
+        self.image_request_keys.retain(|id, _| new_ids.contains(id));
+        self.selected_image_model_index
+            .retain(|id, _| new_ids.contains(id));
         self.image_feed_next_page = next_page;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loaded = true;
@@ -662,7 +744,7 @@ impl App {
     pub fn append_image_feed_results(
         &mut self,
         mut images: Vec<ImageItem>,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         if !self.images.is_empty() && !images.is_empty() {
             let known_ids: HashSet<u64> = self.images.iter().map(|item| item.id).collect();
@@ -678,9 +760,131 @@ impl App {
         }
     }
 
+    pub fn has_cached_image_request(&self, image_id: u64, request_key: &str) -> bool {
+        self.image_cache.contains_key(&image_id)
+            && self
+                .image_request_keys
+                .get(&image_id)
+                .is_some_and(|key| key == request_key)
+    }
+
+    pub fn has_cached_model_cover_request(&self, version_id: u64, request_key: &str) -> bool {
+        self.model_version_image_cache.contains_key(&version_id)
+            && self
+                .model_version_image_request_keys
+                .get(&version_id)
+                .is_some_and(|key| key == request_key)
+    }
+
+    pub fn merge_image_tag_catalog_from_hits(&mut self, images: &[ImageItem]) {
+        let mut existing = self
+            .image_tag_catalog
+            .iter()
+            .map(|tag| tag.to_lowercase())
+            .collect::<HashSet<_>>();
+        let mut changed = false;
+
+        for tag in images
+            .iter()
+            .flat_map(image_tags)
+            .map(|tag| tag.trim().to_string())
+            .filter(|tag| !tag.is_empty())
+        {
+            if existing.insert(tag.to_lowercase()) {
+                self.image_tag_catalog.push(tag);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.image_tag_catalog
+                .sort_by_key(|tag| tag.to_lowercase());
+            self.persist_image_tag_catalog();
+        }
+    }
+
+    pub fn image_tag_suggestions(&self, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let query = self.image_search_form.tag_query.as_str();
+        let prefix = query
+            .rsplit(',')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_lowercase();
+        let selected = query
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        let mut suggestions = self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| prefix.is_empty() || tag.to_lowercase().starts_with(&prefix))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if suggestions.len() >= limit || prefix.is_empty() {
+            return suggestions;
+        }
+
+        for tag in self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| tag.to_lowercase().contains(&prefix))
+        {
+            if suggestions.len() >= limit {
+                break;
+            }
+            if !suggestions.iter().any(|existing| existing.eq_ignore_ascii_case(tag)) {
+                suggestions.push(tag.clone());
+            }
+        }
+
+        suggestions
+    }
+
+    pub fn accept_image_tag_suggestion(&mut self) -> bool {
+        let Some(suggestion) = self.image_tag_suggestions(1).into_iter().next() else {
+            return false;
+        };
+
+        let mut tags = self
+            .image_search_form
+            .tag_query
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+
+        if self.image_search_form.tag_query.trim().is_empty()
+            || self.image_search_form.tag_query.trim_end().ends_with(',')
+        {
+            tags.push(suggestion);
+        } else if let Some(last) = tags.last_mut() {
+            *last = suggestion;
+        } else {
+            tags.push(suggestion);
+        }
+
+        let mut seen = HashSet::new();
+        tags.retain(|tag| seen.insert(tag.to_lowercase()));
+        self.image_search_form.tag_query = tags.join(", ");
+        true
+    }
+
     pub fn next_model_search_options_if_needed(
         &mut self,
-    ) -> Option<(crate::api::client::SearchOptions, Option<String>)> {
+    ) -> Option<(ModelSearchState, Option<u32>)> {
         if !self.can_request_more_models() {
             return None;
         }
@@ -747,11 +951,81 @@ impl App {
         }
     }
 
+    pub fn move_list_selection_by(&mut self, delta: isize) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                    return;
+                }
+                let current = self.model_list_state.selected().unwrap_or(0) as isize;
+                let max = self.models.len().saturating_sub(1) as isize;
+                let next = (current + delta).clamp(0, max) as usize;
+                self.model_list_state.select(Some(next));
+            }
+            MainTab::Bookmarks => {
+                let visible = self.visible_bookmarks();
+                if visible.is_empty() {
+                    self.bookmark_list_state.select(None);
+                    return;
+                }
+                let current = self.bookmark_list_state.selected().unwrap_or(0) as isize;
+                let max = visible.len().saturating_sub(1) as isize;
+                let next = (current + delta).clamp(0, max) as usize;
+                self.bookmark_list_state.select(Some(next));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn select_list_first(&mut self) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                } else {
+                    self.model_list_state.select(Some(0));
+                }
+            }
+            MainTab::Bookmarks => {
+                if self.visible_bookmarks().is_empty() {
+                    self.bookmark_list_state.select(None);
+                } else {
+                    self.bookmark_list_state.select(Some(0));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn select_list_last(&mut self) {
+        match self.active_tab {
+            MainTab::Models => {
+                if self.models.is_empty() {
+                    self.model_list_state.select(None);
+                } else {
+                    self.model_list_state
+                        .select(Some(self.models.len().saturating_sub(1)));
+                }
+            }
+            MainTab::Bookmarks => {
+                let visible = self.visible_bookmarks();
+                if visible.is_empty() {
+                    self.bookmark_list_state.select(None);
+                } else {
+                    self.bookmark_list_state
+                        .select(Some(visible.len().saturating_sub(1)));
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn append_models_results(
         &mut self,
         mut new_models: Vec<Model>,
         has_more: bool,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
         if new_models.is_empty() {
             self.model_search_has_more = has_more;
@@ -760,7 +1034,13 @@ impl App {
             return;
         }
 
-        self.models.append(&mut new_models);
+        new_models.sort_by_key(|model| !has_displayable_model_version(model));
+        let mut seen_ids = self.models.iter().map(|model| model.id).collect::<HashSet<_>>();
+        for model in new_models {
+            if seen_ids.insert(model.id) {
+                self.models.push(model);
+            }
+        }
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
         self.model_search_next_page = next_page;
@@ -768,10 +1048,24 @@ impl App {
 
     pub fn set_models_results(
         &mut self,
-        models: Vec<Model>,
+        mut models: Vec<Model>,
         has_more: bool,
-        next_page: Option<String>,
+        next_page: Option<u32>,
     ) {
+        models.sort_by_key(|model| !has_displayable_model_version(model));
+        let known_version_ids = models
+            .iter()
+            .flat_map(model_versions)
+            .map(|version| version.id)
+            .collect::<HashSet<_>>();
+        self.model_version_image_cache
+            .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_bytes_cache
+            .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_request_keys
+            .retain(|version_id, _| known_version_ids.contains(version_id));
+        self.model_version_image_failed
+            .retain(|version_id| known_version_ids.contains(version_id));
         self.models = models;
         self.model_search_has_more = has_more;
         self.model_search_loading_more = false;
@@ -781,25 +1075,32 @@ impl App {
 
     pub fn select_next_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
-                let model_id = model.id;
-                let version_len = model.model_versions.len();
-                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-                if *v_idx < version_len.saturating_sub(1) {
-                    *v_idx += 1;
-                }
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_next_version_for_model(&model);
             }
         }
     }
 
     pub fn select_previous_version(&mut self) {
         if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
-            if let Some(model) = self.selected_model_in_active_view() {
-                let model_id = model.id;
-                let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
-                if *v_idx > 0 {
-                    *v_idx -= 1;
-                }
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_previous_version_for_model(&model);
+            }
+        }
+    }
+
+    pub fn select_next_file(&mut self) {
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_next_file_for_model(&model);
+            }
+        }
+    }
+
+    pub fn select_previous_file(&mut self) {
+        if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
+            if let Some(model) = self.selected_model_in_active_view().cloned() {
+                self.select_previous_file_for_model(&model);
             }
         }
     }
@@ -808,24 +1109,143 @@ impl App {
         if self.active_tab == MainTab::Images {
             if let Some(img) = self.images.get(self.selected_index) {
                 if let Some(tx) = &self.tx {
-                    let _ = tx.try_send(WorkerCommand::DownloadModelForImage(img.id));
-                    self.status = format!("Initiated download search for image {}...", img.id);
+                    let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
+                    self.status = format!("Downloading image {}...", img.id);
                 }
             }
         } else if self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks {
             if let Some(model) = self.selected_model_in_active_view().map(|m| m.clone()) {
-                let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-                if let Some(version) = model.model_versions.get(v_idx) {
-                    if let Some(tx) = &self.tx {
-                        let _ = tx.try_send(WorkerCommand::DownloadModel(model.id, version.id));
-                        self.status = format!(
-                            "Initiated download for {} (v: {})",
-                            model.name, version.name
-                        );
-                    }
+                self.request_download_for_model(&model);
+            }
+        }
+    }
+
+    pub fn select_next_version_for_model(&mut self, model: &Model) {
+        let model_id = model.id;
+        let version_len = model_versions(model).len();
+        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
+        if *v_idx < version_len.saturating_sub(1) {
+            *v_idx += 1;
+            if let Some(version) = selected_version(model, *v_idx) {
+                self.selected_file_index.entry(version.id).or_insert(0);
+            }
+        }
+    }
+
+    pub fn select_previous_version_for_model(&mut self, model: &Model) {
+        let model_id = model.id;
+        let v_idx = self.selected_version_index.entry(model_id).or_insert(0);
+        if *v_idx > 0 {
+            *v_idx -= 1;
+            if let Some(version) = selected_version(model, *v_idx) {
+                self.selected_file_index.entry(version.id).or_insert(0);
+            }
+        }
+    }
+
+    pub fn select_next_file_for_model(&mut self, model: &Model) {
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, version_index) {
+            let file_len = version.files.len();
+            if file_len > 0 {
+                let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+                if *file_idx < file_len.saturating_sub(1) {
+                    *file_idx += 1;
                 }
             }
         }
+    }
+
+    pub fn select_previous_file_for_model(&mut self, model: &Model) {
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, version_index) {
+            let file_idx = self.selected_file_index.entry(version.id).or_insert(0);
+            if *file_idx > 0 {
+                *file_idx -= 1;
+            }
+        }
+    }
+
+    pub fn request_download_for_model(&mut self, model: &Model) {
+        let v_idx = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        if let Some(version) = selected_version(model, v_idx) {
+            let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
+            if let Some(tx) = &self.tx {
+                let _ = tx.try_send(WorkerCommand::DownloadModel(
+                    model.clone(),
+                    version.id,
+                    file_idx,
+                ));
+                self.status = format!(
+                    "Initiated download for {} (v: {}, file: {})",
+                    model_name(model),
+                    version.name,
+                    file_idx + 1
+                );
+            }
+        }
+    }
+
+    pub fn begin_image_model_detail_modal_loading(&mut self) {
+        self.show_image_model_detail_modal = true;
+        self.image_model_detail_model = None;
+    }
+
+    pub fn select_next_image_model(&mut self) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = self.selected_image_in_active_view() {
+            let items = image_used_models(image);
+            if items.is_empty() {
+                return;
+            }
+            let index = self.selected_image_model_index.entry(image.id).or_insert(0);
+            if *index < items.len().saturating_sub(1) {
+                *index += 1;
+            }
+        }
+    }
+
+    pub fn select_previous_image_model(&mut self) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+            return;
+        }
+        if let Some(image) = self.selected_image_in_active_view() {
+            let index = self.selected_image_model_index.entry(image.id).or_insert(0);
+            if *index > 0 {
+                *index -= 1;
+            }
+        }
+    }
+
+    pub fn selected_image_used_model(&self) -> Option<ParsedUsedModel> {
+        let image = self.selected_image_in_active_view()?;
+        let entries = image_used_model_entries(image);
+        let index = self
+            .selected_image_model_index
+            .get(&image.id)
+            .copied()
+            .unwrap_or(0)
+            .min(entries.len().saturating_sub(1));
+        entries.get(index).cloned()
+    }
+
+    pub fn open_image_model_detail_modal(&mut self, model: Model, version_id: Option<u64>) {
+        if let Some(version_id) = version_id
+            && let Some(index) = model_versions(&model)
+                .iter()
+                .position(|version| version.id == version_id)
+        {
+            self.selected_version_index.insert(model.id, index);
+        }
+        self.image_model_detail_model = Some(model);
+        self.show_image_model_detail_modal = true;
+    }
+
+    pub fn close_image_model_detail_modal(&mut self) {
+        self.show_image_model_detail_modal = false;
+        self.image_model_detail_model = None;
     }
 
     pub fn select_next_download(&mut self) {
@@ -940,51 +1360,118 @@ impl App {
     pub fn selected_model_version(&self) -> Option<(u64, u64)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = model.model_versions.get(version_index)?;
-        Some((model.id, version.id))
+        if let Some(version) = selected_version(model, version_index) {
+            Some((model.id, version.id))
+        } else {
+            model.primary_model_version_id().map(|version_id| (model.id, version_id))
+        }
     }
 
-    pub fn selected_model_version_with_cover_url(&self) -> Option<(u64, u64, Option<String>)> {
+    pub fn selected_model_version_with_cover_url(
+        &self,
+    ) -> Option<(u64, u64, Option<String>, Option<(u32, u32)>)> {
         let model = self.selected_model_in_active_view()?;
         let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
-        let version = model.model_versions.get(version_index)?;
+        let version = selected_version(model, version_index)?;
+        if self.model_version_image_failed.contains(&version.id) {
+            return None;
+        }
+        let preview = preview_image_info(model, version_index);
         Some((
             model.id,
             version.id,
-            version.images.first().map(|image| image.url.clone()),
+            preview.as_ref().map(|image| image.url.clone()),
+            preview
+                .and_then(|image| Some((image.width?, image.height?))),
         ))
     }
 
-    pub fn visible_bookmarks(&self) -> Vec<Model> {
-        let query = self.bookmark_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            self.bookmarks.clone()
-        } else {
-            self.bookmarks
-                .iter()
-                .filter(|model| model.name.to_ascii_lowercase().contains(&query))
-                .cloned()
-                .collect()
+    pub fn selected_model_neighbor_cover_urls(
+        &self,
+        radius: usize,
+    ) -> Vec<(u64, Option<String>, Option<(u32, u32)>)> {
+        let Some(model) = self.selected_model_in_active_view() else {
+            return Vec::new();
+        };
+        let versions = model_versions(model);
+        if versions.is_empty() {
+            return Vec::new();
         }
+
+        let version_index = *self.selected_version_index.get(&model.id).unwrap_or(&0);
+        let center = version_index.min(versions.len().saturating_sub(1));
+        let start = center.saturating_sub(radius);
+        let end = (center + radius).min(versions.len().saturating_sub(1));
+
+        versions
+            .iter()
+            .enumerate()
+            .filter(|(_, version)| {
+                !self.model_version_image_cache.contains_key(&version.id)
+                    && !self.model_version_image_failed.contains(&version.id)
+            })
+            .filter(|(idx, _)| *idx != center && *idx >= start && *idx <= end)
+            .map(|(idx, version)| {
+                let preview = preview_image_info(model, idx);
+                (
+                    version.id,
+                    version.images.first().map(|image| image.url.clone()).or_else(|| {
+                        preview.as_ref().map(|image| image.url.clone())
+                    }),
+                    version
+                        .images
+                        .first()
+                        .and_then(|image| Some((image.width?, image.height?)))
+                        .or_else(|| {
+                            preview
+                                .and_then(|image| Some((image.width?, image.height?)))
+                        }),
+                )
+            })
+            .collect()
+    }
+
+    pub fn visible_bookmarks(&self) -> Vec<Model> {
+        let query = self.bookmark_search_form.query.trim().to_ascii_lowercase();
+        let mut items = self
+            .bookmarks
+            .iter()
+            .filter(|model| {
+                bookmark_matches_query(model, &query)
+                    && bookmark_matches_type(model, &self.bookmark_search_form.selected_types)
+                    && bookmark_matches_base_model(
+                        model,
+                        &self.bookmark_search_form.selected_base_models,
+                    )
+                    && bookmark_matches_period(
+                        model,
+                        self.bookmark_search_form
+                            .periods
+                            .get(self.bookmark_search_form.selected_period),
+                    )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        sort_bookmarks(
+            &mut items,
+            self.bookmark_search_form
+                .sort_options
+                .get(self.bookmark_search_form.selected_sort)
+                .unwrap_or(&ModelSearchSortBy::Relevance),
+        );
+        items
     }
 
     pub fn visible_bookmark_indices(&self) -> Vec<usize> {
-        let query = self.bookmark_query.trim().to_ascii_lowercase();
-        if query.is_empty() {
-            (0..self.bookmarks.len()).collect()
-        } else {
-            self.bookmarks
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, model)| {
-                    if model.name.to_ascii_lowercase().contains(&query) {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        }
+        self.visible_bookmarks()
+            .into_iter()
+            .filter_map(|visible| {
+                self.bookmarks
+                    .iter()
+                    .position(|model| model.id == visible.id)
+            })
+            .collect()
     }
 
     pub fn clamp_bookmark_selection(&mut self) {
@@ -1068,13 +1555,13 @@ impl App {
     pub fn toggle_bookmark_for_selected_model(&mut self, model: &Model) {
         if self.is_model_bookmarked(model.id) {
             self.bookmarks.retain(|item| item.id != model.id);
-            self.status = format!("Removed bookmark: {}", model.name);
+            self.status = format!("Removed bookmark: {}", model_name(model));
             if self.active_tab == MainTab::Bookmarks {
                 self.clamp_bookmark_selection();
             }
         } else {
             self.bookmarks.push(model.clone());
-            self.status = format!("Added bookmark: {}", model.name);
+            self.status = format!("Added bookmark: {}", model_name(model));
         }
         self.deduplicate_bookmarks();
         self.persist_bookmarks();
@@ -1087,7 +1574,7 @@ impl App {
         };
 
         if let Some(pos) = self.bookmarks.iter().position(|model| model.id == model_id) {
-            let name = self.bookmarks[pos].name.clone();
+            let name = model_name(&self.bookmarks[pos]);
             self.bookmarks.remove(pos);
             self.persist_bookmarks();
             self.clamp_bookmark_selection();
@@ -1119,9 +1606,10 @@ impl App {
     }
 
     pub fn begin_bookmark_search(&mut self) {
-        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.bookmark_search_form_draft = self.bookmark_search_form.clone();
+        self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::SearchBookmarks;
-        self.status = "Search bookmarks. Enter apply, Esc cancel".to_string();
+        self.status = "Filter bookmarks. Enter apply, Esc cancel".to_string();
     }
 
     pub fn begin_bookmark_export_prompt(&mut self) {
@@ -1320,23 +1808,26 @@ impl App {
     }
 
     pub fn apply_bookmark_query(&mut self) {
-        self.bookmark_query = self.bookmark_query_draft.clone();
+        self.bookmark_search_form = self.bookmark_search_form_draft.clone();
+        self.bookmark_query = self.bookmark_search_form.query.clone();
+        self.bookmark_query_draft = self.bookmark_query.clone();
         self.mode = AppMode::Browsing;
         self.clamp_bookmark_selection();
         self.status = format!(
-            "Bookmark query applied: {}",
-            if self.bookmark_query.is_empty() {
+            "Bookmark filter applied: {}",
+            if self.bookmark_search_form.query.is_empty() {
                 "<all>".to_string()
             } else {
-                self.bookmark_query.clone()
+                self.bookmark_search_form.query.clone()
             }
         );
     }
 
     pub fn cancel_bookmark_search(&mut self) {
-        self.bookmark_query_draft = self.bookmark_query.clone();
+        self.bookmark_search_form_draft = self.bookmark_search_form.clone();
+        self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::Browsing;
-        self.status = "Bookmark search cancelled.".to_string();
+        self.status = "Bookmark filter cancelled.".to_string();
     }
 
     pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {
@@ -1411,6 +1902,18 @@ impl App {
         }
     }
 
+    pub fn persist_image_tag_catalog(&mut self) {
+        let Some(path) = self.config.image_tag_catalog_path() else {
+            return;
+        };
+
+        if let Err(err) = save_image_tag_catalog_to_file(path.as_path(), &self.image_tag_catalog) {
+            self.last_error = Some(err.to_string());
+        } else {
+            self.last_error = None;
+        }
+    }
+
     pub fn persist_download_history(&mut self) {
         if let Some(path) = &self.download_history_file_path {
             if let Err(err) = save_download_history_to_file(path, &self.download_history) {
@@ -1420,6 +1923,10 @@ impl App {
             }
         }
     }
+}
+
+fn has_displayable_model_version(model: &Model) -> bool {
+    !model_versions(model).is_empty() || model.primary_model_version_id().is_some()
 }
 
 fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
@@ -1442,6 +1949,130 @@ fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
     models
 }
 
+fn period_to_created_at(period: &str) -> Option<String> {
+    let end = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs();
+
+    let start = match period {
+        "Day" => end.saturating_sub(24 * 60 * 60),
+        "Week" => end.saturating_sub(7 * 24 * 60 * 60),
+        "Month" => end.saturating_sub(30 * 24 * 60 * 60),
+        "Year" => end.saturating_sub(365 * 24 * 60 * 60),
+        _ => return None,
+    };
+
+    Some(format!("{start}-{end}"))
+}
+
+fn bookmark_matches_query(model: &Model, query: &str) -> bool {
+    query.is_empty() || model_name(model).to_ascii_lowercase().contains(query)
+}
+
+fn bookmark_matches_type(model: &Model, selected_types: &BTreeSet<ModelType>) -> bool {
+    if selected_types.is_empty() {
+        return true;
+    }
+
+    let Some(model_type) = model.r#type.as_deref() else {
+        return false;
+    };
+    let normalized = model_type.to_ascii_lowercase();
+    selected_types.iter().any(|item| {
+        normalized == item.as_query_value().to_ascii_lowercase()
+            || normalized == item.label().to_ascii_lowercase()
+    })
+}
+
+fn bookmark_matches_base_model(
+    model: &Model,
+    selected_base_models: &BTreeSet<ModelBaseModel>,
+) -> bool {
+    if selected_base_models.is_empty() {
+        return true;
+    }
+
+    let Some(base_model) = default_base_model(model) else {
+        return false;
+    };
+    let normalized = base_model.to_ascii_lowercase();
+    selected_base_models.iter().any(|item| {
+        normalized == item.as_query_value().to_ascii_lowercase()
+            || normalized == item.label().to_ascii_lowercase()
+    })
+}
+
+fn bookmark_matches_period(model: &Model, period: Option<&SearchPeriod>) -> bool {
+    let Some(period) = period else {
+        return true;
+    };
+    if *period == SearchPeriod::AllTime {
+        return true;
+    }
+
+    let Some(model_ts) = model.last_version_at_unix else {
+        return true;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| std::time::Duration::from_secs(0))
+        .as_secs() as i64;
+    let window = match period {
+        SearchPeriod::Day => 24 * 60 * 60,
+        SearchPeriod::Week => 7 * 24 * 60 * 60,
+        SearchPeriod::Month => 30 * 24 * 60 * 60,
+        SearchPeriod::Year => 365 * 24 * 60 * 60,
+        SearchPeriod::AllTime => return true,
+    };
+
+    model_ts >= now.saturating_sub(window)
+}
+
+fn sort_bookmarks(items: &mut [Model], sort_by: &ModelSearchSortBy) {
+    match sort_by {
+        ModelSearchSortBy::Relevance => {}
+        ModelSearchSortBy::HighestRated => items.sort_by(|a, b| {
+            model_metrics(b)
+                .rating
+                .total_cmp(&model_metrics(a).rating)
+                .then_with(|| model_metrics(b).rating_count.cmp(&model_metrics(a).rating_count))
+        }),
+        ModelSearchSortBy::MostDownloaded => items.sort_by(|a, b| {
+            model_metrics(b)
+                .download_count
+                .cmp(&model_metrics(a).download_count)
+        }),
+        ModelSearchSortBy::MostLiked => items.sort_by(|a, b| {
+            model_metrics(b)
+                .favorite_count
+                .cmp(&model_metrics(a).favorite_count)
+                .then_with(|| model_metrics(b).thumbs_up_count.cmp(&model_metrics(a).thumbs_up_count))
+        }),
+        ModelSearchSortBy::MostDiscussed => items.sort_by(|a, b| {
+            model_metrics(b)
+                .comment_count
+                .cmp(&model_metrics(a).comment_count)
+        }),
+        ModelSearchSortBy::MostCollected => items.sort_by(|a, b| {
+            model_metrics(b)
+                .collected_count
+                .cmp(&model_metrics(a).collected_count)
+        }),
+        ModelSearchSortBy::MostBuzz => items.sort_by(|a, b| {
+            model_metrics(b)
+                .tipped_amount_count
+                .cmp(&model_metrics(a).tipped_amount_count)
+        }),
+        ModelSearchSortBy::Newest => items.sort_by(|a, b| {
+            b.last_version_at_unix
+                .unwrap_or_default()
+                .cmp(&a.last_version_at_unix.unwrap_or_default())
+        }),
+        ModelSearchSortBy::Custom(_) => {}
+    }
+}
+
 fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {
     let Some(path) = path else {
         return Vec::new();
@@ -1456,6 +2087,26 @@ fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {
     let mut seen = HashSet::new();
     images.retain(|image| seen.insert(image.id));
     images
+}
+
+fn load_image_tag_catalog(path: Option<&Path>) -> Vec<String> {
+    let Some(path) = path else {
+        return Vec::new();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut tags: Vec<String> = serde_json::from_str(&content).unwrap_or_default();
+    let mut seen = HashSet::new();
+    tags.retain(|tag| {
+        let normalized = tag.trim().to_lowercase();
+        !normalized.is_empty() && seen.insert(normalized)
+    });
+    tags.sort_by_key(|tag| tag.to_lowercase());
+    tags
 }
 
 fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
@@ -1480,6 +2131,25 @@ fn save_image_bookmarks_to_file(path: &Path, bookmarks: &[ImageItem]) -> Result<
     let mut normalized = bookmarks.to_vec();
     let mut seen = HashSet::new();
     normalized.retain(|image| seen.insert(image.id));
+
+    let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn save_image_tag_catalog_to_file(path: &Path, tags: &[String]) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let mut normalized = tags
+        .iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect::<Vec<_>>();
+    let mut seen = HashSet::new();
+    normalized.retain(|tag| seen.insert(tag.to_lowercase()));
+    normalized.sort_by_key(|tag| tag.to_lowercase());
 
     let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;

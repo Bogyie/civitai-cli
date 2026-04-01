@@ -10,14 +10,25 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, Tabs, Wrap,
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap,
     },
 };
 use ratatui_image::{StatefulImage, protocol::StatefulProtocol};
 use std::io::{self, Stdout};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::tui::app::{App, AppMode, DownloadHistoryStatus, DownloadState, MainTab};
+use crate::tui::app::{
+    App, AppMode, DownloadHistoryStatus, DownloadState, ImageSearchFormSection, MainTab,
+    SearchFormMode, SearchFormSection, SearchFormState,
+};
+use crate::tui::image::{
+    comfy_workflow_json, comfy_workflow_node_count, image_generation_info, image_negative_prompt,
+    image_prompt, image_stats, image_tags, image_used_models, image_username,
+};
+use crate::tui::model::{
+    build_model_url, category_name, creator_name, default_base_model, model_metrics, model_name,
+    model_versions, tag_names,
+};
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     let mut stdout = io::stdout();
@@ -39,7 +50,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(3), // Tabs
             Constraint::Min(10),   // Main content
-            Constraint::Length(2), // Footer Status
+            Constraint::Length(3), // Footer Status + shortcuts
         ])
         .split(f.area());
 
@@ -72,7 +83,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Civitai CLI | [1-6] Switch tab | Tab: cycle tabs "),
+                .title(" Civitai CLI | [1-6] Switch tab "),
         )
         .highlight_style(
             Style::default()
@@ -125,7 +136,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
 
             if app.mode == AppMode::SearchForm {
-                draw_search_popup(f, app);
+                draw_search_popup(f, &app.search_form, "Search Builder", "Quick Search");
             }
         }
         MainTab::Bookmarks => {
@@ -166,13 +177,19 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
 
             if app.mode == AppMode::SearchBookmarks {
-                draw_bookmark_search_popup(f, app);
+                draw_search_popup(
+                    f,
+                    &app.bookmark_search_form_draft,
+                    "Bookmark Filters",
+                    "Bookmark Search",
+                );
             }
             if app.mode == AppMode::BookmarkPathPrompt {
                 draw_bookmark_path_prompt(f, app);
             }
         }
         MainTab::Images => {
+            f.render_widget(Clear, chunks[1]);
             let image_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -189,6 +206,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
         }
         MainTab::ImageBookmarks => {
+            f.render_widget(Clear, chunks[1]);
             let image_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -218,6 +236,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_status_modal(f, app);
     }
 
+    if app.show_help_modal {
+        draw_help_modal(f, app);
+    }
+
+    if app.show_image_prompt_modal {
+        draw_image_prompt_modal(f, app);
+    }
+
+    if app.show_image_model_detail_modal {
+        draw_image_model_detail_modal(f, app);
+    }
+
     if app.show_bookmark_confirm_modal {
         draw_bookmark_confirm_modal(f, app);
     }
@@ -244,9 +274,30 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block.clone(), area);
     let inner_area = block.inner(area);
 
+    let layout_sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(inner_area);
+
+    let summary = Paragraph::new(Line::from(vec![
+        Span::styled(" Focus ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            if has_active { "Active queue" } else { "History" },
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled("Actions ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "[p] pause/resume  [c] cancel  [r] resume  [d] remove  [D] purge file",
+            Style::default().fg(Color::Gray),
+        ),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM).title(" Control Panel "));
+    f.render_widget(summary, layout_sections[0]);
+
     if !has_active && !has_history {
         let p = Paragraph::new("No active downloads or history.").alignment(Alignment::Center);
-        f.render_widget(p, inner_area);
+        f.render_widget(p, layout_sections[1]);
         return;
     }
 
@@ -267,12 +318,12 @@ fn draw_downloads_tab(f: &mut Frame, app: &App, area: Rect) {
         sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
-            .split(inner_area)
+            .split(layout_sections[1])
             .to_vec();
     } else if has_active {
-        sections.push(inner_area);
+        sections.push(layout_sections[1]);
     } else {
-        sections.push(inner_area);
+        sections.push(layout_sections[1]);
     }
 
     let mut section_index = 0;
@@ -546,336 +597,178 @@ fn format_time_ago(ts: SystemTime) -> String {
 }
 
 fn draw_settings_tab(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Settings ");
+    let outer = Block::default().borders(Borders::ALL).title(" Settings Control Panel ");
+    f.render_widget(outer.clone(), area);
+    let inner = outer.inner(area);
     let fm = &app.settings_form;
 
-    let mut lines = vec![
+    let field_value = |idx: usize| -> String {
+        if fm.editing && fm.focused_field == idx {
+            return format!("{}█", fm.input_buffer);
+        }
+        match idx {
+            0 => app
+                .config
+                .api_key
+                .as_ref()
+                .map(|key| format!("Present ({})", key.chars().take(5).collect::<String>()))
+                .unwrap_or_else(|| "Not configured".to_string()),
+            1 => app
+                .config
+                .comfyui_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Not configured".to_string()),
+            2 => app
+                .config
+                .bookmark_file_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| crate::config::AppConfig::bookmark_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            3 => app
+                .config
+                .model_search_cache_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.search_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            4 => format!("{}h", app.config.model_search_cache_ttl_hours),
+            5 => app
+                .config
+                .image_cache_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.image_cache_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            6 => format!("{}m", app.config.image_search_cache_ttl_minutes),
+            7 => format!("{}m", app.config.image_detail_cache_ttl_minutes),
+            8 => {
+                if app.config.image_cache_ttl_minutes == 0 {
+                    "Persistent".to_string()
+                } else {
+                    format!("{}m", app.config.image_cache_ttl_minutes)
+                }
+            }
+            9 => app.config.media_quality.label().to_string(),
+            10 => app
+                .config
+                .download_history_file_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| app.config.download_history_path().map(|p| p.to_string_lossy().to_string()))
+                .unwrap_or_else(|| "Default".to_string()),
+            11 => "Delete search/detail/media caches".to_string(),
+            _ => String::new(),
+        }
+    };
+
+    let item_line = |idx: usize, label: &str| -> Line<'static> {
+        let focused = fm.focused_field == idx;
+        let label_style = if focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let value_style = if focused && fm.editing {
+            Style::default().fg(Color::Yellow)
+        } else if idx == 11 {
+            Style::default().fg(Color::LightRed)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        Line::from(vec![
+            Span::styled(if focused { "> " } else { "  " }, label_style),
+            Span::styled(format!("{label}: "), label_style),
+            Span::styled(field_value(idx), value_style),
+        ])
+    };
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(8),
+            Constraint::Length(5),
+            Constraint::Min(3),
+        ])
+        .split(inner);
+
+    let top = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
+        .split(sections[0]);
+    let middle = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(sections[1]);
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(sections[2]);
+
+    let access = Paragraph::new(vec![
+        item_line(0, "API Key"),
+        item_line(1, "ComfyUI"),
+        item_line(2, "Bookmark File"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Access & Paths "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(access, top[0]);
+
+    let media = Paragraph::new(vec![
+        item_line(9, "Media Quality"),
         Line::from(Span::styled(
-            "--- Civitai CLI Configuration ---",
-            Style::default().add_modifier(Modifier::BOLD),
+            "  Left/Right cycles render preference",
+            help_text_style(),
         )),
-        Line::from(""),
-    ];
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Media "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(media, top[1]);
 
-    let api_key_val = if fm.editing && fm.focused_field == 0 {
-        format!("{}█", fm.input_buffer)
-    } else if let Some(key) = &app.config.api_key {
-        format!(
-            "Present (starts with {})",
-            &key.chars().take(5).collect::<String>()
-        )
+    let model_cache = Paragraph::new(vec![
+        item_line(3, "Model Cache Folder"),
+        item_line(4, "Model Search TTL"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Model Cache "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(model_cache, middle[0]);
+
+    let image_cache = Paragraph::new(vec![
+        item_line(5, "Image Cache Folder"),
+        item_line(6, "Image Search TTL"),
+        item_line(7, "Image Detail TTL"),
+        item_line(8, "Image Binary TTL"),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Image Cache "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(image_cache, middle[1]);
+
+    let storage = Paragraph::new(vec![item_line(10, "Download History File")])
+        .block(Block::default().borders(Borders::ALL).title(" Storage "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(storage, bottom[0]);
+
+    let actions = Paragraph::new(vec![
+        item_line(11, "Clear All Caches"),
+        Line::from(Span::styled(
+            "  Keeps settings, bookmarks, tags, and history",
+            help_text_style(),
+        )),
+    ])
+    .block(Block::default().borders(Borders::ALL).title(" Actions "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(actions, bottom[1]);
+
+    let hints = if fm.editing {
+        " Type to edit the selected field. [Enter] Save  [Esc] Cancel "
     } else {
-        "None (Restricted search and downloads)".to_string()
+        " [j/k] Move  [Enter] Edit/Run  [h/l] Cycle selected enum/action "
     };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 0 {
-                "> API Key: "
-            } else {
-                "  API Key: "
-            },
-            Style::default().fg(if fm.focused_field == 0 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            api_key_val,
-            if fm.focused_field == 0 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let path_val = if fm.editing && fm.focused_field == 1 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .comfyui_path
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 1 {
-                "> ComfyUI Path: "
-            } else {
-                "  ComfyUI Path: "
-            },
-            Style::default().fg(if fm.focused_field == 1 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            path_val,
-            if fm.focused_field == 1 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let bookmark_path_val = if fm.editing && fm.focused_field == 2 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .bookmark_file_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                crate::config::AppConfig::bookmark_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 2 {
-                "> Bookmark File: "
-            } else {
-                "  Bookmark File: "
-            },
-            Style::default().fg(if fm.focused_field == 2 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            bookmark_path_val,
-            if fm.focused_field == 2 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let model_search_cache_path_val = if fm.editing && fm.focused_field == 3 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .model_search_cache_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .search_cache_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 3 {
-                "> Model Search Cache Folder: "
-            } else {
-                "  Model Search Cache Folder: "
-            },
-            Style::default().fg(if fm.focused_field == 3 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            model_search_cache_path_val,
-            if fm.focused_field == 3 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let cache_ttl_val = if fm.editing && fm.focused_field == 4 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.model_search_cache_ttl_hours.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 4 {
-                "> Model Search Cache TTL (hours): "
-            } else {
-                "  Model Search Cache TTL (hours): "
-            },
-            Style::default().fg(if fm.focused_field == 4 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            cache_ttl_val,
-            if fm.focused_field == 4 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_cache_path_val = if fm.editing && fm.focused_field == 5 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .image_cache_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .image_cache_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 5 {
-                "> Image Cache Folder: "
-            } else {
-                "  Image Cache Folder: "
-            },
-            Style::default().fg(if fm.focused_field == 5 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_cache_path_val,
-            if fm.focused_field == 5 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_search_ttl_val = if fm.editing && fm.focused_field == 6 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.image_search_cache_ttl_minutes.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 6 {
-                "> Image Search Cache TTL (minutes): "
-            } else {
-                "  Image Search Cache TTL (minutes): "
-            },
-            Style::default().fg(if fm.focused_field == 6 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_search_ttl_val,
-            if fm.focused_field == 6 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let image_cache_ttl_val = if fm.editing && fm.focused_field == 7 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config.image_cache_ttl_minutes.to_string()
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 7 {
-                "> Image Cache TTL (minutes, 0 = persistent): "
-            } else {
-                "  Image Cache TTL (minutes, 0 = persistent): "
-            },
-            Style::default().fg(if fm.focused_field == 7 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            image_cache_ttl_val,
-            if fm.focused_field == 7 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    let download_history_path_val = if fm.editing && fm.focused_field == 8 {
-        format!("{}█", fm.input_buffer)
-    } else {
-        app.config
-            .download_history_file_path
-            .as_ref()
-            .map(|path| path.to_string_lossy().to_string())
-            .or_else(|| {
-                app.config
-                    .download_history_path()
-                    .map(|path| path.to_string_lossy().to_string())
-            })
-            .unwrap_or_else(|| "Not Configured".to_string())
-    };
-
-    lines.push(Line::from(vec![
-        Span::styled(
-            if fm.focused_field == 8 {
-                "> Download History File: "
-            } else {
-                "  Download History File: "
-            },
-            Style::default().fg(if fm.focused_field == 8 {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
-        ),
-        Span::styled(
-            download_history_path_val,
-            if fm.focused_field == 8 && fm.editing {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::Cyan)
-            },
-        ),
-    ]));
-
-    lines.push(Line::from(""));
-    if fm.editing {
-        lines.push(Line::from(Span::styled(
-            " [Type to edit] | [Enter] Save | [Esc] Cancel",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        lines.push(Line::from(Span::styled(
-            " [Up/Down] Highlight | [Enter] Edit string",
-            Style::default().fg(Color::DarkGray),
-        )));
-    }
-
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    let help = Paragraph::new(Line::from(Span::styled(hints, help_text_style())))
+        .block(Block::default().borders(Borders::TOP).title(" Input "));
+    f.render_widget(help, sections[3]);
 }
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -899,162 +792,306 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let inner_area = block.inner(area);
     f.render_widget(block, area);
+    f.render_widget(Clear, inner_area);
 
     if let Some(protocol) = app.image_cache.get_mut(&img.id) {
         let image_widget = StatefulImage::new();
         f.render_stateful_widget(image_widget, inner_area, protocol);
     } else {
-        let text = format!("Decoding media {}/{}...", selected_index + 1, items.len());
+        let text = format!("Loading image {}/{}...", selected_index + 1, items.len());
         f.render_widget(Paragraph::new(text), inner_area);
     }
 }
 
 fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Metadata ");
-
-    if let Some(img) = app.selected_image_in_active_view() {
-        let dimensions = match (img.width, img.height) {
-            (Some(width), Some(height)) => format!("{} x {}", width, height),
-            _ => "<none>".to_string(),
-        };
-        let model_version_ids = if img.model_version_ids.is_empty() {
-            "<none>".to_string()
-        } else {
-            img.model_version_ids
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("ID: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(img.id.to_string()),
-            ]),
-            Line::from(vec![
-                Span::styled("Link: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format!("https://civitai.com/images/{}", img.id)),
-            ]),
-            Line::from(vec![
-                Span::styled("URL: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(img.url.as_str()),
-            ]),
-            Line::from(vec![
-                Span::styled("Hash: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(img.hash.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(img.r#type.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Dimensions: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(dimensions),
-            ]),
-            Line::from(vec![
-                Span::styled("NSFW: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(
-                    img.nsfw
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "<none>".to_string()),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "NSFW Level: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(img.nsfw_level.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Browsing Level: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(img.browsing_level.to_string()),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Created At: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(img.created_at.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled("Post ID: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(
-                    img.post_id
-                        .map(|value| value.to_string())
-                        .unwrap_or_else(|| "<none>".to_string()),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Username: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(img.username.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "Base Model: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(img.base_model.as_deref().unwrap_or("<none>")),
-            ]),
-            Line::from(vec![
-                Span::styled(
-                    "ModelVersionIds: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(model_version_ids),
-            ]),
-        ];
-
-        if let Some(stats) = &img.stats {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Stats:",
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(Color::Cyan),
-            )));
-            lines.push(Line::from(format!(
-                "cry={} laugh={} like={} dislike={} heart={} comment={}",
-                stats.cry_count,
-                stats.laugh_count,
-                stats.like_count,
-                stats.dislike_count,
-                stats.heart_count,
-                stats.comment_count,
-            )));
-        }
-
-        if let Some(meta) = &img.meta {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "Meta:",
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(Color::Yellow),
-            )));
-            match serde_json::to_string_pretty(meta) {
-                Ok(pretty) => {
-                    for line in pretty.lines() {
-                        lines.push(Line::from(line.to_string()));
-                    }
-                }
-                Err(_) => {
-                    lines.push(Line::from("<failed to render meta json>"));
-                }
-            }
-        }
+    let Some(img) = app.selected_image_in_active_view() else {
         f.render_widget(
-            Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+            Paragraph::new("No metadata available.")
+                .block(Block::default().borders(Borders::ALL).title(" Image ")),
             area,
         );
+        return;
+    };
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(4),
+            Constraint::Length(6),
+            Constraint::Length(12),
+            Constraint::Min(6),
+        ])
+        .split(area);
+
+    let dimensions = match (img.width, img.height) {
+        (Some(width), Some(height)) => format!("{width}x{height}"),
+        _ => "<none>".to_string(),
+    };
+    let username = image_username(img).unwrap_or_else(|| "<unknown>".to_string());
+    let stats = image_stats(img);
+    let image_meta_value = format!(
+        "{} | {} | nsfw {}",
+        img.r#type.as_deref().unwrap_or("image"),
+        dimensions,
+        img.combined_nsfw_level
+            .or(img.nsfw_level)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "0".to_string())
+    );
+    let stats_primary_value = format!(
+        "react {}  like {}  heart {}",
+        compact_number(stats.reactions),
+        compact_number(stats.likes),
+        compact_number(stats.hearts)
+    );
+    let stats_secondary_value = format!(
+        "cmt {}  collect {}  buzz {}",
+        compact_number(stats.comments),
+        compact_number(stats.collected),
+        compact_number(stats.buzz)
+    );
+    let workflow_json = comfy_workflow_json(img);
+    let generation = image_generation_info(img);
+    let workflow_label = workflow_json
+        .as_ref()
+        .map(|_| format!("nodes {}", comfy_workflow_node_count(img).unwrap_or(0)))
+        .unwrap_or_else(|| "<none>".to_string());
+    let used_models = image_used_models(img);
+    let tags = image_tags(img);
+    let tag_lines = if tags.is_empty() {
+        vec![Line::from("<none>")]
     } else {
-        f.render_widget(Paragraph::new("No metadata available.").block(block), area);
+        wrap_joined_tags(&tags, sections[4].width.saturating_sub(2) as usize, 2)
+    };
+    let selected_model_idx = app
+        .selected_image_model_index
+        .get(&img.id)
+        .copied()
+        .unwrap_or(0)
+        .min(used_models.len().saturating_sub(1));
+    let used_model_lines = if used_models.is_empty() {
+        vec![Line::from("<none>")]
+    } else {
+        let visible_rows = sections[3].height.saturating_sub(2) as usize;
+        let start_idx = if visible_rows == 0 || selected_model_idx < visible_rows {
+            0
+        } else {
+            selected_model_idx + 1 - visible_rows
+        };
+        used_models
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows.max(1))
+            .map(|(idx, item)| {
+                let prefix = if idx == selected_model_idx { "> " } else { "  " };
+                let available_width = sections[3].width.saturating_sub(4) as usize;
+                let display_item = if idx == selected_model_idx
+                    && item.chars().count() > available_width.max(1)
+                {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_else(|_| Duration::from_millis(0))
+                        .as_millis();
+                    let shift = ((now_ms / 260) as usize) % item.chars().count().max(1);
+                    rotate_left_chars(item, shift)
+                } else {
+                    item.clone()
+                };
+                let style = if idx == selected_model_idx {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                Line::from(vec![Span::styled(
+                    format!("{prefix}{display_item}"),
+                    style,
+                )])
+            })
+            .collect::<Vec<_>>()
+    };
+    let image_link = img.image_page_url();
+    let advanced_json = img
+        .metadata
+        .as_ref()
+        .and_then(|meta| serde_json::to_string_pretty(meta).ok())
+        .unwrap_or_else(|| "<no metadata>".to_string());
+
+    let image_lines = vec![
+        Line::from(model_key_value_spans("Author", &username)),
+        Line::from(model_key_value_spans(
+            "Created",
+            img.created_at.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Image",
+            &image_meta_value,
+        )),
+        Line::from(model_key_value_spans("Link", &image_link)),
+    ];
+    let stats_lines = vec![
+        Line::from(model_key_value_spans(
+            "Stats",
+            &stats_primary_value,
+        )),
+        Line::from(model_key_value_spans(
+            "More",
+            &stats_secondary_value,
+        )),
+    ];
+    let generation_lines = vec![
+        Line::from(model_key_value_spans(
+            "CFG",
+            generation.cfg_scale.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Steps",
+            generation.steps.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Sampler",
+            generation.sampler.as_deref().unwrap_or("<none>"),
+        )),
+        Line::from(model_key_value_spans(
+            "Seed",
+            generation.seed.as_deref().unwrap_or("<none>"),
+        )),
+    ];
+    let comfy_lines = vec![
+        Line::from(model_key_value_spans("Comfy", &workflow_label)),
+        Line::from(model_key_value_spans(
+            "Copy",
+            if workflow_json.is_some() { "[c]" } else { "<none>" },
+        )),
+    ];
+
+    f.render_widget(
+        Paragraph::new(image_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Image "))
+            .wrap(Wrap { trim: true }),
+        sections[0],
+    );
+    f.render_widget(
+        Paragraph::new(stats_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Stats "))
+            .wrap(Wrap { trim: true }),
+        sections[1],
+    );
+    let mut tag_block_lines = tag_lines;
+    let generation_block = Block::default().borders(Borders::ALL).title(" Generation ");
+    let generation_inner = generation_block.inner(sections[2]);
+    let generation_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(generation_inner);
+    f.render_widget(generation_block, sections[2]);
+    f.render_widget(
+        Paragraph::new(generation_lines)
+            .block(Block::default().borders(Borders::RIGHT).title(" Params "))
+            .wrap(Wrap { trim: true }),
+        generation_split[0],
+    );
+    f.render_widget(
+        Paragraph::new(comfy_lines)
+            .block(Block::default().title(" Comfy "))
+            .wrap(Wrap { trim: true }),
+        generation_split[1],
+    );
+    f.render_widget(
+        Paragraph::new(used_model_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Models ")),
+        sections[3],
+    );
+
+    if app.image_advanced_visible {
+        tag_block_lines.push(Line::from(""));
+        tag_block_lines.extend(wrap_text_lines(
+            &advanced_json,
+            sections[4].width.saturating_sub(2) as usize,
+            sections[4].height.saturating_sub(3) as usize,
+        ));
+    }
+    f.render_widget(
+        Paragraph::new(tag_block_lines)
+            .block(Block::default().borders(Borders::ALL).title(if app.image_advanced_visible {
+                " Tags / Advanced "
+            } else {
+                " Tags "
+            }))
+            .wrap(Wrap { trim: false }),
+        sections[4],
+    );
+}
+
+fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
+    let Some(img) = app.selected_image_in_active_view() else {
+        return;
+    };
+
+    let positive = image_prompt(img).unwrap_or_else(|| {
+        if img.hide_meta.unwrap_or(false) {
+            "Metadata hidden by source".to_string()
+        } else {
+            "<no prompt>".to_string()
+        }
+    });
+    let negative = image_negative_prompt(img).unwrap_or_else(|| "<no negative prompt>".to_string());
+
+    let content = format!(
+        "Positive Prompt\n{}\n\nNegative Prompt\n{}",
+        positive, negative
+    );
+
+    let area = centered_rect(78, 82, f.area());
+    let block = Block::default().borders(Borders::ALL).title(" Prompt Viewer ");
+    f.render_widget(Clear, area);
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+
+    let prompt = Paragraph::new(content)
+        .wrap(Wrap { trim: false })
+        .scroll((app.image_prompt_scroll, 0));
+    f.render_widget(prompt, sections[0]);
+
+    let help = Paragraph::new(Line::from(Span::styled(
+        " [j/k or ↑/↓] Scroll  [m] Close  [Esc] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(help, sections[1]);
+}
+
+fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(84, 86, f.area());
+    f.render_widget(Clear, area);
+
+    let title = if let Some(model) = app.image_model_detail_model.as_ref() {
+        let bookmark_label = if app.is_model_bookmarked(model.id) {
+            "Bookmarked"
+        } else {
+            "b: Bookmark"
+        };
+        format!(" Model Details | [←/→] Version | [J/K] Files | [d] Download | [{bookmark_label}] | [Esc] Close ")
+    } else {
+        " Model Details | Loading... | [Esc] Close ".to_string()
+    };
+
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if let Some(model) = app.image_model_detail_model.clone() {
+        draw_model_sidebar(f, app, inner, Some(&model));
+    } else {
+        let loading = Paragraph::new("Loading model details...")
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title(" Model "));
+        f.render_widget(loading, inner);
     }
 }
 
@@ -1064,24 +1101,47 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         &app.search_form.query
     };
+    let selected_types = if app.search_form.selected_types.is_empty() {
+        "All".to_string()
+    } else {
+        app.search_form
+            .selected_types
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let selected_bases = if app.search_form.selected_base_models.is_empty() {
+        "All".to_string()
+    } else {
+        app.search_form
+            .selected_base_models
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let selected_tags = if app.search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.search_form.tag_query.trim().to_string()
+    };
     let summary = format!(
-        "🔍 Query: \"{}\" | Type: {} | Sort: {} | Base: {}",
+        "🔍 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Period: {}",
         model_query,
+        selected_types,
+        selected_tags,
         app.search_form
-            .types
-            .get(app.search_form.selected_type)
-            .cloned()
-            .unwrap_or_else(|| "All".into()),
-        app.search_form
-            .sorts
+            .sort_options
             .get(app.search_form.selected_sort)
-            .cloned()
-            .unwrap_or_else(|| "Highest Rated".into()),
+            .map(|sort| sort.label().to_string())
+            .unwrap_or_else(|| "Relevance".into()),
+        selected_bases,
         app.search_form
-            .bases
-            .get(app.search_form.selected_base)
-            .cloned()
-            .unwrap_or_else(|| "All".into()),
+            .periods
+            .get(app.search_form.selected_period)
+            .map(|period| period.label())
+            .unwrap_or("AllTime"),
     );
 
     let para = Paragraph::new(summary)
@@ -1096,14 +1156,52 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
-    let query = if app.bookmark_query.is_empty() {
+    let query = if app.bookmark_search_form.query.is_empty() {
         "<all>"
     } else {
-        &app.bookmark_query
+        &app.bookmark_search_form.query
+    };
+    let selected_types = if app.bookmark_search_form.selected_types.is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form
+            .selected_types
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let selected_bases = if app.bookmark_search_form.selected_base_models.is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form
+            .selected_base_models
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let selected_tags = if app.bookmark_search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.bookmark_search_form.tag_query.trim().to_string()
     };
     let summary = format!(
-        "🔍 Bookmarks Query: \"{}\" | Total: {}",
+        "🔖 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Period: {} | Total: {}",
         query,
+        selected_types,
+        selected_tags,
+        app.bookmark_search_form
+            .sort_options
+            .get(app.bookmark_search_form.selected_sort)
+            .map(|sort| sort.label().to_string())
+            .unwrap_or_else(|| "Relevance".into()),
+        selected_bases,
+        app.bookmark_search_form
+            .periods
+            .get(app.bookmark_search_form.selected_period)
+            .map(|period| period.label())
+            .unwrap_or("AllTime"),
         app.visible_bookmarks().len()
     );
 
@@ -1142,42 +1240,63 @@ fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
-    let tag_text = if app.image_search_form.tag_text.trim().is_empty() {
+    let query = if app.image_search_form.query.trim().is_empty() {
         "<all>"
     } else {
-        app.image_search_form.tag_text.trim()
+        app.image_search_form.query.trim()
     };
-    let model_version_id = if app.image_search_form.model_version_id.trim().is_empty() {
-        "<all>"
+    let media_types = if app.image_search_form.selected_media_types.is_empty() {
+        "All".to_string()
     } else {
-        app.image_search_form.model_version_id.trim()
-    };
-    let tag_id = app
-        .image_search_form
-        .build_options()
-        .tags
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "<none>".to_string());
-    let summary = format!(
-        " Image Search | NSFW: {} | Sort: {} | Period: {} | ModelVersionId: {} | Tag: {} ({}) ",
         app.image_search_form
-            .nsfw_options
-            .get(app.image_search_form.selected_nsfw)
+            .selected_media_types
+            .iter()
             .cloned()
-            .unwrap_or_else(|| "All".into()),
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let base_models = if app.image_search_form.selected_base_models.is_empty() {
+        "All".to_string()
+    } else {
+        app.image_search_form
+            .selected_base_models
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let ratios = if app.image_search_form.selected_aspect_ratios.is_empty() {
+        "All".to_string()
+    } else {
+        app.image_search_form
+            .selected_aspect_ratios
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let tags = if app.image_search_form.tag_query.trim().is_empty() {
+        "All".to_string()
+    } else {
+        app.image_search_form.tag_query.trim().to_string()
+    };
+    let summary = format!(
+        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
+        query,
+        media_types,
+        tags,
         app.image_search_form
             .sort_options
             .get(app.image_search_form.selected_sort)
-            .cloned()
-            .unwrap_or_else(|| "Newest".into()),
+            .map(|value| value.label().to_string())
+            .unwrap_or_else(|| "Relevance".into()),
+        base_models,
+        ratios,
         app.image_search_form
-            .period_options
+            .periods
             .get(app.image_search_form.selected_period)
-            .cloned()
-            .unwrap_or_else(|| "AllTime".into()),
-        model_version_id,
-        tag_text,
-        tag_id,
+            .map(|value| value.label())
+            .unwrap_or("AllTime"),
     );
 
     let para = Paragraph::new(summary)
@@ -1194,9 +1313,9 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
 fn draw_model_list(
     f: &mut Frame,
     area: Rect,
-    models: &[crate::api::Model],
+    models: &[civitai_cli::sdk::SearchModelHit],
     list_state: &ListState,
-    show_model_details: bool,
+    _show_model_details: bool,
     bookmarked_ids: &[u64],
     enable_name_rolling: bool,
 ) {
@@ -1216,72 +1335,17 @@ fn draw_model_list(
         .selected()
         .unwrap_or(0)
         .min(models.len().saturating_sub(1));
-    let show_metadata = !show_model_details;
-    let mut rows_cache: Vec<(String, String, String, bool, bool)> =
-        Vec::with_capacity(models.len());
-    let mut down_width = "⬇".chars().count();
-    let mut thumbs_width = "👍".chars().count();
-
-    for model in models.iter() {
-        let downloads = model.stats.as_ref().map(|s| s.download_count).unwrap_or(0);
-        let thumbs_up = model.stats.as_ref().map(|s| s.thumbs_up_count).unwrap_or(0);
-        let down_text = if show_metadata {
-            format!("⬇ {}", compact_number(downloads))
-        } else {
-            String::new()
-        };
-        let rate_text = if show_metadata {
-            format!("👍 {}", compact_number(thumbs_up))
-        } else {
-            String::new()
-        };
-
-        down_width = down_width.max(down_text.chars().count());
-        thumbs_width = thumbs_width.max(rate_text.chars().count());
-        let is_bookmarked = bookmarked_ids.contains(&model.id);
-        rows_cache.push((
-            down_text,
-            rate_text,
-            model.name.clone(),
-            model.nsfw,
-            is_bookmarked,
-        ));
-    }
-
-    if down_width < 6 {
-        down_width = 6;
-    }
-    if thumbs_width < 3 {
-        thumbs_width = 3;
-    }
-
     let inner_width = area.width.saturating_sub(2) as usize;
-    if inner_width <= down_width.saturating_add(thumbs_width) + 2 {
-        down_width = down_width.min(inner_width / 2).max(4);
-        thumbs_width = thumbs_width.min(inner_width / 2).max(3);
-    }
+    let name_width = inner_width.max(1);
 
-    let name_width = if show_metadata {
-        inner_width
-            .saturating_sub(down_width.saturating_add(thumbs_width))
-            .saturating_sub(4)
-            .max(1)
-    } else {
-        inner_width.max(1)
-    };
-
-    let mut items: Vec<ListItem> = Vec::with_capacity(rows_cache.len());
-    for (idx, (down_text, rate_text, name, is_nsfw, is_bookmarked)) in
-        rows_cache.into_iter().enumerate()
-    {
+    let mut items: Vec<ListItem> = Vec::with_capacity(models.len());
+    for (idx, model) in models.iter().enumerate() {
         let is_selected = idx == selected_idx;
-        let down_text = compact_cell_text(down_text, down_width);
-        let rate_text = compact_cell_text(rate_text, thumbs_width);
-        let mut display_name = if is_bookmarked {
-            format!("★ {}", name)
-        } else {
-            name
-        };
+        let metrics = model_metrics(model);
+        let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
+        let mut display_name = model_name(model);
+        let is_bookmarked = bookmarked_ids.contains(&model.id);
+        let has_version_id = !model_versions(model).is_empty();
 
         if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
             let now_ms = SystemTime::now()
@@ -1292,47 +1356,61 @@ fn draw_model_list(
             display_name = rotate_left_chars(&display_name, shift);
         }
 
-        if show_metadata {
-            let style = if is_bookmarked {
-                Style::default().fg(Color::Green)
-            } else if is_nsfw {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let spans = vec![
-                Span::styled(
-                    format!("{:>width$}", down_text, width = down_width),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{:>width$}", rate_text, width = thumbs_width),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
-                Span::styled(compact_cell_text(display_name.clone(), name_width), style),
-            ];
-            let item = ListItem::new(Line::from(spans));
-            items.push(item);
+        let title_style = if is_bookmarked {
+            Style::default().fg(Color::Green)
+        } else if !has_version_id {
+            Style::default().fg(Color::DarkGray)
         } else {
-            let style = if is_bookmarked {
-                Style::default().fg(Color::Green)
-            } else if is_nsfw {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            let item = ListItem::new(Line::from(Span::styled(
-                compact_cell_text(display_name, name_width),
-                style,
-            )));
-            items.push(item);
+            Style::default().fg(Color::White)
+        };
+        let mut line_two = format!(
+            "{} | dl {} like {} cmt {} | by {}",
+            model.r#type.as_deref().unwrap_or("Model"),
+            compact_number(metrics.download_count),
+            compact_number(metrics.thumbs_up_count),
+            compact_number(metrics.comment_count),
+            creator
+        );
+        if model.nsfw.unwrap_or(false) {
+            line_two.push_str(" | NSFW");
         }
+
+        let second_line = if model.nsfw.unwrap_or(false) {
+            let safe_prefix = line_two.trim_end_matches(" | NSFW").to_string();
+            Line::from(vec![
+                Span::styled(
+                    compact_cell_text(safe_prefix, name_width.saturating_sub(7)),
+                    if has_version_id {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Rgb(90, 90, 90))
+                    },
+                ),
+                Span::styled(" | ", Style::default().fg(Color::DarkGray)),
+                Span::styled("NSFW", Style::default().fg(Color::Red)),
+            ])
+        } else {
+            Line::from(Span::styled(
+                compact_cell_text(line_two, name_width),
+                if has_version_id {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(Color::Rgb(90, 90, 90))
+                },
+            ))
+        };
+
+        items.push(ListItem::new(vec![
+            Line::from(Span::styled(
+                compact_cell_text(display_name, name_width),
+                title_style,
+            )),
+            second_line,
+        ]));
     }
 
     let inner_area = block.inner(area);
-    let visible_rows = inner_area.height.max(1) as usize;
+    let visible_rows = (inner_area.height.max(2) as usize / 2).max(1);
     let total = items.len();
     let start_idx = if total <= visible_rows {
         0
@@ -1373,45 +1451,78 @@ fn draw_model_sidebar(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
-    selected_model: Option<&crate::api::Model>,
+    selected_model: Option<&civitai_cli::sdk::SearchModelHit>,
 ) {
     let split = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(6),
             Constraint::Length(3),
-            Constraint::Length(4),
-            Constraint::Length(5),
+            Constraint::Length(8),
+            Constraint::Length(7),
             Constraint::Min(0),
         ])
         .split(area);
 
     if let Some(model) = selected_model {
+        let versions = model_versions(model);
         let v_idx = *app.selected_version_index.get(&model.id).unwrap_or(&0);
-        let safe_v_idx = v_idx.min(model.model_versions.len().saturating_sub(1));
-        let selected_version = model.model_versions.get(safe_v_idx);
+        let safe_v_idx = v_idx.min(versions.len().saturating_sub(1));
+        let selected_version = versions.get(safe_v_idx);
+        let metrics = selected_version
+            .map(|version| version.stats.clone())
+            .unwrap_or_else(|| model_metrics(model));
+        let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
+        let model_title = model_name(model);
+        let model_url = build_model_url(model, selected_version.map(|version| version.id));
+        let mut header_lines = vec![
+            Line::from(Span::styled(
+                compact_cell_text(model_title, split[0].width.saturating_sub(2) as usize),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                compact_cell_text(
+                    format!(
+                        "{} | by {}{}",
+                        model.r#type.as_deref().unwrap_or("Model"),
+                        creator,
+                        if model.nsfw.unwrap_or(false) {
+                            " | NSFW"
+                        } else {
+                            ""
+                        }
+                    ),
+                    split[0].width.saturating_sub(2) as usize,
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                compact_cell_text(
+                    model_url,
+                    split[0].width.saturating_sub(2) as usize,
+                ),
+                Style::default().fg(Color::Cyan),
+            )),
+        ];
+        if let Some(version) = selected_version {
+            let meta_line = format!(
+                "Selected: {} | {}",
+                version.name,
+                version.base_model.as_deref().unwrap_or("Unknown base")
+            );
+            header_lines.push(Line::from(Span::styled(
+                compact_cell_text(meta_line, split[0].width.saturating_sub(2) as usize),
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        let header = Paragraph::new(header_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Model "));
+        f.render_widget(header, split[0]);
 
-        let model_url = if let Some(version) = selected_version {
-            format!(
-                "https://civitai.com/models/{}?modelVersionId={}",
-                model.id, version.id
-            )
-        } else {
-            format!("https://civitai.com/models/{}", model.id)
-        };
-        let url_line = Paragraph::new(format!("URL: {}", model_url))
-            .alignment(Alignment::Left)
-            .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).title(" Model URL "));
-        f.render_widget(url_line, split[0]);
-
-        let version_data: Vec<(String, bool)> = model
-            .model_versions
+        let version_data: Vec<(String, bool)> = versions
             .iter()
             .enumerate()
-            .map(|(idx, version)| {
-                let is_selected = idx == safe_v_idx;
-                (version.name.clone(), is_selected)
-            })
+            .map(|(idx, version)| (version.name.clone(), idx == safe_v_idx))
             .collect();
         let version_total = version_data.len();
         let version_position = if version_total > 0 {
@@ -1455,127 +1566,163 @@ fn draw_model_sidebar(
             );
         f.render_widget(version_row, split[1]);
 
-        let stats = selected_version.and_then(|version| version.stats.as_ref());
-        let down_val = compact_number(stats.map(|s| s.download_count).unwrap_or(0));
-        let rate_val = normalized_version_rating(stats);
-        let thumbs_up_val = compact_number(stats.map(|s| s.thumbs_up_count).unwrap_or(0));
         let active_file = selected_version.and_then(|version| {
+            let file_idx = *app.selected_file_index.get(&version.id).unwrap_or(&0);
             version
                 .files
-                .iter()
-                .find(|f| f.primary)
+                .get(file_idx)
+                .or_else(|| version.files.iter().find(|file| file.primary))
                 .or_else(|| version.files.first())
         });
-        let format_value = active_file
-            .and_then(|file| file.metadata.as_ref())
-            .and_then(|meta| meta.format.as_deref())
-            .unwrap_or("N/A");
-        let file_size = active_file
-            .map(|file| compact_file_size(file.size_kb))
-            .unwrap_or_else(|| "N/A".to_string());
-        let base_model = selected_version
-            .map(|version| version.base_model.clone())
-            .unwrap_or_else(|| "N/A".to_string());
-
         let detail_row = vec![
-            down_val,
-            format!("{:.1}", rate_val),
-            thumbs_up_val,
-            model.r#type.clone(),
-            format_value.to_string(),
-            base_model,
-            file_size,
+            format!(
+                "{:<10} {}",
+                "Type",
+                model.r#type.as_deref().unwrap_or("Model")
+            ),
+            format!(
+                "{:<10} {}",
+                "Base",
+                selected_version
+                    .and_then(|version| version.base_model.clone())
+                    .or_else(|| default_base_model(model))
+                    .unwrap_or_else(|| "Unknown".to_string())
+            ),
+            format!(
+                "{:<10} {}",
+                "Down",
+                compact_number(metrics.download_count)
+            ),
+            format!(
+                "{:<10} {}",
+                "Likes",
+                compact_number(metrics.thumbs_up_count)
+            ),
+            format!(
+                "{:<10} {}",
+                "Comments",
+                compact_number(metrics.comment_count)
+            ),
+            format!(
+                "{:<10} {:.1}",
+                "Rating",
+                metrics.rating
+            ),
+            format!(
+                "{:<10} {}",
+                "Format",
+                active_file
+                    .and_then(|file| file.format.clone())
+                    .unwrap_or_else(|| "N/A".to_string())
+            ),
+            format!(
+                "{:<10} {}",
+                "Size",
+                active_file
+                    .and_then(|file| file.size_kb)
+                    .map(compact_file_size)
+                    .unwrap_or_else(|| "N/A".to_string())
+            ),
         ];
-        let headers = [
-            "Down",
-            "Rate",
-            "Thumbs Up",
-            "Type",
-            "Format",
-            "Base Model",
-            "File Size",
-        ];
-        let mut widths = [5usize; 7];
-        for i in 0..7 {
-            widths[i] = widths[i]
-                .max(detail_row[i].chars().count())
-                .max(headers[i].chars().count())
-                .saturating_add(1);
-        }
-
-        let total_with_separators = widths.iter().sum::<usize>() + widths.len();
-        let max_width = split[2].width as usize;
-        if total_with_separators > max_width {
-            for i in (3..7).rev() {
-                while widths.iter().sum::<usize>() + widths.len() > max_width && widths[i] > 5 {
-                    widths[i] -= 1;
-                }
-            }
-        }
-
-        let detail_cells: Vec<Cell> = detail_row
-            .into_iter()
-            .enumerate()
-            .map(|(i, value)| {
-                Cell::from(center_text(compact_cell_text(value, widths[i]), widths[i]))
-            })
-            .collect();
-
-        let header_cells: Vec<Cell> = headers
-            .iter()
-            .enumerate()
-            .map(|(i, value)| Cell::from(center_text(value.to_string(), widths[i])))
-            .collect();
-
-        let metadata_block = Block::default().borders(Borders::ALL).title(" Metadata ");
-        f.render_widget(&metadata_block, split[2]);
-        let metadata_inner = metadata_block.inner(split[2]);
-        let metadata_center_v = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(0),
-                Constraint::Length(2),
-                Constraint::Min(0),
-            ])
-            .split(metadata_inner);
-        let metadata_center_h = Layout::default()
+        let metadata_split = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(5),
-                Constraint::Min(0),
-                Constraint::Percentage(5),
-            ])
-            .split(metadata_center_v[1]);
-        let down_rate_table = Table::new(
-            vec![Row::new(detail_cells)],
-            [
-                Constraint::Length(widths[0] as u16),
-                Constraint::Length(widths[1] as u16),
-                Constraint::Length(widths[2] as u16),
-                Constraint::Length(widths[3] as u16),
-                Constraint::Length(widths[4] as u16),
-                Constraint::Length(widths[5] as u16),
-                Constraint::Length(widths[6] as u16),
-            ],
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(split[2]);
+        let metadata = Paragraph::new(
+            detail_row
+                .into_iter()
+                .map(Line::from)
+                .collect::<Vec<_>>(),
         )
-        .header(Row::new(header_cells).style(Style::default().add_modifier(Modifier::BOLD)))
-        .column_spacing(2);
-        f.render_widget(down_rate_table, metadata_center_h[1]);
+        .block(Block::default().borders(Borders::ALL).title(" Metadata "));
+        f.render_widget(metadata, metadata_split[0]);
+        let tags = tag_names(model);
+        let tag_lines = if tags.is_empty() {
+            vec![Line::from("No tags available.")]
+        } else {
+            wrap_joined_tags(
+                &tags,
+                metadata_split[1].width.saturating_sub(2) as usize,
+                metadata_split[1].height.saturating_sub(2) as usize,
+            )
+        };
+        let tags_widget = Paragraph::new(tag_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title(" Tags "));
+        f.render_widget(tags_widget, metadata_split[1]);
+
+        let file_lines = if let Some(version) = selected_version {
+            if version.files.is_empty() {
+                vec![Line::from("No files available for this version.")]
+            } else {
+                version
+                    .files
+                    .iter()
+                    .enumerate()
+                    .take(split[3].height.saturating_sub(2) as usize)
+                    .map(|(idx, file)| {
+                        let selected_idx = *app.selected_file_index.get(&version.id).unwrap_or(&0);
+                        let is_selected = idx == selected_idx;
+                        let prefix = if is_selected {
+                            "> "
+                        } else if file.primary {
+                            "* "
+                        } else {
+                            "  "
+                        };
+                        let summary = format!(
+                            "{}{} | {}{}{}",
+                            prefix,
+                            file.name,
+                            file.format.as_deref().unwrap_or("file"),
+                            file.fp
+                                .as_deref()
+                                .map(|value| format!("/{value}"))
+                                .unwrap_or_default(),
+                            file.size_kb
+                                .map(|value| format!(" | {}", compact_file_size(value)))
+                                .unwrap_or_default(),
+                        );
+                        Line::from(Span::styled(
+                            compact_cell_text(summary, split[3].width.saturating_sub(2) as usize),
+                            if is_selected {
+                                Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD)
+                            } else if file.primary {
+                                Style::default().fg(Color::Yellow)
+                            } else {
+                                Style::default()
+                            },
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            }
+        } else {
+            vec![Line::from("No versions available.")]
+        };
+        let files = Paragraph::new(file_lines)
+            .block(Block::default().borders(Borders::ALL).title(" Files "));
+        f.render_widget(files, split[3]);
 
         let desc_split = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
-            .split(split[3]);
+            .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+            .split(split[4]);
 
-        let description = model
-            .description
-            .as_deref()
-            .unwrap_or("No description available.");
-        let version_description = selected_version
-            .and_then(|version| version.description.as_deref())
-            .filter(|desc| !desc.is_empty())
-            .unwrap_or(description);
-        let description_lines = render_description_lines(version_description);
+        let description_text_value = model
+            .extras
+            .get("description")
+            .and_then(|value| value.as_str().map(str::to_string))
+            .or_else(|| {
+                selected_version
+                    .and_then(|version| version.description.as_deref())
+                    .filter(|desc| !desc.is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| category_name(model).map(|category| format!("Category: {category}")))
+            .unwrap_or_else(|| "No description available.".to_string());
+        let description_lines = render_description_lines(&description_text_value);
         let description_text = Paragraph::new(description_lines)
             .wrap(Wrap { trim: true })
             .block(
@@ -1608,18 +1755,18 @@ fn draw_model_sidebar(
             ])
             .split(image_center_outer[1]);
         let inner_img_area = image_center_inner[1];
+        f.render_widget(Clear, inner_img_area);
 
-        let selected_version_has_image = selected_version
-            .map(|version| !version.images.is_empty())
-            .unwrap_or(false);
-        let has_any_version_image = model
-            .model_versions
+        let has_any_cached_image = versions
             .iter()
-            .any(|version| !version.images.is_empty());
+            .any(|version| app.model_version_image_cache.contains_key(&version.id));
+        let is_waiting_for_selected_version = selected_version
+            .map(|version| !app.model_version_image_failed.contains(&version.id))
+            .unwrap_or(false);
 
         let mut image_version_id = selected_version.map(|version| version.id);
         if image_version_id.is_none() {
-            image_version_id = model.model_versions.iter().find_map(|version| {
+            image_version_id = versions.iter().find_map(|version| {
                 if app.model_version_image_cache.contains_key(&version.id) {
                     Some(version.id)
                 } else {
@@ -1629,35 +1776,28 @@ fn draw_model_sidebar(
         }
 
         if let Some(image_version_id) = image_version_id {
-            let protocol = app.model_version_image_cache.get_mut(&image_version_id);
+            let protocol = app
+                .model_version_image_cache
+                .get_mut(&image_version_id)
+                .and_then(|protocols| protocols.get_mut(0));
             if let Some(mut protocol) = protocol {
                 let image_widget: StatefulImage<StatefulProtocol> = StatefulImage::new();
                 f.render_stateful_widget(image_widget, inner_img_area, &mut protocol);
             } else {
-                if !selected_version_has_image {
+                if app.model_version_image_failed.contains(&image_version_id) {
                     f.render_widget(
                         Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
-                        inner_img_area,
-                    );
-                } else if app.model_version_image_failed.contains(&image_version_id) {
-                    f.render_widget(
-                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
-                        inner_img_area,
-                    );
-                } else if has_any_version_image {
-                    f.render_widget(
-                        Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                         inner_img_area,
                     );
                 } else {
                     f.render_widget(
-                        Paragraph::new("No thumbnail available.").alignment(Alignment::Center),
+                        Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                         inner_img_area,
                     );
                 }
             }
         } else {
-            if has_any_version_image {
+            if has_any_cached_image || is_waiting_for_selected_version {
                 f.render_widget(
                     Paragraph::new("Loading thumbnail...").alignment(Alignment::Center),
                     inner_img_area,
@@ -1681,131 +1821,225 @@ fn draw_model_sidebar(
     }
 }
 
-fn draw_search_popup(f: &mut Frame, app: &App) {
+fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, quick_title: &str) {
+    if fm.mode == SearchFormMode::Quick {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {quick_title} "));
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
+                Span::raw(format!("{}█", fm.query)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(
+                    " Current: sort={} | types={} | tags={} | bases={} | period={} ",
+                    fm.sort_options
+                        .get(fm.selected_sort)
+                        .map(|sort| sort.label().to_string())
+                        .unwrap_or_else(|| "Relevance".to_string()),
+                    fm.selected_types.len(),
+                    if fm.tag_query.trim().is_empty() { 0 } else { fm.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
+                    fm.selected_base_models.len(),
+                    fm.periods
+                        .get(fm.selected_period)
+                        .map(|period| period.label())
+                        .unwrap_or("AllTime")
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                " [Type] Query | [Enter] Apply | [Esc] Cancel | [f] Open Builder ",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
+        let area = centered_rect(54, 22, f.area());
+        f.render_widget(Clear, area);
+        f.render_widget(p, area);
+        return;
+    }
+
+    let area = centered_rect(72, 68, f.area());
+    f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Search Filter Options ");
+        .title(format!(" {builder_title} "));
+    f.render_widget(&block, area);
+    let inner = block.inner(area);
+    let section_constraints = build_model_modal_constraints(fm.focused_section, inner.height);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(section_constraints)
+        .split(inner);
 
-    let fm = &app.search_form;
+    let query_focused = fm.focused_section == SearchFormSection::Query;
+    let sort_focused = fm.focused_section == SearchFormSection::Sort;
+    let period_focused = fm.focused_section == SearchFormSection::Period;
+    let type_focused = fm.focused_section == SearchFormSection::Type;
+    let tag_focused = fm.focused_section == SearchFormSection::Tag;
+    let base_focused = fm.focused_section == SearchFormSection::BaseModel;
+    let query_is_configured = !fm.query.trim().is_empty();
+    let sort_is_configured = true;
+    let period_is_configured = true;
+    let type_is_configured = !fm.selected_types.is_empty();
+    let tag_is_configured = !fm.tag_query.trim().is_empty();
+    let base_is_configured = !fm.selected_base_models.is_empty();
+    let sort_items = fm
+        .sort_options
+        .iter()
+        .enumerate()
+        .map(|(idx, sort)| {
+            (
+                sort.label().to_string(),
+                idx == fm.selected_sort,
+                idx == fm.selected_sort,
+            )
+        })
+        .collect::<Vec<_>>();
+    let period_items = fm
+        .periods
+        .iter()
+        .enumerate()
+        .map(|(idx, period)| {
+            (
+                period.label().to_string(),
+                idx == fm.selected_period,
+                idx == fm.selected_period,
+            )
+        })
+        .collect::<Vec<_>>();
+    let type_items = fm
+        .type_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == fm.type_cursor,
+                fm.selected_types.contains(item),
+            )
+        })
+        .collect::<Vec<_>>();
+    let base_items = fm
+        .base_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == fm.base_cursor,
+                fm.selected_base_models.contains(item),
+            )
+        })
+        .collect::<Vec<_>>();
+    let query_box = Paragraph::new(vec![Line::from(vec![
+        Span::styled(
+            if query_focused { "> " } else { "  " },
+            if query_focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                inactive_box_style(query_is_configured)
+            },
+        ),
+        Span::styled(
+            format!("{}{}", fm.query, if query_focused { "█" } else { "" }),
+            if query_focused {
+                Style::default().fg(Color::White)
+            } else {
+                inactive_box_style(query_is_configured)
+            },
+        ),
+    ])])
+    .block(styled_search_block(" Query ", query_focused, query_is_configured))
+    .wrap(Wrap { trim: true });
+    f.render_widget(query_box, sections[0]);
 
-    let list = vec![
-        Line::from(vec![
-            Span::styled(
-                if fm.focused_field == 0 {
-                    "> Query: "
-                } else {
-                    "  Query: "
-                },
-                Style::default().fg(if fm.focused_field == 0 {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            ),
-            Span::raw(format!("{}█", fm.query)),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                if fm.focused_field == 1 {
-                    "> Type: "
-                } else {
-                    "  Type: "
-                },
-                Style::default().fg(if fm.focused_field == 1 {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            ),
-            Span::raw(format!("< {} >", fm.types[fm.selected_type])),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                if fm.focused_field == 2 {
-                    "> Sort: "
-                } else {
-                    "  Sort: "
-                },
-                Style::default().fg(if fm.focused_field == 2 {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            ),
-            Span::raw(format!("< {} >", fm.sorts[fm.selected_sort])),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                if fm.focused_field == 3 {
-                    "> Base: "
-                } else {
-                    "  Base: "
-                },
-                Style::default().fg(if fm.focused_field == 3 {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            ),
-            Span::raw(format!("< {} >", fm.bases[fm.selected_base])),
-        ]),
-        Line::from(vec![
-            Span::styled(
-                if fm.focused_field == 4 {
-                    "> Period: "
-                } else {
-                    "  Period: "
-                },
-                Style::default().fg(if fm.focused_field == 4 {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            ),
-            Span::raw(format!("< {} >", fm.periods[fm.selected_period])),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            " [Up/Down] Select Field | [Left/Right] Cycle Options | [Enter] Search",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+    let mut sort_lines = vec![Line::from(Span::styled(
+        "Browse with Left/Right",
+        help_text_style(),
+    ))];
+    sort_lines.extend(build_wrapped_option_lines(
+        &sort_items,
+        sections[1].width.saturating_sub(4) as usize,
+        sections[1].height.saturating_sub(3) as usize,
+        sort_focused,
+    ));
+    let sort_box = Paragraph::new(sort_lines)
+        .block(styled_search_block(" Sort ", sort_focused, sort_is_configured))
+        .wrap(Wrap { trim: true });
+    f.render_widget(sort_box, sections[1]);
 
-    let p = Paragraph::new(list).block(block);
+    let mut period_lines = vec![Line::from(Span::styled(
+        "Browse with Left/Right",
+        help_text_style(),
+    ))];
+    period_lines.extend(build_wrapped_option_lines(
+        &period_items,
+        sections[2].width.saturating_sub(4) as usize,
+        sections[2].height.saturating_sub(3) as usize,
+        period_focused,
+    ));
+    let period_box = Paragraph::new(period_lines)
+        .block(styled_search_block(" Period ", period_focused, period_is_configured))
+        .wrap(Wrap { trim: true });
+    f.render_widget(period_box, sections[2]);
 
-    let area = centered_rect(60, 40, f.area());
-    f.render_widget(Clear, area);
-    f.render_widget(p, area);
-}
+    let type_widget = Paragraph::new(build_image_filter_box_lines(
+        "Type",
+        type_focused,
+        type_is_configured,
+        &type_items,
+        &fm.selected_types.iter().map(|item| item.label().to_string()).collect::<Vec<_>>(),
+        false,
+        sections[3].width.saturating_sub(4) as usize,
+        sections[3].height.saturating_sub(3) as usize,
+    ))
+        .block(styled_search_block(" Type ", type_focused, type_is_configured))
+        .wrap(Wrap { trim: true });
+    f.render_widget(type_widget, sections[3]);
 
-fn draw_bookmark_search_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Bookmark Search ");
+    let tag_widget = Paragraph::new(build_text_filter_box_lines(
+        "Tag",
+        tag_focused,
+        tag_is_configured,
+        &fm.tag_query,
+        "Comma-separated tags",
+        None,
+        sections[4].width.saturating_sub(4) as usize,
+        sections[4].height.saturating_sub(3) as usize,
+    ))
+    .block(styled_search_block(" Tags ", tag_focused, tag_is_configured))
+    .wrap(Wrap { trim: true });
+    f.render_widget(tag_widget, sections[4]);
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{}█", app.bookmark_query_draft)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "[Enter] Apply | [Esc] Cancel | [Type] Query",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+    let base_widget = Paragraph::new(build_image_filter_box_lines(
+        "Base Model",
+        base_focused,
+        base_is_configured,
+        &base_items,
+        &fm
+            .selected_base_models
+            .iter()
+            .map(|item| item.label().to_string())
+            .collect::<Vec<_>>(),
+        false,
+        sections[5].width.saturating_sub(4) as usize,
+        sections[5].height.saturating_sub(3) as usize,
+    ))
+        .block(styled_search_block(" Base Model ", base_focused, base_is_configured))
+        .wrap(Wrap { trim: true });
+    f.render_widget(base_widget, sections[5]);
 
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    let area = centered_rect(40, 25, f.area());
-    f.render_widget(Clear, area);
-    f.render_widget(p, area);
+    let help = Paragraph::new(" [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ")
+        .alignment(Alignment::Left)
+        .wrap(Wrap { trim: true });
+    f.render_widget(help, sections[6]);
 }
 
 fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Image Bookmark Search ");
-
+    let visible_count = app.visible_image_bookmarks().len();
     let lines = vec![
         Line::from(vec![
             Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
@@ -1813,13 +2047,18 @@ fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            "[Enter] Apply | [Esc] Cancel | [Type] Query",
+            format!(" Current: total={} ", visible_count),
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(Span::styled(
+            " [Type] Query | [Enter] Apply | [Esc] Cancel ",
             Style::default().fg(Color::DarkGray),
         )),
     ];
-
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    let area = centered_rect(40, 25, f.area());
+    let p = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::ALL).title(" Image Bookmark Search "))
+        .wrap(Wrap { trim: true });
+    let area = centered_rect(60, 24, f.area());
     f.render_widget(Clear, area);
     f.render_widget(p, area);
 }
@@ -1856,65 +2095,283 @@ fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
 }
 
 fn draw_image_search_popup(f: &mut Frame, app: &App) {
+    let form = &app.image_search_form;
+    let area = centered_rect(84, 82, f.area());
+    f.render_widget(Clear, area);
+
+    if form.mode == SearchFormMode::Quick {
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
+                Span::raw(format!("{}█", form.query)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!(
+                    " Current: sort={} | types={} | tags={} | bases={} | ratios={} | period={} ",
+                    form.sort_options
+                        .get(form.selected_sort)
+                        .map(|sort| sort.label().to_string())
+                        .unwrap_or_else(|| "Relevance".to_string()),
+                    form.selected_media_types.len(),
+                    if form.tag_query.trim().is_empty() { 0 } else { form.tag_query.split(',').filter(|tag| !tag.trim().is_empty()).count() },
+                    form.selected_base_models.len(),
+                    form.selected_aspect_ratios.len(),
+                    form.periods
+                        .get(form.selected_period)
+                        .map(|period| period.label())
+                        .unwrap_or("AllTime")
+                ),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                " [Type] Query | [Enter] Apply | [Esc] Cancel | [f] Open Builder ",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let p = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title(" Image Search "))
+            .wrap(Wrap { trim: true });
+        let quick_area = centered_rect(60, 24, f.area());
+        f.render_widget(Clear, quick_area);
+        f.render_widget(p, quick_area);
+        return;
+    }
+
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Image Search ");
+        .title(" Image Filters ");
+    f.render_widget(&block, area);
+    let inner = block.inner(area);
+    let section_constraints = build_image_modal_constraints(form.focused_section, inner.height);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(section_constraints)
+        .split(inner);
 
-    let form = &app.image_search_form;
-    let field_style = |focused: bool| {
-        if focused {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::White)
-        }
-    };
+    let query_focused = form.focused_section == ImageSearchFormSection::Query;
+    let sort_focused = form.focused_section == ImageSearchFormSection::Sort;
+    let period_focused = form.focused_section == ImageSearchFormSection::Period;
+    let type_focused = form.focused_section == ImageSearchFormSection::MediaType;
+    let tag_focused = form.focused_section == ImageSearchFormSection::Tag;
+    let base_focused = form.focused_section == ImageSearchFormSection::BaseModel;
+    let ratio_focused = form.focused_section == ImageSearchFormSection::AspectRatio;
 
-    let lines = vec![
-        Line::from(vec![
-            Span::styled(" NSFW: ", field_style(form.focused_field == 0)),
-            Span::raw(form.nsfw_options[form.selected_nsfw].clone()),
-        ]),
-        Line::from(vec![
-            Span::styled(" Sort: ", field_style(form.focused_field == 1)),
-            Span::raw(form.sort_options[form.selected_sort].clone()),
-        ]),
-        Line::from(vec![
-            Span::styled(" Period: ", field_style(form.focused_field == 2)),
-            Span::raw(form.period_options[form.selected_period].clone()),
-        ]),
-        Line::from(vec![
-            Span::styled(" ModelVersionId: ", field_style(form.focused_field == 3)),
-            Span::raw(format!(
-                "{}{}",
-                form.model_version_id,
-                if form.focused_field == 3 { "█" } else { "" }
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled(" Tag: ", field_style(form.focused_field == 4)),
-            Span::raw(format!(
-                "{}{}",
-                form.tag_text,
-                if form.focused_field == 4 { "█" } else { "" }
-            )),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Known tags: animal | architecture | armor | astronomy | car | cartoon | cat | celebrity | city | clothing | comics | costume | dog | dragon | fantasy | food | game character | landscape | latex clothing | man | modern art | outdoors | photography | photorealistic | post apocalyptic | realistic | robot | sci-fi | sports car | swimwear | transportation | nude | woman",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            "[Up/Down] Field | [Left/Right] Cycle | [Type] Input | [Enter] Apply | [Esc] Cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-    ];
+    let sort_items = form
+        .sort_options
+        .iter()
+        .enumerate()
+        .map(|(idx, sort)| {
+            (
+                sort.label().to_string(),
+                idx == form.selected_sort,
+                idx == form.selected_sort,
+            )
+        })
+        .collect::<Vec<_>>();
+    let period_items = form
+        .periods
+        .iter()
+        .enumerate()
+        .map(|(idx, period)| {
+            (
+                period.label().to_string(),
+                idx == form.selected_period,
+                idx == form.selected_period,
+            )
+        })
+        .collect::<Vec<_>>();
+    let type_items = form
+        .media_type_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == form.media_type_cursor,
+                form.selected_media_types.contains(item.as_query_value()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let base_items = form
+        .base_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == form.base_cursor,
+                form.selected_base_models.contains(item.as_query_value()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let ratio_items = form
+        .aspect_ratio_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == form.aspect_ratio_cursor,
+                form.selected_aspect_ratios.contains(item.as_query_value()),
+            )
+        })
+        .collect::<Vec<_>>();
+    let tag_suggestions = app.image_tag_suggestions(sections[4].height.saturating_sub(4) as usize);
 
-    let p = Paragraph::new(lines).block(block).wrap(Wrap { trim: true });
-    let area = centered_rect(60, 42, f.area());
-    f.render_widget(Clear, area);
-    f.render_widget(p, area);
+    let query_box = Paragraph::new(vec![Line::from(vec![
+        Span::styled(
+            if query_focused { "> " } else { "  " },
+            if query_focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                inactive_box_style(!form.query.trim().is_empty())
+            },
+        ),
+        Span::styled(
+            format!("{}{}", form.query, if query_focused { "█" } else { "" }),
+            if query_focused {
+                Style::default().fg(Color::White)
+            } else {
+                inactive_box_style(!form.query.trim().is_empty())
+            },
+        ),
+    ])])
+    .block(styled_search_block(" Query ", query_focused, !form.query.trim().is_empty()))
+    .wrap(Wrap { trim: true });
+    f.render_widget(query_box, sections[0]);
+
+    let mut sort_lines = vec![Line::from(Span::styled(
+        "Browse with Left/Right",
+        help_text_style(),
+    ))];
+    sort_lines.extend(build_wrapped_option_lines(
+        &sort_items,
+        sections[1].width.saturating_sub(4) as usize,
+        sections[1].height.saturating_sub(3) as usize,
+        sort_focused,
+    ));
+    f.render_widget(
+        Paragraph::new(sort_lines)
+            .block(styled_search_block(" Sort ", sort_focused, true))
+            .wrap(Wrap { trim: true }),
+        sections[1],
+    );
+
+    let mut period_lines = vec![Line::from(Span::styled(
+        "Browse with Left/Right",
+        help_text_style(),
+    ))];
+    period_lines.extend(build_wrapped_option_lines(
+        &period_items,
+        sections[2].width.saturating_sub(4) as usize,
+        sections[2].height.saturating_sub(3) as usize,
+        period_focused,
+    ));
+    f.render_widget(
+        Paragraph::new(period_lines)
+            .block(styled_search_block(" Period ", period_focused, true))
+            .wrap(Wrap { trim: true }),
+        sections[2],
+    );
+
+    f.render_widget(
+        Paragraph::new(build_image_filter_box_lines(
+            "Media Type",
+            type_focused,
+            !form.selected_media_types.is_empty(),
+            &type_items,
+            &form
+                .selected_media_types
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            false,
+            sections[3].width.saturating_sub(4) as usize,
+            sections[3].height.saturating_sub(3) as usize,
+        ))
+        .block(styled_search_block(
+            " Media Type ",
+            type_focused,
+            !form.selected_media_types.is_empty(),
+        ))
+        .wrap(Wrap { trim: true }),
+        sections[3],
+    );
+
+    let tag_box = Paragraph::new(build_text_filter_box_lines(
+        "Tag",
+        tag_focused,
+        !form.tag_query.trim().is_empty(),
+        &form.tag_query,
+        "Comma-separated tags",
+        Some(tag_suggestions.as_slice()),
+        sections[4].width.saturating_sub(4) as usize,
+        sections[4].height.saturating_sub(3) as usize,
+    ))
+    .block(styled_search_block(
+        " Tags ",
+        tag_focused,
+        !form.tag_query.trim().is_empty(),
+    ))
+    .wrap(Wrap { trim: true });
+    f.render_widget(tag_box, sections[4]);
+
+    f.render_widget(
+        Paragraph::new(build_image_filter_box_lines(
+            "Base Model",
+            base_focused,
+            !form.selected_base_models.is_empty(),
+            &base_items,
+            &form
+                .selected_base_models
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            false,
+            sections[5].width.saturating_sub(4) as usize,
+            sections[5].height.saturating_sub(3) as usize,
+        ))
+        .block(styled_search_block(
+            " Base Model ",
+            base_focused,
+            !form.selected_base_models.is_empty(),
+        ))
+        .wrap(Wrap { trim: true }),
+        sections[5],
+    );
+
+    f.render_widget(
+        Paragraph::new(build_image_filter_box_lines(
+            "Aspect Ratio",
+            ratio_focused,
+            !form.selected_aspect_ratios.is_empty(),
+            &ratio_items,
+            &form
+                .selected_aspect_ratios
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+            false,
+            sections[6].width.saturating_sub(4) as usize,
+            sections[6].height.saturating_sub(3) as usize,
+        ))
+        .block(styled_search_block(
+            " Aspect Ratio ",
+            ratio_focused,
+            !form.selected_aspect_ratios.is_empty(),
+        ))
+        .wrap(Wrap { trim: true }),
+        sections[6],
+    );
+
+    f.render_widget(
+        Paragraph::new(
+            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ",
+        )
+        .wrap(Wrap { trim: true }),
+        sections[7],
+    );
 }
 
 fn draw_status_modal(f: &mut Frame, app: &App) {
@@ -1946,11 +2403,157 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_help_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(72, 60, f.area());
+    let block = Block::default().borders(Borders::ALL).title(" Keyboard Help ");
+    f.render_widget(Clear, area);
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(6),
+            Constraint::Length(7),
+            Constraint::Min(4),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let title = match app.active_tab {
+        MainTab::Models => "Models",
+        MainTab::Bookmarks => "Bookmarks",
+        MainTab::Images => "Image Feed",
+        MainTab::ImageBookmarks => "Image Bookmarks",
+        MainTab::Downloads => "Downloads",
+        MainTab::Settings => "Settings",
+    };
+
+    let header = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("Tab ", Style::default().fg(Color::DarkGray)),
+            Span::styled(title, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(Span::styled(
+            "Global navigation is consistent across tabs. Context actions change by tab.",
+            help_text_style(),
+        )),
+    ]);
+    f.render_widget(header, sections[0]);
+
+    let nav = Paragraph::new(match app.active_tab {
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+            Line::from(" [1-6] Switch tabs"),
+            Line::from(" [j/k] Move selection"),
+            Line::from(" [g/G] First/Last item"),
+            Line::from(" [Ctrl-u / Ctrl-d] Jump faster"),
+        ],
+        MainTab::Downloads | MainTab::Settings => vec![
+            Line::from(" [1-6] Switch tabs"),
+            Line::from(" [j/k] Move selection"),
+            Line::from(" [Esc] Close modal / cancel"),
+            Line::from(" [?] Toggle this help"),
+        ],
+    })
+    .block(Block::default().borders(Borders::ALL).title(" Navigation "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(nav, sections[1]);
+
+    let search = Paragraph::new(match app.active_tab {
+        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+            Line::from(" [/] Quick search"),
+            Line::from(" [f] Open filter builder"),
+            Line::from(" [Enter] Apply search / run selected action"),
+            Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle"),
+            Line::from(" Text sections accept typing directly"),
+        ],
+        MainTab::Downloads => vec![
+            Line::from(" No search in this tab"),
+            Line::from(" Focus stays on active queue or history"),
+            Line::from(" Actions run against current selection"),
+        ],
+        MainTab::Settings => vec![
+            Line::from(" [Enter] Edit selected text field"),
+            Line::from(" [h/l] Cycle selected enum action"),
+            Line::from(" While editing: type text, [Enter] save, [Esc] cancel"),
+        ],
+    })
+    .block(Block::default().borders(Borders::ALL).title(" Search & Input "))
+    .wrap(Wrap { trim: true });
+    f.render_widget(search, sections[2]);
+
+    let actions_lines = match app.active_tab {
+        MainTab::Models => vec![
+            Line::from(" [v] Toggle detail panel"),
+            Line::from(" [←/→] Change version"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change file"),
+            Line::from(" [d] Download selected file"),
+            Line::from(" [b] Bookmark selected model"),
+            Line::from(" [r] Refresh current search  [c] Clear model search cache"),
+        ],
+        MainTab::Bookmarks => vec![
+            Line::from(" [v] Toggle detail panel"),
+            Line::from(" [←/→] Change version"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change file"),
+            Line::from(" [d] Download selected file"),
+            Line::from(" [b] Remove selected bookmark"),
+            Line::from(" [e] Export bookmarks  [i] Import bookmarks"),
+        ],
+        MainTab::Images => vec![
+            Line::from(" [←/→] Change image"),
+            Line::from(" [d] Download current image"),
+            Line::from(" [b] Bookmark current image"),
+            Line::from(" [m] Open full prompt viewer"),
+            Line::from(" [a] Toggle advanced metadata"),
+            Line::from(" [o] Copy image page link"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change used model"),
+            Line::from(" [Enter] Open selected model details"),
+            Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
+        ],
+        MainTab::ImageBookmarks => vec![
+            Line::from(" [←/→] Change image"),
+            Line::from(" [d] Download current image"),
+            Line::from(" [b] Remove current bookmark"),
+            Line::from(" [m] Open full prompt viewer"),
+            Line::from(" [a] Toggle advanced metadata"),
+            Line::from(" [o] Copy image page link"),
+            Line::from(" [Shift+↑/↓] or [J/K] Change used model"),
+            Line::from(" [Enter] Open selected model details"),
+            Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
+        ],
+        MainTab::Downloads => vec![
+            Line::from(" [p] Pause / resume active download"),
+            Line::from(" [c] Cancel active download"),
+            Line::from(" [r] Resume from selected history entry"),
+            Line::from(" [d] Remove history entry"),
+            Line::from(" [D] Remove history entry and file"),
+        ],
+        MainTab::Settings => vec![
+            Line::from(" [j/k] Move between controls"),
+            Line::from(" [Enter] Edit or run selected control"),
+            Line::from(" [h/l] Cycle media quality"),
+            Line::from(" Clear All Caches keeps bookmarks, tags, settings, and history"),
+        ],
+    };
+    let actions = Paragraph::new(actions_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Context Actions "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(actions, sections[3]);
+
+    let footer = Paragraph::new(Line::from(Span::styled(
+        " [Esc] Close  [?] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(footer, sections[4]);
+}
+
 fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     let name = app
         .pending_bookmark_remove_id
         .and_then(|model_id| app.bookmarks.iter().find(|model| model.id == model_id))
-        .map(|model| model.name.clone())
+        .map(model_name)
         .unwrap_or_else(|| "selected bookmark".to_string());
 
     let block = Block::default()
@@ -2028,7 +2631,7 @@ fn draw_resume_download_modal(f: &mut Frame, app: &App) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .constraints([Constraint::Length(1), Constraint::Min(2)])
         .split(area);
 
     let left_status = if let Some(error) = app.last_error.as_deref() {
@@ -2041,25 +2644,20 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(status, rows[0]);
 
     let shortcuts = match app.active_tab {
-        MainTab::Models => {
-            "[/] Search | [R] Refresh cache | [x] Clear cache | [b] Bookmark | [Space/Enter] Details"
-        }
-        MainTab::Bookmarks => {
-            "[/] Search | [b] Remove | [e] Export | [i] Import | [Space/Enter] Details"
-        }
-        MainTab::Images => "[/] Search | [b] Bookmark | [d] Download | [m] Status",
-        MainTab::ImageBookmarks => "[/] Search | [b] Remove | [d] Download | [m] Status",
-        MainTab::Downloads => {
-            "[j/k or J/K] Move | [d] Delete history | [D] Delete history + file | [r] Resume | [p] Pause/Resume | [c] Cancel"
-        }
-        MainTab::Settings => "[Enter] Edit | [m] Status",
+        MainTab::Models => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download",
+        MainTab::Bookmarks => "[?] Help  [j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove",
+        MainTab::Images => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
+        MainTab::ImageBookmarks => "[?] Help  [←/→] Image  [J/K] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy",
+        MainTab::Downloads => "[?] Help  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove",
+        MainTab::Settings => "[?] Help  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel",
     };
 
     let shortcuts_row = Paragraph::new(Span::styled(
         shortcuts,
         Style::default().fg(Color::DarkGray),
     ))
-    .alignment(Alignment::Left);
+    .alignment(Alignment::Left)
+    .wrap(Wrap { trim: true });
     f.render_widget(shortcuts_row, rows[1]);
 }
 
@@ -2085,6 +2683,129 @@ fn compact_cell_text(src: String, width: usize) -> String {
     } else {
         value_chars.into_iter().take(width).collect()
     }
+}
+
+fn model_key_value_spans<'a>(key: &'a str, value: &'a str) -> Vec<Span<'a>> {
+    vec![
+        Span::styled(
+            format!("{key}: "),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(value.to_string()),
+    ]
+}
+
+fn inactive_box_style(is_configured: bool) -> Style {
+    if is_configured {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    }
+}
+
+fn help_text_style() -> Style {
+    Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM)
+}
+
+fn inactive_box_border_style(is_configured: bool) -> Style {
+    if is_configured {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM)
+    }
+}
+
+fn styled_search_block<'a>(title: &'a str, focused: bool, is_configured: bool) -> Block<'a> {
+    let style = if focused {
+        Style::default().fg(Color::White)
+    } else {
+        inactive_box_border_style(is_configured)
+    };
+
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(style)
+        .title(Span::styled(title, style))
+}
+
+fn build_wrapped_option_lines(
+    items: &[(String, bool, bool)],
+    max_width: usize,
+    max_lines: usize,
+    box_focused: bool,
+) -> Vec<Line<'static>> {
+    if items.is_empty() || max_width == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut used_width = 0usize;
+
+    for (idx, (text, focused, checked)) in items.iter().enumerate() {
+        let label = if *checked {
+            format!("[x] {text}")
+        } else {
+            format!("[ ] {text}")
+        };
+        let token_width = label.chars().count();
+        let separator_width = if spans.is_empty() { 0 } else { 2 };
+
+        if !spans.is_empty() && used_width + separator_width + token_width > max_width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            if lines.len() >= max_lines {
+                break;
+            }
+            used_width = 0;
+        }
+
+        if !spans.is_empty() {
+            spans.push(Span::raw("  "));
+            used_width += 2;
+        }
+
+        let style = if box_focused && *focused {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else if box_focused && *checked {
+            Style::default().fg(Color::Green)
+        } else if *checked {
+            Style::default().fg(Color::Yellow)
+        } else {
+            if box_focused {
+                Style::default().fg(Color::White)
+            } else {
+                inactive_box_style(false)
+            }
+        };
+
+        spans.push(Span::styled(
+            compact_cell_text(label, max_width),
+            style,
+        ));
+        used_width += token_width.min(max_width);
+
+        if idx == items.len() - 1 && !spans.is_empty() && lines.len() < max_lines {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+        }
+    }
+
+    if lines.len() == max_lines {
+        return lines;
+    }
+
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+
+    lines
 }
 
 fn build_horizontal_item_window(items: &[(String, bool)], max_width: usize) -> Vec<(String, bool)> {
@@ -2145,19 +2866,273 @@ fn build_horizontal_item_window(items: &[(String, bool)], max_width: usize) -> V
         .collect()
 }
 
-fn center_text(src: String, width: usize) -> String {
-    let src_chars: Vec<char> = src.chars().collect();
-    if width == 0 {
-        return String::new();
+fn build_image_modal_constraints(
+    focused: ImageSearchFormSection,
+    total_height: u16,
+) -> Vec<Constraint> {
+    let help_height = 2u16;
+    let collapsed = [3u16, 3, 3, 3, 3, 3, 3];
+    let focused_index = match focused {
+        ImageSearchFormSection::Query => 0,
+        ImageSearchFormSection::Sort => 1,
+        ImageSearchFormSection::Period => 2,
+        ImageSearchFormSection::MediaType => 3,
+        ImageSearchFormSection::Tag => 4,
+        ImageSearchFormSection::BaseModel => 5,
+        ImageSearchFormSection::AspectRatio => 6,
+    };
+    let collapsed_total = collapsed.iter().sum::<u16>() + help_height;
+    let extra = total_height.saturating_sub(collapsed_total);
+
+    let mut constraints = Vec::with_capacity(8);
+    for (idx, base) in collapsed.into_iter().enumerate() {
+        let height = if idx == focused_index {
+            base.saturating_add(extra)
+        } else {
+            base
+        };
+        constraints.push(Constraint::Length(height));
     }
-    if src_chars.len() >= width {
-        return compact_cell_text(src, width);
+    constraints.push(Constraint::Length(help_height));
+    constraints
+}
+
+fn build_model_modal_constraints(
+    focused: SearchFormSection,
+    total_height: u16,
+) -> Vec<Constraint> {
+    let help_height = 2u16;
+    let collapsed = [3u16, 3, 3, 3, 3, 3];
+    let focused_index = match focused {
+        SearchFormSection::Query => 0,
+        SearchFormSection::Sort => 1,
+        SearchFormSection::Period => 2,
+        SearchFormSection::Type => 3,
+        SearchFormSection::Tag => 4,
+        SearchFormSection::BaseModel => 5,
+    };
+    let collapsed_total = collapsed.iter().sum::<u16>() + help_height;
+    let extra = total_height.saturating_sub(collapsed_total);
+
+    let mut constraints = Vec::with_capacity(7);
+    for (idx, base) in collapsed.into_iter().enumerate() {
+        let height = if idx == focused_index {
+            base.saturating_add(extra)
+        } else {
+            base
+        };
+        constraints.push(Constraint::Length(height));
+    }
+    constraints.push(Constraint::Length(help_height));
+    constraints
+}
+
+fn build_text_filter_box_lines(
+    label: &str,
+    focused: bool,
+    configured: bool,
+    value: &str,
+    placeholder: &str,
+    suggestions: Option<&[String]>,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let display_value = if value.trim().is_empty() {
+        placeholder.to_string()
+    } else {
+        value.to_string()
+    };
+    let current_style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else if configured {
+        Style::default().fg(Color::Yellow)
+    } else {
+        inactive_box_style(false)
+    };
+    lines.push(Line::from(Span::styled(
+        format!(
+            "{} {}{}",
+            if focused { ">" } else { " " },
+            label,
+            if focused { ":" } else { "" }
+        ),
+        current_style,
+    )));
+    let rendered_value = if focused {
+        format!("{display_value}█")
+    } else {
+        display_value.clone()
+    };
+
+    let suggestion_lines = suggestions
+        .filter(|items| focused && !items.is_empty())
+        .map(|items| items.len().min(height.saturating_sub(3)))
+        .unwrap_or(0);
+    let value_height = height.saturating_sub(1 + suggestion_lines).max(1);
+    lines.extend(style_lines(
+        wrap_text_lines(&rendered_value, width.max(1), value_height),
+        if !configured && !focused {
+            help_text_style()
+        } else if focused {
+            Style::default().fg(Color::White)
+        } else if configured {
+            Style::default().fg(Color::Yellow)
+        } else {
+            inactive_box_style(false)
+        },
+    ));
+
+    if let Some(items) = suggestions.filter(|items| focused && !items.is_empty()) {
+        let hint = if value.trim().is_empty() {
+            "Right: insert suggestion"
+        } else {
+            "Right: complete first match"
+        };
+        lines.push(Line::from(Span::styled(hint, help_text_style())));
+        lines.extend(build_autocomplete_lines(
+            items,
+            width.max(1),
+            suggestion_lines.max(1),
+        ));
+    }
+    lines
+}
+
+fn build_autocomplete_lines(
+    suggestions: &[String],
+    max_width: usize,
+    max_lines: usize,
+) -> Vec<Line<'static>> {
+    if suggestions.is_empty() || max_width == 0 || max_lines == 0 {
+        return Vec::new();
     }
 
-    let diff = width - src_chars.len();
-    let left = diff / 2;
-    let right = diff - left;
-    format!("{}{}{}", " ".repeat(left), src, " ".repeat(right))
+    let items = suggestions
+        .iter()
+        .enumerate()
+        .map(|(idx, tag)| {
+            let prefix = if idx == 0 { "> " } else { "  " };
+            format!("{prefix}{tag}")
+        })
+        .collect::<Vec<_>>();
+
+    style_lines(
+        wrap_text_lines(&items.join(", "), max_width, max_lines),
+        Style::default().fg(Color::Yellow),
+    )
+}
+
+fn build_image_filter_box_lines(
+    label: &str,
+    focused: bool,
+    configured: bool,
+    items: &[(String, bool, bool)],
+    selected: &[String],
+    show_selected: bool,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let current = items
+        .iter()
+        .find(|(_, current, _)| *current)
+        .map(|(text, _, checked)| format!(
+            "{} Current: {} {}",
+            if focused { ">" } else { " " },
+            text,
+            if *checked { "[x]" } else { "[ ]" }
+        ))
+        .unwrap_or_else(|| format!("{} Current: <none>", if focused { ">" } else { " " }));
+
+    let mut lines = vec![Line::from(Span::styled(
+        current,
+        if focused {
+            Style::default().fg(Color::Yellow)
+        } else if configured {
+            inactive_box_style(true)
+        } else {
+            inactive_box_style(false)
+        },
+    ))];
+    lines.push(Line::from(Span::styled(
+        format!("Browse {} with Left/Right, toggle with Space", label),
+        help_text_style(),
+    )));
+    lines.extend(build_wrapped_option_lines(items, width, 2, focused));
+    if show_selected {
+        lines.push(Line::from(Span::styled(
+            "Selected",
+            if focused {
+                Style::default().fg(Color::DarkGray)
+            } else if configured {
+                inactive_box_style(true)
+            } else {
+                inactive_box_style(false)
+            },
+        )));
+        if selected.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "All",
+                if focused {
+                    Style::default().fg(Color::White)
+                } else if configured {
+                    inactive_box_style(true)
+                } else {
+                    inactive_box_style(false)
+                },
+            )));
+        } else {
+            lines.extend(style_lines(
+                wrap_joined_tags(selected, width, height.saturating_sub(5)),
+                if focused {
+                    Style::default().fg(Color::White)
+                } else if configured {
+                    inactive_box_style(true)
+                } else {
+                    inactive_box_style(false)
+                },
+            ));
+        }
+    }
+    lines
+}
+
+fn wrap_text_lines(text: &str, width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() && lines.len() < height {
+        let end = (start + width).min(chars.len());
+        let mut line = chars[start..end].iter().collect::<String>();
+        if end < chars.len() && lines.len() + 1 == height && width > 3 {
+            line = compact_cell_text(format!("{}...", line), width);
+        }
+        lines.push(Line::from(line));
+        start = end;
+    }
+    lines
+}
+
+fn style_lines(lines: Vec<Line<'static>>, style: Style) -> Vec<Line<'static>> {
+    lines.into_iter()
+        .map(|line| {
+            let text = line
+                .spans
+                .into_iter()
+                .map(|span| span.content)
+                .collect::<Vec<_>>()
+                .join("");
+            Line::from(Span::styled(text, style))
+        })
+        .collect()
 }
 
 fn compact_number(v: u64) -> String {
@@ -2172,25 +3147,6 @@ fn compact_number(v: u64) -> String {
 
     let rounded = format!("{:>5.1}", value);
     format!("{}{}", rounded, UNITS[idx])
-}
-
-fn normalized_version_rating(stats: Option<&crate::api::VersionStats>) -> f64 {
-    let Some(stats) = stats else {
-        return 0.0;
-    };
-
-    if stats.rating.is_finite() && stats.rating > 0.0 {
-        return stats.rating;
-    }
-
-    let thumbs_up = stats.thumbs_up_count as f64;
-    let thumbs_down = stats.thumbs_down_count as f64;
-    let total = thumbs_up + thumbs_down;
-    if total > 0.0 {
-        (thumbs_up / total) * 5.0
-    } else {
-        0.0
-    }
 }
 
 fn compact_file_size(size_kb: f64) -> String {
@@ -2231,6 +3187,56 @@ fn compact_bytes(size_bytes: u64) -> String {
     } else {
         format!("{} B", size_bytes)
     }
+}
+
+fn wrap_joined_tags(tags: &[String], width: usize, height: usize) -> Vec<Line<'static>> {
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+
+    let joined = tags.join(", ");
+    let chars: Vec<char> = joined.chars().collect();
+    if chars.is_empty() {
+        return vec![Line::from("")];
+    }
+
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() && lines.len() < height {
+        let end = (start + width).min(chars.len());
+        let mut line = chars[start..end].iter().collect::<String>();
+        if end < chars.len() {
+            if let Some(last_sep) = line.rfind(", ") {
+                if last_sep > 0 {
+                    line.truncate(last_sep + 1);
+                    start += last_sep + 2;
+                } else {
+                    start = end;
+                }
+            } else {
+                start = end;
+            }
+        } else {
+            start = end;
+        }
+        lines.push(Line::from(line.trim().to_string()));
+    }
+
+    if start < chars.len() && !lines.is_empty() {
+        let last_index = lines.len() - 1;
+        let mut last = lines[last_index]
+            .spans
+            .first()
+            .map(|span| span.content.to_string())
+            .unwrap_or_default();
+        let target_width = width.saturating_sub(3);
+        if last.chars().count() > target_width {
+            last = compact_cell_text(last, target_width);
+        }
+        lines[last_index] = Line::from(format!("{last}..."));
+    }
+
+    lines
 }
 
 fn render_description_lines(raw: &str) -> Vec<Line<'static>> {

@@ -66,6 +66,29 @@ pub enum ImageSearchSortBy {
 }
 
 impl ImageSearchSortBy {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Relevance,
+            Self::MostReactions,
+            Self::MostDiscussed,
+            Self::MostCollected,
+            Self::MostBuzz,
+            Self::Newest,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        match self {
+            Self::Relevance => Cow::Borrowed("Relevance"),
+            Self::MostReactions => Cow::Borrowed("Most Reactions"),
+            Self::MostDiscussed => Cow::Borrowed("Most Discussed"),
+            Self::MostCollected => Cow::Borrowed("Most Collected"),
+            Self::MostBuzz => Cow::Borrowed("Most Buzz"),
+            Self::Newest => Cow::Borrowed("Newest"),
+            Self::Custom(value) => Cow::Borrowed(value.as_str()),
+        }
+    }
+
     pub fn to_query_value(&self) -> Cow<'_, str> {
         match self {
             Self::Relevance => Cow::Borrowed(DEFAULT_IMAGE_SORTS[0]),
@@ -217,4 +240,121 @@ fn custom_image_sort_to_meili(value: &str) -> Option<String> {
     value
         .strip_prefix("images_v6:")
         .map(|sort| sort.replace(':', ":"))
+}
+
+impl ImageMediaType {
+    pub fn all() -> Vec<Self> {
+        vec![Self::Image, Self::Video, Self::Audio]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_query_value())
+    }
+}
+
+impl ImageAspectRatio {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Landscape,
+            Self::Portrait,
+            Self::Square,
+            Self::Unknown,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_query_value())
+    }
+}
+
+impl ImageTechnique {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Controlnet,
+            Self::Img2Img,
+            Self::Img2Vid,
+            Self::Inpainting,
+            Self::Txt2Img,
+            Self::Txt2Vid,
+            Self::Vid2Vid,
+            Self::Workflow,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_query_value())
+    }
+}
+
+impl ImageTool {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::A1111,
+            Self::AdobeAfterEffects,
+            Self::AdobeFirefly,
+            Self::AdobePhotoshop,
+            Self::AdobePremiere,
+            Self::Civitai,
+            Self::ComfyUi,
+            Self::ChatGpt,
+            Self::Flux,
+            Self::Fooocus,
+            Self::Forge,
+            Self::Gemini,
+            Self::Grok,
+            Self::Invoke,
+            Self::Kling,
+            Self::Krita,
+            Self::Krea,
+            Self::LightricksLtxv,
+            Self::MiniMaxHailuo,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_query_value())
+    }
+}
+
+impl ImageBaseModel {
+    pub fn all() -> Vec<Self> {
+        vec![
+            Self::Chroma,
+            Self::Flux1D,
+            Self::Flux1Kontext,
+            Self::Flux1Krea,
+            Self::Flux1S,
+            Self::Flux2D,
+            Self::HiDream,
+            Self::HunyuanVideo,
+            Self::Illustrious,
+            Self::Imagen4,
+            Self::NanoBanana,
+            Self::NoobAi,
+            Self::OpenAi,
+            Self::Pony,
+            Self::PonyV7,
+            Self::Qwen,
+            Self::Sd14,
+            Self::Sd15,
+            Self::Sd20,
+            Self::Sd3,
+            Self::Sd35Large,
+            Self::Sdxl10,
+            Self::SdxlTurbo,
+            Self::Seedream,
+            Self::Veo3,
+            Self::WanVideo22I2vA14b,
+            Self::WanVideo22T2vA14b,
+            Self::WanVideo22Ti2v5b,
+            Self::WanVideo25I2v,
+            Self::WanVideo25T2v,
+            Self::ZImageBase,
+            Self::ZImageTurbo,
+        ]
+    }
+
+    pub fn label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.as_query_value())
+    }
 }
