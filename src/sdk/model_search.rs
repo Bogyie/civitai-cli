@@ -379,7 +379,13 @@ impl SearchModelTag {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SearchModelCategory {
-    Name { name: String },
+    Name {
+        name: String,
+    },
+    EmptyObject {
+        #[serde(default)]
+        name: Option<String>,
+    },
     NameOnly(String),
 }
 
@@ -387,6 +393,7 @@ impl SearchModelCategory {
     pub fn name(&self) -> Option<&str> {
         match self {
             Self::Name { name } | Self::NameOnly(name) if !name.trim().is_empty() => Some(name),
+            Self::EmptyObject { name } => name.as_deref().filter(|name| !name.trim().is_empty()),
             _ => None,
         }
     }
@@ -766,5 +773,33 @@ impl From<ApiModelImage> for SearchModelImage {
             model_version_id: None,
             meta: value.meta,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchModelHit;
+
+    #[test]
+    fn search_model_hit_accepts_empty_category_object() {
+        let hit = serde_json::from_str::<SearchModelHit>(
+            r#"{
+              "id": 5706,
+              "name": "test",
+              "type": "Checkpoint",
+              "category": {},
+              "images": [],
+              "versions": []
+            }"#,
+        )
+        .expect("hit should parse");
+
+        assert_eq!(hit.id, 5706);
+        assert!(
+            hit.category
+                .as_ref()
+                .and_then(|value| value.name())
+                .is_none()
+        );
     }
 }

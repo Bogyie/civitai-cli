@@ -376,10 +376,14 @@ fn parse_model_search_response(body: &str) -> Result<SearchModelResponse> {
 
     let mut hits = Vec::with_capacity(raw_hits.len());
     let mut skipped_hits = 0usize;
+    let mut decode_warnings = Vec::new();
     for hit in raw_hits {
         match serde_json::from_value::<SearchModelHit>(hit.clone()) {
             Ok(hit) => hits.push(hit),
-            Err(_) => skipped_hits = skipped_hits.saturating_add(1),
+            Err(err) => {
+                skipped_hits = skipped_hits.saturating_add(1);
+                decode_warnings.push(build_model_hit_decode_warning(hit, &err));
+            }
         }
     }
 
@@ -398,10 +402,13 @@ fn parse_model_search_response(body: &str) -> Result<SearchModelResponse> {
     });
 
     let mut extras = payload;
-    if skipped_hits > 0
-        && let Some(map) = extras.as_object_mut()
-    {
-        map.insert("skippedHits".to_string(), Value::from(skipped_hits as u64));
+    if let Some(map) = extras.as_object_mut() {
+        if skipped_hits > 0 {
+            map.insert("skippedHits".to_string(), Value::from(skipped_hits as u64));
+        }
+        if !decode_warnings.is_empty() {
+            map.insert("decodeWarnings".to_string(), Value::Array(decode_warnings));
+        }
     }
 
     Ok(SearchModelResponse {
@@ -425,6 +432,37 @@ fn payload_u64(payload: &Value, key: &str) -> Option<u64> {
 
 fn payload_u32(payload: &Value, key: &str) -> Option<u32> {
     payload_u64(payload, key).and_then(|value| u32::try_from(value).ok())
+}
+
+fn build_model_hit_decode_warning(hit: &Value, err: &serde_json::Error) -> Value {
+    let model_id = hit
+        .get("id")
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_u64().map(|value| value.to_string()),
+            Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "<unknown>".to_string());
+    let preview = serde_json::to_string(hit)
+        .ok()
+        .map(|raw| truncate_for_log(&raw, 400))
+        .unwrap_or_else(|| "<failed to serialize raw hit>".to_string());
+
+    json!({
+        "id": model_id,
+        "error": err.to_string(),
+        "rawPreview": preview,
+    })
+}
+
+fn truncate_for_log(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
 }
 
 impl ApiClient {

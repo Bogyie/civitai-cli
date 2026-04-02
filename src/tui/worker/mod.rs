@@ -82,6 +82,26 @@ fn error_status_with_url(action: &str, url: &str, err: &str) -> StatusEvent {
     StatusEvent::error_detail(action, format!("URL: {url}\nError: {err}"))
 }
 
+fn model_decode_warning_events(extras: &serde_json::Value, request_url: &str) -> Vec<StatusEvent> {
+    extras
+        .get("decodeWarnings")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| {
+            let id = warning.get("id")?.as_str().unwrap_or("<unknown>");
+            let error = warning.get("error")?.as_str().unwrap_or("unknown decode error");
+            let raw_preview = warning
+                .get("rawPreview")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<missing raw preview>");
+            Some(StatusEvent::debug(format!(
+                "Model hit decode skipped: id={id}\nURL: {request_url}\nError: {error}\nRaw: {raw_preview}"
+            )))
+        })
+        .collect()
+}
+
 fn collect_model_cover_jobs(
     models: &[Model],
     preferred_model_id: Option<u64>,
@@ -805,6 +825,8 @@ pub async fn spawn_worker(
 
                         match fetch_result {
                             Ok(res) => {
+                                let warning_events =
+                                    model_decode_warning_events(&res.extras, &request_url);
                                 let has_more = has_more_from_response(
                                     res.limit,
                                     res.offset,
@@ -872,6 +894,9 @@ pub async fn spawn_worker(
                                         &request_url,
                                     )))
                                     .await;
+                                for event in warning_events {
+                                    let _ = tx_msg_clone.send(status_message(event)).await;
+                                }
 
                                 let _ = cover_cmd_tx.send(CoverQueueCommand::Enqueue(jobs)).await;
                                 if let Some(version_id) = preferred_version_id {
