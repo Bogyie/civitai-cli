@@ -352,11 +352,79 @@ impl WebSearchClient {
             .error_for_status()
             .context("Civitai web model search endpoint returned error")?;
 
-        response
-            .json::<SearchModelResponse>()
+        let body = response
+            .text()
             .await
+            .context("Failed to read Civitai web model search response body")?;
+
+        parse_model_search_response(&body)
             .context("Failed to decode typed web model search response")
     }
+}
+
+fn parse_model_search_response(body: &str) -> Result<SearchModelResponse> {
+    if let Ok(parsed) = serde_json::from_str::<SearchModelResponse>(body) {
+        return Ok(parsed);
+    }
+
+    let payload: Value = serde_json::from_str(body)
+        .context("Failed to decode Civitai web model search response as JSON")?;
+    let raw_hits = payload
+        .get("hits")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Missing hits array in model search response"))?;
+
+    let mut hits = Vec::with_capacity(raw_hits.len());
+    let mut skipped_hits = 0usize;
+    for hit in raw_hits {
+        match serde_json::from_value::<SearchModelHit>(hit.clone()) {
+            Ok(hit) => hits.push(hit),
+            Err(_) => skipped_hits = skipped_hits.saturating_add(1),
+        }
+    }
+
+    if hits.is_empty() && !raw_hits.is_empty() {
+        return Err(anyhow!(
+            "Model search response contained {} hits but none could be decoded",
+            raw_hits.len()
+        ));
+    }
+
+    let limit = payload_u32(&payload, "limit").or_else(|| payload_u32(&payload, "hitsPerPage"));
+    let offset = payload_u32(&payload, "offset").or_else(|| {
+        let page = payload_u32(&payload, "page")?;
+        let page_size = payload_u32(&payload, "hitsPerPage").or(limit)?;
+        Some(page.saturating_sub(1).saturating_mul(page_size))
+    });
+
+    let mut extras = payload;
+    if skipped_hits > 0
+        && let Some(map) = extras.as_object_mut()
+    {
+        map.insert("skippedHits".to_string(), Value::from(skipped_hits as u64));
+    }
+
+    Ok(SearchModelResponse {
+        hits,
+        estimated_total_hits: payload_u64(&extras, "estimatedTotalHits")
+            .or_else(|| payload_u64(&extras, "totalHits")),
+        processing_time_ms: payload_u32(&extras, "processingTimeMs"),
+        limit,
+        offset,
+        extras,
+    })
+}
+
+fn payload_u64(payload: &Value, key: &str) -> Option<u64> {
+    payload.get(key).and_then(|value| match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn payload_u32(payload: &Value, key: &str) -> Option<u32> {
+    payload_u64(payload, key).and_then(|value| u32::try_from(value).ok())
 }
 
 impl ApiClient {
@@ -1094,5 +1162,49 @@ async fn maybe_emit_progress(
             },
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_model_search_response;
+
+    #[test]
+    fn model_search_response_falls_back_to_lenient_hit_parsing() {
+        let body = r#"{
+          "hits": [
+            {
+              "id": 1,
+              "name": "good",
+              "type": "Checkpoint",
+              "images": [{ "id": 10, "url": "abc", "width": 1024, "height": 1024 }]
+            },
+            {
+              "id": 2,
+              "name": "bad",
+              "type": "Checkpoint",
+              "images": [{ "id": 11, "url": { "broken": true } }]
+            }
+          ],
+          "limit": 50,
+          "offset": 50,
+          "estimatedTotalHits": 120,
+          "processingTimeMs": 4
+        }"#;
+
+        let parsed = parse_model_search_response(body).expect("lenient parse");
+
+        assert_eq!(parsed.hits.len(), 1);
+        assert_eq!(parsed.hits[0].id, 1);
+        assert_eq!(parsed.limit, Some(50));
+        assert_eq!(parsed.offset, Some(50));
+        assert_eq!(parsed.estimated_total_hits, Some(120));
+        assert_eq!(
+            parsed
+                .extras
+                .get("skippedHits")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
     }
 }
