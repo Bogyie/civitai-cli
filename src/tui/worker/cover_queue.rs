@@ -51,6 +51,17 @@ fn upsert_job(
     }
 }
 
+fn pick_running_job_to_pause(
+    running_ids: &HashSet<u64>,
+    focus_version: Option<u64>,
+    prioritized_version_id: u64,
+) -> Option<u64> {
+    running_ids
+        .iter()
+        .copied()
+        .find(|id| *id != prioritized_version_id && Some(*id) != focus_version)
+}
+
 pub(super) fn spawn_cover_queue(
     tx_msg: mpsc::Sender<AppMessage>,
     req_client: Client,
@@ -188,6 +199,9 @@ pub(super) fn spawn_cover_queue(
                     Some(done_version_id) = cover_done_rx.recv() => {
                         let _ = running_ids.remove(&done_version_id);
                         let _ = running_handles.remove(&done_version_id);
+                        if focus_version == Some(done_version_id) {
+                            focus_version = None;
+                        }
                     }
                 }
             }
@@ -299,6 +313,9 @@ async fn handle_cover_command<F>(
             }
 
             if resolved_urls.is_empty() {
+                if *focus_version == Some(version_id) {
+                    *focus_version = None;
+                }
                 let _ = tx_msg
                     .send(AppMessage::ModelCoverLoadFailed(version_id))
                     .await;
@@ -311,6 +328,20 @@ async fn handle_cover_command<F>(
             let _ = running_ids.remove(&version_id);
             queued_ids.remove(&version_id);
             queue.retain(|(queued_version_id, _)| *queued_version_id != version_id);
+
+            if running_ids.len() >= max_in_flight {
+                let to_pause = pick_running_job_to_pause(running_ids, *focus_version, version_id);
+                if let Some(pause_id) = to_pause {
+                    if let Some(handle) = running_handles.remove(&pause_id) {
+                        handle.abort();
+                    }
+                    let _ = running_ids.remove(&pause_id);
+
+                    if let Some(url) = known_version_urls.get(&pause_id).cloned() {
+                        enqueue_or_bump_queue(queue, queued_ids, pause_id, url, false);
+                    }
+                }
+            }
 
             let tx_msg = tx_msg.clone();
             let req_client = req_client.clone();
@@ -341,23 +372,30 @@ async fn handle_cover_command<F>(
                 let _ = done_tx.send(version_id).await;
             });
             running_handles.insert(version_id, handle);
-
-            if running_ids.len() >= max_in_flight && !running_ids.contains(&version_id) {
-                let to_pause = running_ids
-                    .iter()
-                    .copied()
-                    .find(|id| Some(*id) != *focus_version);
-                if let Some(pause_id) = to_pause {
-                    if let Some(handle) = running_handles.remove(&pause_id) {
-                        handle.abort();
-                    }
-                    let _ = running_ids.remove(&pause_id);
-
-                    if let Some(url) = known_version_urls.get(&pause_id).cloned() {
-                        enqueue_or_bump_queue(queue, queued_ids, pause_id, url, false);
-                    }
-                }
-            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_running_job_to_pause;
+    use std::collections::HashSet;
+
+    #[test]
+    fn pause_candidate_skips_prioritized_and_focused_versions() {
+        let running_ids = HashSet::from([10, 20, 30]);
+
+        let candidate = pick_running_job_to_pause(&running_ids, Some(20), 30);
+
+        assert_eq!(candidate, Some(10));
+    }
+
+    #[test]
+    fn pause_candidate_returns_none_when_only_focus_and_prioritized_are_running() {
+        let running_ids = HashSet::from([20, 30]);
+
+        let candidate = pick_running_job_to_pause(&running_ids, Some(20), 30);
+
+        assert_eq!(candidate, None);
     }
 }
