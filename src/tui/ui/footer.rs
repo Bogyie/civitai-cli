@@ -1,12 +1,13 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
 };
 
 use crate::tui::app::{App, MainTab};
+use crate::tui::status::is_status_stale;
 
 pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
@@ -21,7 +22,11 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
         crate::tui::status::StatusLevel::Error => Color::Red,
     };
     let left_status = format!(" [{}] {}", app.status_level.label(), app.status);
-    let status_line = Line::from(Span::styled(left_status, Style::default().fg(status_color)));
+    let mut status_style = Style::default().fg(status_color);
+    if is_status_stale(app.status_recorded_at) {
+        status_style = status_style.add_modifier(Modifier::DIM);
+    }
+    let status_line = Line::from(Span::styled(left_status, status_style));
     let status = Paragraph::new(status_line).alignment(ratatui::layout::Alignment::Left);
     f.render_widget(status, rows[0]);
 

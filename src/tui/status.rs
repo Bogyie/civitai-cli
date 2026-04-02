@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use time::{OffsetDateTime, UtcOffset, format_description::FormatItem, macros::format_description};
 
@@ -156,9 +156,33 @@ pub fn format_status_timestamp(value: SystemTime) -> String {
     format_time(value, TIMESTAMP_FORMAT)
 }
 
+pub fn is_status_stale(value: SystemTime) -> bool {
+    SystemTime::now()
+        .duration_since(value)
+        .unwrap_or(Duration::ZERO)
+        >= Duration::from_secs(3)
+}
+
 fn format_time(value: SystemTime, format: &[FormatItem<'static>]) -> String {
     let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let dt = OffsetDateTime::from(value).to_offset(offset);
     dt.format(format)
         .unwrap_or_else(|_| OffsetDateTime::from(value).format(format).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marks_old_status_as_stale() {
+        let old = SystemTime::now() - Duration::from_secs(4);
+        assert!(is_status_stale(old));
+    }
+
+    #[test]
+    fn keeps_recent_status_as_fresh() {
+        let recent = SystemTime::now() - Duration::from_secs(2);
+        assert!(!is_status_stale(recent));
+    }
 }
