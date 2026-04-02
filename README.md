@@ -13,7 +13,7 @@ Terminal-first Civitai browser and downloader for ComfyUI-focused workflows.
 
 ## Installation
 
-Current project version: `1.4.1`
+Current project version: `1.4.2`
 
 This is a TUI-heavy workflow tool built around the public Civitai API and local ComfyUI model folders.
 
@@ -51,15 +51,23 @@ make build
 Debian / Ubuntu:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.1/civitai-cli_1.4.1_amd64.deb
-sudo dpkg -i civitai-cli_1.4.1_amd64.deb
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.2/civitai-cli_1.4.2_amd64.deb
+sudo dpkg -i civitai-cli_1.4.2_amd64.deb
 ```
 
 Fedora / RHEL / openSUSE:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.1/civitai-cli-1.4.1-1.x86_64.rpm
-sudo rpm -i civitai-cli-1.4.1-1.x86_64.rpm
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.2/civitai-cli-1.4.2-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.4.2-1.x86_64.rpm
+```
+
+If your Linux distro is missing a new enough `glibc`, use the static musl tarball instead:
+
+```bash
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.2/civitai-cli-v1.4.2-x86_64-unknown-linux-musl.tar.gz
+tar -xzf civitai-cli-v1.4.2-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 755 civitai-cli-1.4.2-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
 ```
 
 ## Screenshots
@@ -404,8 +412,8 @@ GitHub Actions is configured to create a GitHub Release automatically when a tag
 Example:
 
 ```bash
-git tag v1.4.1
-git push origin v1.4.1
+git tag v1.4.2
+git push origin v1.4.2
 ```
 
 The release workflow validates that the tag version matches the version in [Cargo.toml](/Users/dev/repo/github/bogyie/civitai-cli/Cargo.toml).

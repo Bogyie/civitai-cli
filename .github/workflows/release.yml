@@ -94,6 +94,10 @@ jobs:
             runner: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             use_cross: true
+          - name: linux-x86_64-musl
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            use_cross: true
           - name: linux-armv7-gnueabihf
             runner: ubuntu-latest
             target: armv7-unknown-linux-gnueabihf
@@ -176,7 +180,9 @@ jobs:
     needs:
       - validate-release
       - verify-release
-    runs-on: ubuntu-latest
+    # Build Linux release artifacts on an older LTS image so the resulting
+    # x86_64-gnu binary stays compatible with Ubuntu 22.04's glibc baseline.
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
