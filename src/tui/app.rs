@@ -39,7 +39,7 @@ use civitai_cli::sdk::{
     ModelSearchSortBy, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
 };
 use ratatui::widgets::ListState;
-use ratatui_image::protocol::StatefulProtocol;
+use ratatui_image::protocol::{Protocol, StatefulProtocol};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -104,7 +104,7 @@ pub struct App {
     pub images: Vec<ImageItem>,
     pub selected_index: usize,
     pub selected_liked_image_index: usize,
-    pub image_cache: HashMap<u64, StatefulProtocol>,
+    pub image_cache: HashMap<u64, Protocol>,
     pub image_bytes_cache: HashMap<u64, Vec<u8>>,
     pub image_request_keys: HashMap<u64, String>,
     pub selected_image_model_index: HashMap<u64, usize>,

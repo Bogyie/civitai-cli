@@ -11,7 +11,7 @@ use super::LoopControl;
 use crate::tui::{
     app::{App, DownloadState, MainTab, WorkerCommand},
     image::comfy_workflow_json,
-    runtime::{current_image_render_request, debug_fetch_log},
+    runtime::{current_image_protocol_area, current_image_render_request, debug_fetch_log},
 };
 
 pub(super) fn handle_modifier_key(app: &mut App, key: KeyEvent) -> Option<LoopControl> {
@@ -324,6 +324,7 @@ fn handle_enter(app: &mut App) {
                         app.image_search_form.build_options(),
                         None,
                         current_image_render_request(),
+                        current_image_protocol_area(),
                     ));
                     app.image_feed_loading = true;
                     app.status = format!("Opening images for model version {version_id}...");

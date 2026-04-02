@@ -1,7 +1,8 @@
 use civitai_cli::sdk::{
     ImageSearchState, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
 };
-use ratatui_image::protocol::StatefulProtocol;
+use ratatui::layout::Rect;
+use ratatui_image::protocol::{Protocol, StatefulProtocol};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -93,7 +94,7 @@ pub struct SearchTemplateStore {
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>, Option<u64>),
     ImageDetailEnriched(ImageItem),
-    ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
+    ImageDecoded(u64, Protocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelDetailLoaded(Box<Model>, Option<u64>),
     ModelSidebarDetailLoaded(Box<Model>),
@@ -174,9 +175,9 @@ pub struct InterruptedDownloadSession {
 }
 
 pub enum WorkerCommand {
-    FetchImages(ImageSearchState, Option<u32>, MediaRenderRequest),
-    LoadImage(ImageItem, MediaRenderRequest),
-    RebuildImageProtocol(u64, Vec<u8>),
+    FetchImages(ImageSearchState, Option<u32>, MediaRenderRequest, Rect),
+    LoadImage(ImageItem, MediaRenderRequest, Rect),
+    RebuildImageProtocol(u64, Vec<u8>, Rect),
     RebuildModelCover(u64, Vec<u8>),
     SearchModels(
         ModelSearchState,

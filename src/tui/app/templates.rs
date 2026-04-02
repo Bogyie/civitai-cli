@@ -1,5 +1,5 @@
 use super::*;
-use crate::tui::runtime::current_image_render_request;
+use crate::tui::runtime::{current_image_protocol_area, current_image_render_request};
 
 impl App {
     pub fn open_search_template_modal(&mut self, kind: SearchTemplateKind) {
@@ -243,6 +243,7 @@ impl App {
                 self.image_search_form.build_options(),
                 None,
                 current_image_render_request(),
+                current_image_protocol_area(),
             ));
             self.image_feed_loading = true;
             self.status = "Searching image feed...".into();

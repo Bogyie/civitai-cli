@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use futures_util::stream::{self, StreamExt};
+use ratatui_image::Resize;
 use ratatui_image::picker::Picker;
 use reqwest::Client;
 use tokio::sync::{Mutex, Semaphore, mpsc};
@@ -36,7 +37,7 @@ use crate::tui::model::{
     build_download_file_name, model_name, model_versions, resolve_image_download_target_dir,
     resolve_model_download_target_dir,
 };
-use crate::tui::runtime::{debug_fetch_log, render_request_key};
+use crate::tui::runtime::{debug_fetch_log, image_render_cache_key};
 use crate::tui::status::StatusEvent;
 use civitai_cli::sdk::{
     DownloadControl, DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec,
@@ -200,7 +201,12 @@ pub async fn spawn_worker(
 
         while let Some(cmd) = rx_cmd.recv().await {
             match cmd {
-                WorkerCommand::FetchImages(image_opts, next_page_url, render_request) => {
+                WorkerCommand::FetchImages(
+                    image_opts,
+                    next_page_url,
+                    render_request,
+                    render_area,
+                ) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -243,7 +249,8 @@ pub async fn spawn_worker(
                         );
                         let image_cache_ttl_minutes = *image_cache_ttl_minutes.lock().await;
                         let media_quality = debug_config.media_quality;
-                        let request_key = render_request_key(render_request, media_quality);
+                        let request_key =
+                            image_render_cache_key(render_request, media_quality, render_area);
                         let use_image_search_cache = image_search_ttl_minutes > 0;
                         let _ = tx_msg_clone
                             .send(status_message(status_with_url(
@@ -480,6 +487,7 @@ pub async fn spawn_worker(
                                     image_bytes_cache_root,
                                     ttl_minutes: image_cache_ttl_minutes,
                                     use_cache: use_binary_cache,
+                                    render_area,
                                 },
                             )));
                         }
@@ -488,7 +496,7 @@ pub async fn spawn_worker(
                         }
                     });
                 }
-                WorkerCommand::LoadImage(item, render_request) => {
+                WorkerCommand::LoadImage(item, render_request, render_area) => {
                     let tx_msg_clone = tx_msg.clone();
                     let req_client = req_client.clone();
                     let picker = picker.clone();
@@ -502,8 +510,11 @@ pub async fn spawn_worker(
                             render_request,
                             debug_config.media_quality,
                         ) {
-                            let request_key =
-                                render_request_key(render_request, debug_config.media_quality);
+                            let request_key = image_render_cache_key(
+                                render_request,
+                                debug_config.media_quality,
+                                render_area,
+                            );
                             load_feed_image(
                                 item.id,
                                 image_url,
@@ -517,23 +528,27 @@ pub async fn spawn_worker(
                                     image_bytes_cache_root,
                                     ttl_minutes: image_cache_ttl_minutes,
                                     use_cache,
+                                    render_area,
                                 },
                             )
                             .await;
                         }
                     });
                 }
-                WorkerCommand::RebuildImageProtocol(image_id, bytes) => {
+                WorkerCommand::RebuildImageProtocol(image_id, bytes, render_area) => {
                     if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                        let protocol = picker.new_resize_protocol(dyn_img);
-                        let _ = tx_msg
-                            .send(AppMessage::ImageDecoded(
-                                image_id,
-                                protocol,
-                                bytes,
-                                String::new(),
-                            ))
-                            .await;
+                        if let Ok(protocol) =
+                            picker.new_protocol(dyn_img, render_area, Resize::Scale(None))
+                        {
+                            let _ = tx_msg
+                                .send(AppMessage::ImageDecoded(
+                                    image_id,
+                                    protocol,
+                                    bytes,
+                                    String::new(),
+                                ))
+                                .await;
+                        }
                     }
                 }
                 WorkerCommand::RebuildModelCover(version_id, bytes) => {

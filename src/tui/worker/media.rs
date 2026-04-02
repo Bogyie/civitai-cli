@@ -12,6 +12,8 @@ use civitai_cli::sdk::{
     ApiImageSearchOptions, MediaUrlOptions, SearchImageHit as ImageItem,
     media_url_from_raw_with_options,
 };
+use ratatui::layout::Rect;
+use ratatui_image::Resize;
 use ratatui_image::picker::Picker;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,7 @@ pub(super) struct FeedImageLoadContext {
     pub image_bytes_cache_root: Option<PathBuf>,
     pub ttl_minutes: u64,
     pub use_cache: bool,
+    pub render_area: Rect,
 }
 
 const MODEL_VERSION_COVER_IMAGE_LIMIT: usize = 1;
@@ -491,17 +494,22 @@ pub(super) async fn load_feed_image(
                 ),
             );
             if let Ok(dyn_img) = image::load_from_memory(&bytes) {
-                let protocol = context.picker.new_resize_protocol(dyn_img);
-                let _ = context
-                    .tx_msg
-                    .send(AppMessage::ImageDecoded(
-                        image_id,
-                        protocol,
-                        bytes,
-                        context.request_key.clone(),
-                    ))
-                    .await;
-                return;
+                if let Ok(protocol) =
+                    context
+                        .picker
+                        .new_protocol(dyn_img, context.render_area, Resize::Scale(None))
+                {
+                    let _ = context
+                        .tx_msg
+                        .send(AppMessage::ImageDecoded(
+                            image_id,
+                            protocol,
+                            bytes,
+                            context.request_key.clone(),
+                        ))
+                        .await;
+                    return;
+                }
             }
             let _ = std::fs::remove_file(cache_path);
         }
@@ -532,16 +540,26 @@ pub(super) async fn load_feed_image(
                     let cache_path = image_bytes_cache_path(cache_root, image_id, &image_url);
                     persist_cached_feed_image(&cache_path, &bytes);
                 }
-                let protocol = context.picker.new_resize_protocol(dyn_img);
-                let _ = context
-                    .tx_msg
-                    .send(AppMessage::ImageDecoded(
-                        image_id,
-                        protocol,
-                        bytes.to_vec(),
-                        context.request_key.clone(),
-                    ))
-                    .await;
+                if let Ok(protocol) =
+                    context
+                        .picker
+                        .new_protocol(dyn_img, context.render_area, Resize::Scale(None))
+                {
+                    let _ = context
+                        .tx_msg
+                        .send(AppMessage::ImageDecoded(
+                            image_id,
+                            protocol,
+                            bytes.to_vec(),
+                            context.request_key.clone(),
+                        ))
+                        .await;
+                } else {
+                    debug_fetch_log(
+                        &context.debug_config,
+                        &format!("Image feed protocol encode failed: id={}", image_id),
+                    );
+                }
             } else {
                 debug_fetch_log(
                     &context.debug_config,

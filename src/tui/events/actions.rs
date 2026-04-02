@@ -1,6 +1,7 @@
 use crate::tui::app::{App, MainTab, WorkerCommand};
 use crate::tui::runtime::{
-    current_image_render_request, current_model_cover_render_request, render_request_key,
+    current_image_protocol_area, current_image_render_request, current_model_cover_render_request,
+    image_render_cache_key, render_request_key,
 };
 
 pub(super) fn reload_selected_image(app: &mut App) {
@@ -11,15 +12,20 @@ pub(super) fn reload_selected_image(app: &mut App) {
         && let Some(tx) = &app.tx
     {
         let request = current_image_render_request();
-        let request_key = render_request_key(request, app.config.media_quality);
+        let render_area = current_image_protocol_area();
+        let request_key = image_render_cache_key(request, app.config.media_quality, render_area);
         if app.has_cached_image_request(image.id, &request_key) {
             if let Some(bytes) = app.image_bytes_cache.get(&image.id).cloned() {
-                let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(image.id, bytes));
+                let _ = tx.try_send(WorkerCommand::RebuildImageProtocol(
+                    image.id,
+                    bytes,
+                    render_area,
+                ));
             }
         } else {
             app.image_cache.remove(&image.id);
             app.image_request_keys.remove(&image.id);
-            let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
+            let _ = tx.try_send(WorkerCommand::LoadImage(image, request, render_area));
         }
     }
 }
@@ -30,11 +36,12 @@ pub(super) fn ensure_selected_image_loaded(app: &mut App) {
     }
     if let Some(image) = app.selected_image_in_active_view().cloned() {
         let request = current_image_render_request();
-        let request_key = render_request_key(request, app.config.media_quality);
+        let render_area = current_image_protocol_area();
+        let request_key = image_render_cache_key(request, app.config.media_quality, render_area);
         if !app.has_cached_image_request(image.id, &request_key)
             && let Some(tx) = &app.tx
         {
-            let _ = tx.try_send(WorkerCommand::LoadImage(image, request));
+            let _ = tx.try_send(WorkerCommand::LoadImage(image, request, render_area));
         }
     }
 }
@@ -183,6 +190,7 @@ pub(super) fn request_image_feed_if_needed(app: &mut App, next_page: Option<u32>
                 app.image_search_form.build_options(),
                 next_page,
                 current_image_render_request(),
+                current_image_protocol_area(),
             ))
             .is_ok()
     {

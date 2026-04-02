@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use ratatui_image::{Resize, StatefulImage};
+use ratatui_image::Image;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::tui::{
@@ -125,12 +125,10 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     f.render_widget(Clear, inner_area);
 
-    if let Some(protocol) = app.image_cache.get_mut(&image_id) {
-        let resize_mode = Resize::Scale(None);
-        let fitted_size = protocol.size_for(resize_mode.clone(), inner_area);
-        let render_area = centered_media_rect(inner_area, fitted_size);
-        let image_widget = StatefulImage::new().resize(resize_mode);
-        f.render_stateful_widget(image_widget, render_area, protocol);
+    if let Some(protocol) = app.image_cache.get(&image_id) {
+        let render_area = centered_media_rect(inner_area, protocol.area());
+        let image_widget = Image::new(protocol);
+        f.render_widget(image_widget, render_area);
     } else {
         let text = format!("Loading image {}/{}...", selected_index + 1, item_count);
         f.render_widget(

@@ -9,7 +9,7 @@ use crate::tui::{
         App, AppMode, ImageSearchFormSection, MainTab, SearchFormMode, SearchFormSection,
         WorkerCommand,
     },
-    runtime::{current_image_render_request, debug_fetch_log},
+    runtime::{current_image_protocol_area, current_image_render_request, debug_fetch_log},
 };
 
 pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopControl> {
@@ -515,6 +515,7 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     app.image_search_form.build_options(),
                     None,
                     current_image_render_request(),
+                    current_image_protocol_area(),
                 ));
                 app.image_feed_loading = true;
                 app.status = "Searching image feed...".into();
@@ -682,6 +683,7 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     app.image_search_form.build_options(),
                     None,
                     current_image_render_request(),
+                    current_image_protocol_area(),
                 ));
                 app.image_feed_loading = true;
                 app.status = "Searching image feed...".into();
