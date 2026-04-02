@@ -26,11 +26,14 @@ pub(super) fn period_to_created_at(period: &str) -> Option<String> {
     Some(format!("{start}-{end}"))
 }
 
-pub(super) fn bookmark_matches_query(model: &Model, query: &str) -> bool {
+pub(super) fn liked_model_matches_query(model: &Model, query: &str) -> bool {
     query.is_empty() || model_name(model).to_ascii_lowercase().contains(query)
 }
 
-pub(super) fn bookmark_matches_type(model: &Model, selected_types: &BTreeSet<ModelType>) -> bool {
+pub(super) fn liked_model_matches_type(
+    model: &Model,
+    selected_types: &BTreeSet<ModelType>,
+) -> bool {
     if selected_types.is_empty() {
         return true;
     }
@@ -45,7 +48,7 @@ pub(super) fn bookmark_matches_type(model: &Model, selected_types: &BTreeSet<Mod
     })
 }
 
-pub(super) fn bookmark_matches_base_model(
+pub(super) fn liked_model_matches_base_model(
     model: &Model,
     selected_base_models: &BTreeSet<ModelBaseModel>,
 ) -> bool {
@@ -63,7 +66,7 @@ pub(super) fn bookmark_matches_base_model(
     })
 }
 
-pub(super) fn bookmark_matches_period(model: &Model, period: Option<&SearchPeriod>) -> bool {
+pub(super) fn liked_model_matches_period(model: &Model, period: Option<&SearchPeriod>) -> bool {
     let Some(period) = period else {
         return true;
     };
@@ -89,7 +92,7 @@ pub(super) fn bookmark_matches_period(model: &Model, period: Option<&SearchPerio
     model_ts >= now.saturating_sub(window)
 }
 
-pub(super) fn sort_bookmarks(items: &mut [Model], sort_by: &ModelSearchSortBy) {
+pub(super) fn sort_liked_models(items: &mut [Model], sort_by: &ModelSearchSortBy) {
     match sort_by {
         ModelSearchSortBy::Relevance => {}
         ModelSearchSortBy::HighestRated => items.sort_by(|a, b| {
@@ -161,7 +164,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_bookmarks_by_type_and_base_model() {
+    fn filters_liked_models_by_type_and_base_model() {
         let model = model(json!({
             "id": 1,
             "name": "Flux Lora",
@@ -175,12 +178,12 @@ mod tests {
         let type_filter = BTreeSet::from([ModelType::Lora]);
         let base_filter = BTreeSet::from([ModelBaseModel::Flux1D]);
 
-        assert!(bookmark_matches_type(&model, &type_filter));
-        assert!(bookmark_matches_base_model(&model, &base_filter));
+        assert!(liked_model_matches_type(&model, &type_filter));
+        assert!(liked_model_matches_base_model(&model, &base_filter));
     }
 
     #[test]
-    fn filters_bookmarks_by_recency() {
+    fn filters_liked_models_by_recency() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time")
@@ -188,19 +191,22 @@ mod tests {
         let fresh = model(json!({ "id": 1, "lastVersionAtUnix": now - 60 }));
         let stale = model(json!({ "id": 2, "lastVersionAtUnix": now - (10 * 24 * 60 * 60) }));
 
-        assert!(bookmark_matches_period(&fresh, Some(&SearchPeriod::Day)));
-        assert!(!bookmark_matches_period(&stale, Some(&SearchPeriod::Day)));
+        assert!(liked_model_matches_period(&fresh, Some(&SearchPeriod::Day)));
+        assert!(!liked_model_matches_period(
+            &stale,
+            Some(&SearchPeriod::Day)
+        ));
     }
 
     #[test]
-    fn sorts_bookmarks_by_download_count() {
+    fn sorts_liked_models_by_download_count() {
         let mut items = vec![
             model(json!({ "id": 1, "metrics": { "downloadCount": 5 } })),
             model(json!({ "id": 2, "metrics": { "downloadCount": 99 } })),
             model(json!({ "id": 3, "metrics": { "downloadCount": 42 } })),
         ];
 
-        sort_bookmarks(&mut items, &ModelSearchSortBy::MostDownloaded);
+        sort_liked_models(&mut items, &ModelSearchSortBy::MostDownloaded);
 
         assert_eq!(
             items.iter().map(|item| item.id).collect::<Vec<_>>(),

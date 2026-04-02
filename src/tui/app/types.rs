@@ -36,9 +36,9 @@ impl DownloadKey {
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
     Models,
-    SavedModels,
+    LikedModels,
     Images,
-    SavedImages,
+    LikedImages,
     Downloads,
     Settings,
 }
@@ -48,13 +48,13 @@ pub enum AppMode {
     Browsing,
     SearchForm,
     SearchImages,
-    SearchSavedModels,
-    SearchSavedImages,
-    BookmarkPathPrompt,
+    SearchLikedModels,
+    SearchLikedImages,
+    LikedPathPrompt,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum BookmarkPathAction {
+pub enum LikedPathAction {
     Export,
     Import,
 }

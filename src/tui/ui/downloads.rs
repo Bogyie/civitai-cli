@@ -369,11 +369,11 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| "Not configured".to_string()),
             2 => app
                 .config
-                .bookmark_file_path
+                .liked_model_file_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
                 .or_else(|| {
-                    crate::config::AppConfig::bookmark_path()
+                    crate::config::AppConfig::liked_model_path()
                         .map(|p| p.to_string_lossy().to_string())
                 })
                 .unwrap_or_else(|| "Default".to_string()),
@@ -482,7 +482,7 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
     let access = Paragraph::new(vec![
         item_line(0, "API Key"),
         item_line(1, "ComfyUI"),
-        item_line(2, "Bookmark File"),
+        item_line(2, "Liked File"),
     ])
     .block(
         Block::default()
@@ -538,7 +538,7 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
     let actions = Paragraph::new(vec![
         item_line(12, "Clear All Caches"),
         Line::from(Span::styled(
-            "  Keeps settings, bookmarks, tags, and history",
+            "  Keeps liked models, liked images, tags, settings, and history",
             help_text_style(),
         )),
     ])

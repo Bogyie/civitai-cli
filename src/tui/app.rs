@@ -1,32 +1,32 @@
-mod bookmarks;
 mod downloads;
 mod filters;
 mod forms;
 mod images;
+mod liked_models;
 mod models;
 mod storage;
 mod templates;
 pub(crate) mod types;
 
 use self::filters::{
-    bookmark_matches_base_model, bookmark_matches_period, bookmark_matches_query,
-    bookmark_matches_type, has_displayable_model_version, sort_bookmarks,
+    has_displayable_model_version, liked_model_matches_base_model, liked_model_matches_period,
+    liked_model_matches_query, liked_model_matches_type, sort_liked_models,
 };
 pub use self::forms::{
     ImageSearchFormSection, ImageSearchFormState, MediaRenderRequest, SearchFormMode,
     SearchFormSection, SearchFormState, SearchPeriod, SettingsFormState,
 };
 use self::storage::{
-    collect_paused_sessions_from_history, load_bookmarks, load_download_history,
-    load_image_bookmarks, load_image_tag_catalog, load_interrupted_downloads,
-    load_search_templates, save_bookmarks_to_file, save_download_history_to_file,
-    save_image_bookmarks_to_file, save_image_tag_catalog_to_file,
-    save_interrupted_downloads_to_file, save_search_templates_to_file,
+    collect_paused_sessions_from_history, load_download_history, load_image_tag_catalog,
+    load_interrupted_downloads, load_liked_images, load_liked_models, load_search_templates,
+    save_download_history_to_file, save_image_tag_catalog_to_file,
+    save_interrupted_downloads_to_file, save_liked_images_to_file, save_liked_models_to_file,
+    save_search_templates_to_file,
 };
 pub use self::types::{
-    AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
-    DownloadKey, DownloadState, DownloadTracker, ImageSearchTemplate, InterruptedDownloadSession,
-    MainTab, ModelSearchTemplate, NewDownloadHistoryEntry, SearchTemplateKind, SearchTemplateStore,
+    AppMessage, AppMode, DownloadHistoryEntry, DownloadHistoryStatus, DownloadKey, DownloadState,
+    DownloadTracker, ImageSearchTemplate, InterruptedDownloadSession, LikedPathAction, MainTab,
+    ModelSearchTemplate, NewDownloadHistoryEntry, SearchTemplateKind, SearchTemplateStore,
     SelectedModelCover, SelectedVersionCover, TagViewerColumn, VersionCoverJob, WorkerCommand,
 };
 use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
@@ -56,8 +56,8 @@ pub struct App {
     pub mode: AppMode,
     pub config: crate::config::AppConfig,
     pub search_form: SearchFormState,
-    pub bookmark_search_form: SearchFormState,
-    pub bookmark_search_form_draft: SearchFormState,
+    pub liked_model_search_form: SearchFormState,
+    pub liked_model_search_form_draft: SearchFormState,
     pub image_search_form: ImageSearchFormState,
     pub settings_form: SettingsFormState,
 
@@ -65,11 +65,11 @@ pub struct App {
     pub model_search_has_more: bool,
     pub model_search_loading_more: bool,
     pub model_search_next_page: Option<u32>,
-    pub bookmarks: Vec<Model>,
-    visible_bookmarks_cache: Vec<Model>,
+    pub liked_models: Vec<Model>,
+    visible_liked_models_cache: Vec<Model>,
     parsed_model_cache: HashMap<u64, ParsedModelCacheEntry>,
-    pub image_bookmarks: Vec<ImageItem>,
-    visible_image_bookmarks_cache: Vec<ImageItem>,
+    pub liked_images: Vec<ImageItem>,
+    visible_liked_images_cache: Vec<ImageItem>,
     pub image_tag_catalog: Vec<String>,
     pub model_search_templates: Vec<ModelSearchTemplate>,
     pub image_search_templates: Vec<ImageSearchTemplate>,
@@ -81,16 +81,16 @@ pub struct App {
     pub search_template_name_editing: bool,
     pub show_model_details: bool,
     pub model_list_state: ListState,
-    pub bookmark_list_state: ListState,
-    pub image_bookmark_list_state: ListState,
-    pub bookmark_query: String,
-    pub bookmark_query_draft: String,
-    pub image_bookmark_query: String,
-    pub image_bookmark_query_draft: String,
-    pub show_bookmark_confirm_modal: bool,
-    pub pending_bookmark_remove_id: Option<u64>,
-    pub bookmark_file_path: Option<PathBuf>,
-    pub image_bookmark_file_path: Option<PathBuf>,
+    pub liked_model_list_state: ListState,
+    pub liked_image_list_state: ListState,
+    pub liked_model_query: String,
+    pub liked_model_query_draft: String,
+    pub liked_image_query: String,
+    pub liked_image_query_draft: String,
+    pub show_like_confirm_modal: bool,
+    pub pending_liked_model_remove_id: Option<u64>,
+    pub liked_model_file_path: Option<PathBuf>,
+    pub liked_image_file_path: Option<PathBuf>,
     pub download_history_file_path: Option<PathBuf>,
     pub interrupted_download_file_path: Option<PathBuf>,
     pub interrupted_download_sessions: Vec<InterruptedDownloadSession>,
@@ -103,7 +103,7 @@ pub struct App {
 
     pub images: Vec<ImageItem>,
     pub selected_index: usize,
-    pub selected_image_bookmark_index: usize,
+    pub selected_liked_image_index: usize,
     pub image_cache: HashMap<u64, StatefulProtocol>,
     pub image_bytes_cache: HashMap<u64, Vec<u8>>,
     pub image_request_keys: HashMap<u64, String>,
@@ -144,23 +144,23 @@ pub struct App {
     pub status_history: Vec<StatusEvent>,
     pub selected_status_history_index: usize,
     pub status_history_filter: StatusHistoryFilter,
-    pub bookmark_path_prompt_action: Option<BookmarkPathAction>,
-    pub bookmark_path_draft: String,
+    pub liked_model_path_prompt_action: Option<LikedPathAction>,
+    pub liked_model_path_draft: String,
     pub tx: Option<mpsc::Sender<WorkerCommand>>,
 }
 
 impl App {
     pub fn new(config: crate::config::AppConfig) -> Self {
-        let bookmark_file_path = config
-            .bookmark_file_path
+        let liked_model_file_path = config
+            .liked_model_file_path
             .clone()
-            .or_else(crate::config::AppConfig::bookmark_path);
-        let bookmarks = load_bookmarks(bookmark_file_path.as_deref());
-        let image_bookmark_file_path = config
-            .image_bookmark_file_path
+            .or_else(crate::config::AppConfig::liked_model_path);
+        let liked_models = load_liked_models(liked_model_file_path.as_deref());
+        let liked_image_file_path = config
+            .liked_image_file_path
             .clone()
-            .or_else(crate::config::AppConfig::image_bookmark_path);
-        let image_bookmarks = load_image_bookmarks(image_bookmark_file_path.as_deref());
+            .or_else(crate::config::AppConfig::liked_image_path);
+        let liked_images = load_liked_images(liked_image_file_path.as_deref());
         let image_tag_catalog = load_image_tag_catalog(config.image_tag_catalog_path().as_deref());
         let search_template_file_path = config.search_templates_path();
         let search_templates = load_search_templates(search_template_file_path.as_deref());
@@ -190,13 +190,13 @@ impl App {
         }
         let interrupted_sessions_for_state = interrupted_download_sessions.clone();
         let show_resume_download_modal = !interrupted_download_sessions.is_empty();
-        let mut bookmark_list_state = ListState::default();
-        if !bookmarks.is_empty() {
-            bookmark_list_state.select(Some(0));
+        let mut liked_model_list_state = ListState::default();
+        if !liked_models.is_empty() {
+            liked_model_list_state.select(Some(0));
         }
-        let mut image_bookmark_list_state = ListState::default();
-        if !image_bookmarks.is_empty() {
-            image_bookmark_list_state.select(Some(0));
+        let mut liked_image_list_state = ListState::default();
+        if !liked_images.is_empty() {
+            liked_image_list_state.select(Some(0));
         }
         let mut model_list_state = ListState::default();
         model_list_state.select(Some(0));
@@ -207,19 +207,19 @@ impl App {
             mode: AppMode::Browsing,
             config,
             search_form: SearchFormState::new(),
-            bookmark_search_form: SearchFormState::new(),
-            bookmark_search_form_draft: SearchFormState::new(),
+            liked_model_search_form: SearchFormState::new(),
+            liked_model_search_form_draft: SearchFormState::new(),
             image_search_form: ImageSearchFormState::new(),
             settings_form: SettingsFormState::new(),
             models: Vec::new(),
             model_search_has_more: true,
             model_search_loading_more: false,
             model_search_next_page: None,
-            bookmarks,
-            visible_bookmarks_cache: Vec::new(),
+            liked_models,
+            visible_liked_models_cache: Vec::new(),
             parsed_model_cache: HashMap::new(),
-            image_bookmarks,
-            visible_image_bookmarks_cache: Vec::new(),
+            liked_images,
+            visible_liked_images_cache: Vec::new(),
             image_tag_catalog,
             model_search_templates: search_templates.model_templates,
             image_search_templates: search_templates.image_templates,
@@ -231,16 +231,16 @@ impl App {
             search_template_name_editing: false,
             show_model_details: false,
             model_list_state,
-            bookmark_list_state,
-            image_bookmark_list_state,
-            bookmark_query: String::new(),
-            bookmark_query_draft: String::new(),
-            image_bookmark_query: String::new(),
-            image_bookmark_query_draft: String::new(),
-            show_bookmark_confirm_modal: false,
-            pending_bookmark_remove_id: None,
-            bookmark_file_path,
-            image_bookmark_file_path,
+            liked_model_list_state,
+            liked_image_list_state,
+            liked_model_query: String::new(),
+            liked_model_query_draft: String::new(),
+            liked_image_query: String::new(),
+            liked_image_query_draft: String::new(),
+            show_like_confirm_modal: false,
+            pending_liked_model_remove_id: None,
+            liked_model_file_path,
+            liked_image_file_path,
             download_history_file_path,
             selected_version_index: HashMap::new(),
             selected_file_index: HashMap::new(),
@@ -250,7 +250,7 @@ impl App {
             model_version_image_failed: HashSet::new(),
             images: Vec::new(),
             selected_index: 0,
-            selected_image_bookmark_index: 0,
+            selected_liked_image_index: 0,
             image_cache: HashMap::new(),
             image_bytes_cache: HashMap::new(),
             image_request_keys: HashMap::new(),
@@ -291,8 +291,8 @@ impl App {
             status_history: vec![initial_status],
             selected_status_history_index: 0,
             status_history_filter: StatusHistoryFilter::All,
-            bookmark_path_prompt_action: None,
-            bookmark_path_draft: String::new(),
+            liked_model_path_prompt_action: None,
+            liked_model_path_draft: String::new(),
             tx: None,
         };
 
@@ -303,8 +303,8 @@ impl App {
             .apply_persisted_state(&image_filter_state);
 
         app.rebuild_parsed_model_cache();
-        app.refresh_visible_bookmarks_cache();
-        app.refresh_visible_image_bookmarks_cache();
+        app.refresh_visible_liked_models_cache();
+        app.refresh_visible_liked_images_cache();
 
         if !interrupted_download_sessions.is_empty() {
             for session in &interrupted_download_sessions {
@@ -505,8 +505,8 @@ mod tests {
             .as_nanos();
         let root = std::env::temp_dir().join(format!("civitai-cli-app-tests-{unique}"));
         AppConfig {
-            bookmark_file_path: Some(root.join("bookmarks.json")),
-            image_bookmark_file_path: Some(root.join("image_bookmarks.json")),
+            liked_model_file_path: Some(root.join("liked_models.json")),
+            liked_image_file_path: Some(root.join("liked_images.json")),
             download_history_file_path: Some(root.join("download_history.json")),
             interrupted_download_file_path: Some(root.join("interrupted_downloads.json")),
             ..AppConfig::default()
@@ -522,39 +522,39 @@ mod tests {
     }
 
     #[test]
-    fn bookmark_visibility_cache_updates_when_query_is_applied() {
+    fn liked_visibility_cache_updates_when_query_is_applied() {
         let mut app = App::new(isolated_config());
-        app.bookmarks = vec![
+        app.liked_models = vec![
             model(json!({ "id": 1, "name": "Flux Portrait" })),
             model(json!({ "id": 2, "name": "Anime Landscape" })),
         ];
-        app.refresh_visible_bookmarks_cache();
+        app.refresh_visible_liked_models_cache();
 
-        assert_eq!(app.visible_bookmarks().len(), 2);
+        assert_eq!(app.visible_liked_models().len(), 2);
 
-        app.bookmark_search_form_draft.query = "flux".to_string();
-        app.apply_bookmark_query();
+        app.liked_model_search_form_draft.query = "flux".to_string();
+        app.apply_liked_model_query();
 
-        assert_eq!(app.visible_bookmarks().len(), 1);
-        assert_eq!(app.visible_bookmarks()[0].id, 1);
+        assert_eq!(app.visible_liked_models().len(), 1);
+        assert_eq!(app.visible_liked_models()[0].id, 1);
     }
 
     #[test]
-    fn image_bookmark_visibility_cache_updates_when_query_changes() {
+    fn image_liked_visibility_cache_updates_when_query_changes() {
         let mut app = App::new(isolated_config());
-        app.image_bookmarks = vec![
+        app.liked_images = vec![
             image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
             image(json!({ "id": 20, "baseModel": "SDXL" })),
         ];
-        app.refresh_visible_image_bookmarks_cache();
+        app.refresh_visible_liked_images_cache();
 
-        assert_eq!(app.visible_image_bookmarks().len(), 2);
+        assert_eq!(app.visible_liked_images().len(), 2);
 
-        app.image_bookmark_query_draft = "flux".to_string();
-        app.apply_image_bookmark_query();
+        app.liked_image_query_draft = "flux".to_string();
+        app.apply_liked_image_query();
 
-        assert_eq!(app.visible_image_bookmarks().len(), 1);
-        assert_eq!(app.visible_image_bookmarks()[0].id, 10);
+        assert_eq!(app.visible_liked_images().len(), 1);
+        assert_eq!(app.visible_liked_images()[0].id, 10);
     }
 
     #[test]
@@ -591,44 +591,44 @@ mod tests {
     }
 
     #[test]
-    fn bookmark_selection_clamps_after_filtered_removal() {
+    fn liked_selection_clamps_after_filtered_removal() {
         let mut app = App::new(isolated_config());
-        app.active_tab = MainTab::SavedModels;
-        app.bookmarks = vec![
+        app.active_tab = MainTab::LikedModels;
+        app.liked_models = vec![
             model(json!({ "id": 1, "name": "Flux Portrait" })),
             model(json!({ "id": 2, "name": "Flux Landscape" })),
         ];
-        app.refresh_visible_bookmarks_cache();
-        app.bookmark_search_form.query = "flux".to_string();
-        app.refresh_visible_bookmarks_cache();
-        app.bookmark_list_state.select(Some(1));
+        app.refresh_visible_liked_models_cache();
+        app.liked_model_search_form.query = "flux".to_string();
+        app.refresh_visible_liked_models_cache();
+        app.liked_model_list_state.select(Some(1));
 
-        let selected = app.bookmarks[1].clone();
-        app.toggle_bookmark_for_selected_model(&selected);
+        let selected = app.liked_models[1].clone();
+        app.toggle_like_for_selected_model(&selected);
 
-        assert_eq!(app.visible_bookmarks().len(), 1);
-        assert_eq!(app.bookmark_list_state.selected(), Some(0));
+        assert_eq!(app.visible_liked_models().len(), 1);
+        assert_eq!(app.liked_model_list_state.selected(), Some(0));
     }
 
     #[test]
-    fn image_bookmark_selection_clamps_after_filtered_removal() {
+    fn image_liked_selection_clamps_after_filtered_removal() {
         let mut app = App::new(isolated_config());
-        app.active_tab = MainTab::SavedImages;
-        app.image_bookmarks = vec![
+        app.active_tab = MainTab::LikedImages;
+        app.liked_images = vec![
             image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
             image(json!({ "id": 20, "baseModel": "Flux.1 D" })),
         ];
-        app.refresh_visible_image_bookmarks_cache();
-        app.image_bookmark_query = "flux".to_string();
-        app.refresh_visible_image_bookmarks_cache();
-        app.selected_image_bookmark_index = 1;
-        app.image_bookmark_list_state.select(Some(1));
+        app.refresh_visible_liked_images_cache();
+        app.liked_image_query = "flux".to_string();
+        app.refresh_visible_liked_images_cache();
+        app.selected_liked_image_index = 1;
+        app.liked_image_list_state.select(Some(1));
 
-        let selected = app.image_bookmarks[1].clone();
-        app.toggle_bookmark_for_selected_image(&selected);
+        let selected = app.liked_images[1].clone();
+        app.toggle_like_for_selected_image(&selected);
 
-        assert_eq!(app.visible_image_bookmarks().len(), 1);
-        assert_eq!(app.selected_image_bookmark_index, 0);
-        assert_eq!(app.image_bookmark_list_state.selected(), Some(0));
+        assert_eq!(app.visible_liked_images().len(), 1);
+        assert_eq!(app.selected_liked_image_index, 0);
+        assert_eq!(app.liked_image_list_state.selected(), Some(0));
     }
 }

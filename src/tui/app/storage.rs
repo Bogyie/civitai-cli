@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::tui::app::SearchTemplateStore;
 use crate::tui::app::{DownloadHistoryEntry, DownloadHistoryStatus, InterruptedDownloadSession};
 
-pub(super) fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
+pub(super) fn load_liked_models(path: Option<&Path>) -> Vec<Model> {
     let Some(path) = path else {
         return Vec::new();
     };
@@ -24,7 +24,7 @@ pub(super) fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
     models
 }
 
-pub(super) fn load_image_bookmarks(path: Option<&Path>) -> Vec<ImageItem> {
+pub(super) fn load_liked_images(path: Option<&Path>) -> Vec<ImageItem> {
     let Some(path) = path else {
         return Vec::new();
     };
@@ -73,12 +73,12 @@ pub(super) fn load_search_templates(path: Option<&Path>) -> SearchTemplateStore 
     serde_json::from_str::<SearchTemplateStore>(&content).unwrap_or_default()
 }
 
-pub(super) fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
+pub(super) fn save_liked_models_to_file(path: &Path, liked_models: &[Model]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
 
-    let mut normalized = bookmarks.to_vec();
+    let mut normalized = liked_models.to_vec();
     let mut seen = HashSet::new();
     normalized.retain(|model| seen.insert(model.id));
 
@@ -87,15 +87,15 @@ pub(super) fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result
     Ok(())
 }
 
-pub(super) fn save_image_bookmarks_to_file(
+pub(super) fn save_liked_images_to_file(
     path: &Path,
-    bookmarks: &[ImageItem],
+    liked_images: &[ImageItem],
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
 
-    let mut normalized = bookmarks.to_vec();
+    let mut normalized = liked_images.to_vec();
     let mut seen = HashSet::new();
     normalized.retain(|image| seen.insert(image.id));
 
@@ -283,9 +283,9 @@ mod tests {
     }
 
     #[test]
-    fn loads_bookmarks_without_duplicates() {
+    fn loads_liked_models_without_duplicates() {
         let dir = test_dir();
-        let path = dir.join("bookmarks.json");
+        let path = dir.join("liked_models.json");
         write_json(
             &path,
             json!([
@@ -295,10 +295,10 @@ mod tests {
             ]),
         );
 
-        let bookmarks = load_bookmarks(Some(&path));
+        let liked_models = load_liked_models(Some(&path));
 
         assert_eq!(
-            bookmarks.iter().map(|item| item.id).collect::<Vec<_>>(),
+            liked_models.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![1, 2]
         );
     }

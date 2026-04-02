@@ -40,7 +40,7 @@ pub(super) fn draw_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-pub(super) fn draw_saved_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_liked_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let image_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -49,17 +49,18 @@ pub(super) fn draw_saved_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(image_chunks[1]);
-    draw_saved_image_search_summary(f, app, image_chunks[0]);
+    draw_liked_image_search_summary(f, app, image_chunks[0]);
     draw_image_panel(f, app, main_chunks[0]);
     draw_image_sidebar(f, app, main_chunks[1]);
-    if app.mode == AppMode::SearchSavedImages {
-        draw_saved_image_search_popup(f, app);
+    if app.mode == AppMode::SearchLikedImages {
+        draw_liked_image_search_popup(f, app);
     }
 }
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let items = app.active_image_items();
     let selected_index = app.active_image_selected_index();
+    let selected_image_id = items.get(selected_index).map(|img| img.id);
     let total_count = if app.active_tab == MainTab::Images {
         app.image_feed_total_hits
             .unwrap_or(items.len() as u64)
@@ -72,12 +73,26 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         (selected_index + 1).min(items.len()) as u64
     };
-    let title = format!(" Image View ({current_index} / {total_count}) ");
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let is_liked = selected_image_id
+        .map(|image_id| app.active_tab == MainTab::LikedImages || app.is_image_liked(image_id))
+        .unwrap_or(false);
+    let title = if is_liked {
+        format!(" Image View | Liked! ({current_index} / {total_count}) ")
+    } else {
+        format!(" Image View ({current_index} / {total_count}) ")
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(if is_liked {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        })
+        .title(title);
 
     if items.is_empty() {
-        let empty_message = if app.active_tab == MainTab::SavedImages {
-            "No saved images."
+        let empty_message = if app.active_tab == MainTab::LikedImages {
+            "No liked images."
         } else {
             "Loading images..."
         };
@@ -86,7 +101,6 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let item_count = items.len();
-    let selected_image_id = items.get(selected_index).map(|img| img.id);
     let Some(image_id) = selected_image_id else {
         f.render_widget(Paragraph::new("No image selected").block(block), area);
         return;
@@ -333,16 +347,16 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_saved_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
-    let query = if app.image_bookmark_query.is_empty() {
+fn draw_liked_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
+    let query = if app.liked_image_query.is_empty() {
         "<all>"
     } else {
-        &app.image_bookmark_query
+        &app.liked_image_query
     };
     let summary = format!(
-        "🔍 Saved Images Query: \"{}\" | Total: {}",
+        "🔍 Liked Images Query: \"{}\" | Total: {}",
         query,
-        app.visible_image_bookmarks().len()
+        app.visible_liked_images().len()
     );
 
     let para = Paragraph::new(summary)
@@ -444,12 +458,12 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_saved_image_search_popup(f: &mut Frame, app: &App) {
-    let visible_count = app.visible_image_bookmarks().len();
+fn draw_liked_image_search_popup(f: &mut Frame, app: &App) {
+    let visible_count = app.visible_liked_images().len();
     let lines = vec![
         Line::from(vec![
             Span::styled(" Query: ", Style::default().fg(Color::Yellow)),
-            Span::raw(format!("{}█", app.image_bookmark_query_draft)),
+            Span::raw(format!("{}█", app.liked_image_query_draft)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -465,7 +479,7 @@ fn draw_saved_image_search_popup(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Saved Image Search "),
+                .title(" Liked Image Search "),
         )
         .wrap(Wrap { trim: true });
     let area = centered_rect(60, 24, f.area());

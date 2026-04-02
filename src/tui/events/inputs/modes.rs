@@ -20,9 +20,9 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
                 app.set_status("Reset model filters");
                 return Some(LoopControl::Continue);
             }
-            AppMode::SearchSavedModels => {
-                app.bookmark_search_form_draft.reset();
-                app.set_status("Reset saved model filters");
+            AppMode::SearchLikedModels => {
+                app.liked_model_search_form_draft.reset();
+                app.set_status("Reset liked model filters");
                 return Some(LoopControl::Continue);
             }
             AppMode::SearchImages => {
@@ -30,9 +30,9 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
                 app.set_status("Reset image filters");
                 return Some(LoopControl::Continue);
             }
-            AppMode::SearchSavedImages => {
-                app.image_bookmark_query_draft.clear();
-                app.set_status("Reset saved image filter");
+            AppMode::SearchLikedImages => {
+                app.liked_image_query_draft.clear();
+                app.set_status("Reset liked image filter");
                 return Some(LoopControl::Continue);
             }
             _ => {}
@@ -44,8 +44,8 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
         return Some(LoopControl::Continue);
     }
 
-    if app.mode == AppMode::SearchSavedModels {
-        handle_bookmark_search_mode(app, key.code);
+    if app.mode == AppMode::SearchLikedModels {
+        handle_liked_search_mode(app, key.code);
         return Some(LoopControl::Continue);
     }
 
@@ -54,13 +54,13 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
         return Some(LoopControl::Continue);
     }
 
-    if app.mode == AppMode::SearchSavedImages {
-        handle_image_bookmark_search_mode(app, key.code);
+    if app.mode == AppMode::SearchLikedImages {
+        handle_image_liked_search_mode(app, key.code);
         return Some(LoopControl::Continue);
     }
 
-    if app.mode == AppMode::BookmarkPathPrompt {
-        handle_bookmark_path_prompt_mode(app, key.code);
+    if app.mode == AppMode::LikedPathPrompt {
+        handle_liked_path_prompt_mode(app, key.code);
         return Some(LoopControl::Continue);
     }
 
@@ -278,42 +278,42 @@ fn handle_model_search_mode(app: &mut App, code: KeyCode) {
     }
 }
 
-fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
+fn handle_liked_search_mode(app: &mut App, code: KeyCode) {
     if let KeyCode::Char(c) = code
         && matches!(
-            app.bookmark_search_form_draft.focused_section,
+            app.liked_model_search_form_draft.focused_section,
             SearchFormSection::Query | SearchFormSection::Tag
         )
     {
-        if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
-            app.bookmark_search_form_draft.query.push(c);
+        if app.liked_model_search_form_draft.focused_section == SearchFormSection::Query {
+            app.liked_model_search_form_draft.query.push(c);
         } else {
-            app.bookmark_search_form_draft.tag_query.push(c);
+            app.liked_model_search_form_draft.tag_query.push(c);
         }
         return;
     }
 
     if matches!(code, KeyCode::Backspace)
         && matches!(
-            app.bookmark_search_form_draft.focused_section,
+            app.liked_model_search_form_draft.focused_section,
             SearchFormSection::Query | SearchFormSection::Tag
         )
     {
-        if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
-            app.bookmark_search_form_draft.query.pop();
+        if app.liked_model_search_form_draft.focused_section == SearchFormSection::Query {
+            app.liked_model_search_form_draft.query.pop();
         } else {
-            app.bookmark_search_form_draft.tag_query.pop();
+            app.liked_model_search_form_draft.tag_query.pop();
         }
         return;
     }
 
     match code {
-        KeyCode::Esc => app.apply_bookmark_query(),
-        KeyCode::Enter => app.apply_bookmark_query(),
+        KeyCode::Esc => app.apply_liked_model_query(),
+        KeyCode::Enter => app.apply_liked_model_query(),
         KeyCode::Up => {
-            if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
-                app.bookmark_search_form_draft.focused_section =
-                    match app.bookmark_search_form_draft.focused_section {
+            if app.liked_model_search_form_draft.mode == SearchFormMode::Builder {
+                app.liked_model_search_form_draft.focused_section =
+                    match app.liked_model_search_form_draft.focused_section {
                         SearchFormSection::Query => SearchFormSection::BaseModel,
                         SearchFormSection::Sort => SearchFormSection::Query,
                         SearchFormSection::Period => SearchFormSection::Sort,
@@ -324,9 +324,9 @@ fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Down => {
-            if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
-                app.bookmark_search_form_draft.focused_section =
-                    match app.bookmark_search_form_draft.focused_section {
+            if app.liked_model_search_form_draft.mode == SearchFormMode::Builder {
+                app.liked_model_search_form_draft.focused_section =
+                    match app.liked_model_search_form_draft.focused_section {
                         SearchFormSection::Query => SearchFormSection::Sort,
                         SearchFormSection::Sort => SearchFormSection::Period,
                         SearchFormSection::Period => SearchFormSection::Type,
@@ -337,47 +337,47 @@ fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Left => {
-            if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
-                match app.bookmark_search_form_draft.focused_section {
+            if app.liked_model_search_form_draft.mode == SearchFormMode::Builder {
+                match app.liked_model_search_form_draft.focused_section {
                     SearchFormSection::Sort => {
-                        if app.bookmark_search_form_draft.selected_sort > 0 {
-                            app.bookmark_search_form_draft.selected_sort -= 1;
+                        if app.liked_model_search_form_draft.selected_sort > 0 {
+                            app.liked_model_search_form_draft.selected_sort -= 1;
                         } else {
-                            app.bookmark_search_form_draft.selected_sort = app
-                                .bookmark_search_form_draft
+                            app.liked_model_search_form_draft.selected_sort = app
+                                .liked_model_search_form_draft
                                 .sort_options
                                 .len()
                                 .saturating_sub(1);
                         }
                     }
                     SearchFormSection::Period => {
-                        if app.bookmark_search_form_draft.selected_period > 0 {
-                            app.bookmark_search_form_draft.selected_period -= 1;
+                        if app.liked_model_search_form_draft.selected_period > 0 {
+                            app.liked_model_search_form_draft.selected_period -= 1;
                         } else {
-                            app.bookmark_search_form_draft.selected_period = app
-                                .bookmark_search_form_draft
+                            app.liked_model_search_form_draft.selected_period = app
+                                .liked_model_search_form_draft
                                 .periods
                                 .len()
                                 .saturating_sub(1);
                         }
                     }
                     SearchFormSection::Type => {
-                        if app.bookmark_search_form_draft.type_cursor > 0 {
-                            app.bookmark_search_form_draft.type_cursor -= 1;
+                        if app.liked_model_search_form_draft.type_cursor > 0 {
+                            app.liked_model_search_form_draft.type_cursor -= 1;
                         } else {
-                            app.bookmark_search_form_draft.type_cursor = app
-                                .bookmark_search_form_draft
+                            app.liked_model_search_form_draft.type_cursor = app
+                                .liked_model_search_form_draft
                                 .type_options
                                 .len()
                                 .saturating_sub(1);
                         }
                     }
                     SearchFormSection::BaseModel => {
-                        if app.bookmark_search_form_draft.base_cursor > 0 {
-                            app.bookmark_search_form_draft.base_cursor -= 1;
+                        if app.liked_model_search_form_draft.base_cursor > 0 {
+                            app.liked_model_search_form_draft.base_cursor -= 1;
                         } else {
-                            app.bookmark_search_form_draft.base_cursor = app
-                                .bookmark_search_form_draft
+                            app.liked_model_search_form_draft.base_cursor = app
+                                .liked_model_search_form_draft
                                 .base_options
                                 .len()
                                 .saturating_sub(1);
@@ -388,62 +388,64 @@ fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Right => {
-            if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
-                match app.bookmark_search_form_draft.focused_section {
+            if app.liked_model_search_form_draft.mode == SearchFormMode::Builder {
+                match app.liked_model_search_form_draft.focused_section {
                     SearchFormSection::Sort => {
-                        app.bookmark_search_form_draft.selected_sort =
-                            (app.bookmark_search_form_draft.selected_sort + 1)
-                                % app.bookmark_search_form_draft.sort_options.len();
+                        app.liked_model_search_form_draft.selected_sort =
+                            (app.liked_model_search_form_draft.selected_sort + 1)
+                                % app.liked_model_search_form_draft.sort_options.len();
                     }
                     SearchFormSection::Period => {
-                        app.bookmark_search_form_draft.selected_period =
-                            (app.bookmark_search_form_draft.selected_period + 1)
-                                % app.bookmark_search_form_draft.periods.len();
+                        app.liked_model_search_form_draft.selected_period =
+                            (app.liked_model_search_form_draft.selected_period + 1)
+                                % app.liked_model_search_form_draft.periods.len();
                     }
                     SearchFormSection::Type => {
-                        app.bookmark_search_form_draft.type_cursor =
-                            (app.bookmark_search_form_draft.type_cursor + 1)
-                                % app.bookmark_search_form_draft.type_options.len();
+                        app.liked_model_search_form_draft.type_cursor =
+                            (app.liked_model_search_form_draft.type_cursor + 1)
+                                % app.liked_model_search_form_draft.type_options.len();
                     }
                     SearchFormSection::BaseModel => {
-                        app.bookmark_search_form_draft.base_cursor =
-                            (app.bookmark_search_form_draft.base_cursor + 1)
-                                % app.bookmark_search_form_draft.base_options.len();
+                        app.liked_model_search_form_draft.base_cursor =
+                            (app.liked_model_search_form_draft.base_cursor + 1)
+                                % app.liked_model_search_form_draft.base_options.len();
                     }
                     SearchFormSection::Tag | SearchFormSection::Query => {}
                 }
             }
         }
-        KeyCode::Char('f') => app.bookmark_search_form_draft.begin_builder(),
+        KeyCode::Char('f') => app.liked_model_search_form_draft.begin_builder(),
         KeyCode::Char(' ') => {
-            if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
-                match app.bookmark_search_form_draft.focused_section {
+            if app.liked_model_search_form_draft.mode == SearchFormMode::Builder {
+                match app.liked_model_search_form_draft.focused_section {
                     SearchFormSection::Type => {
                         if let Some(item) = app
-                            .bookmark_search_form_draft
+                            .liked_model_search_form_draft
                             .type_options
-                            .get(app.bookmark_search_form_draft.type_cursor)
+                            .get(app.liked_model_search_form_draft.type_cursor)
                             .cloned()
                             && !app
-                                .bookmark_search_form_draft
+                                .liked_model_search_form_draft
                                 .selected_types
                                 .insert(item.clone())
                         {
-                            app.bookmark_search_form_draft.selected_types.remove(&item);
+                            app.liked_model_search_form_draft
+                                .selected_types
+                                .remove(&item);
                         }
                     }
                     SearchFormSection::BaseModel => {
                         if let Some(item) = app
-                            .bookmark_search_form_draft
+                            .liked_model_search_form_draft
                             .base_options
-                            .get(app.bookmark_search_form_draft.base_cursor)
+                            .get(app.liked_model_search_form_draft.base_cursor)
                             .cloned()
                             && !app
-                                .bookmark_search_form_draft
+                                .liked_model_search_form_draft
                                 .selected_base_models
                                 .insert(item.clone())
                         {
-                            app.bookmark_search_form_draft
+                            app.liked_model_search_form_draft
                                 .selected_base_models
                                 .remove(&item);
                         }
@@ -768,25 +770,25 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
     }
 }
 
-fn handle_image_bookmark_search_mode(app: &mut App, code: KeyCode) {
+fn handle_image_liked_search_mode(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc => app.apply_image_bookmark_query(),
-        KeyCode::Enter => app.apply_image_bookmark_query(),
-        KeyCode::Char(c) => app.image_bookmark_query_draft.push(c),
+        KeyCode::Esc => app.apply_liked_image_query(),
+        KeyCode::Enter => app.apply_liked_image_query(),
+        KeyCode::Char(c) => app.liked_image_query_draft.push(c),
         KeyCode::Backspace => {
-            app.image_bookmark_query_draft.pop();
+            app.liked_image_query_draft.pop();
         }
         _ => {}
     }
 }
 
-fn handle_bookmark_path_prompt_mode(app: &mut App, code: KeyCode) {
+fn handle_liked_path_prompt_mode(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc => app.cancel_bookmark_path_prompt(),
-        KeyCode::Enter => app.apply_bookmark_path_prompt(),
-        KeyCode::Char(c) => app.bookmark_path_draft.push(c),
+        KeyCode::Esc => app.cancel_liked_model_path_prompt(),
+        KeyCode::Enter => app.apply_liked_model_path_prompt(),
+        KeyCode::Char(c) => app.liked_model_path_draft.push(c),
         KeyCode::Backspace => {
-            app.bookmark_path_draft.pop();
+            app.liked_model_path_draft.pop();
         }
         _ => {}
     }
@@ -895,8 +897,8 @@ fn handle_settings_edit_mode(app: &mut App, code: KeyCode) {
                         app.settings_form.input_buffer.clone(),
                     ))
                 };
-                app.config.bookmark_file_path = path.clone();
-                app.bookmark_file_path = path;
+                app.config.liked_model_file_path = path.clone();
+                app.liked_model_file_path = path;
             } else if app.settings_form.focused_field == 11 {
                 let path = if app.settings_form.input_buffer.is_empty() {
                     None

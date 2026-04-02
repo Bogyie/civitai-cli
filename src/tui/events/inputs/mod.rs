@@ -33,9 +33,9 @@ pub async fn run_event_loop(
         let poll_timeout_ms = match app.mode {
             AppMode::SearchForm
             | AppMode::SearchImages
-            | AppMode::SearchSavedModels
-            | AppMode::SearchSavedImages
-            | AppMode::BookmarkPathPrompt => 200,
+            | AppMode::SearchLikedModels
+            | AppMode::SearchLikedImages
+            | AppMode::LikedPathPrompt => 200,
             _ => 50,
         };
 
@@ -109,11 +109,11 @@ fn handle_resize(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Models | MainTab::SavedModels => {
+        MainTab::Models | MainTab::LikedModels => {
             reload_selected_model_cover(app);
             send_cover_prefetch(app);
         }
-        MainTab::Images | MainTab::SavedImages => {
+        MainTab::Images | MainTab::LikedImages => {
             reload_selected_image(app);
         }
         _ => {}
@@ -127,7 +127,7 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
         || app.show_image_prompt_modal
         || app.show_image_tags_modal
         || app.show_image_model_detail_modal
-        || app.show_bookmark_confirm_modal
+        || app.show_like_confirm_modal
         || app.show_search_template_modal
         || app.show_exit_confirm_modal
         || app.show_resume_download_modal
@@ -135,9 +135,9 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
             app.mode,
             AppMode::SearchForm
                 | AppMode::SearchImages
-                | AppMode::SearchSavedModels
-                | AppMode::SearchSavedImages
-                | AppMode::BookmarkPathPrompt
+                | AppMode::SearchLikedModels
+                | AppMode::SearchLikedImages
+                | AppMode::LikedPathPrompt
         )
         || (app.active_tab == MainTab::Settings && app.settings_form.editing)
     {
@@ -146,17 +146,17 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
 
     match code {
         KeyCode::Char('1') => switch_tab(app, MainTab::Models),
-        KeyCode::Char('2') => switch_tab(app, MainTab::SavedModels),
+        KeyCode::Char('2') => switch_tab(app, MainTab::LikedModels),
         KeyCode::Char('3') => switch_tab(app, MainTab::Images),
-        KeyCode::Char('4') => switch_tab(app, MainTab::SavedImages),
+        KeyCode::Char('4') => switch_tab(app, MainTab::LikedImages),
         KeyCode::Char('5') => switch_tab(app, MainTab::Downloads),
         KeyCode::Char('6') => switch_tab(app, MainTab::Settings),
         KeyCode::Tab => {
             let next = match app.active_tab {
-                MainTab::Models => MainTab::SavedModels,
-                MainTab::SavedModels => MainTab::Images,
-                MainTab::Images => MainTab::SavedImages,
-                MainTab::SavedImages => MainTab::Downloads,
+                MainTab::Models => MainTab::LikedModels,
+                MainTab::LikedModels => MainTab::Images,
+                MainTab::Images => MainTab::LikedImages,
+                MainTab::LikedImages => MainTab::Downloads,
                 MainTab::Downloads => MainTab::Settings,
                 MainTab::Settings => MainTab::Models,
             };
@@ -165,10 +165,10 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
         KeyCode::BackTab => {
             let prev = match app.active_tab {
                 MainTab::Models => MainTab::Settings,
-                MainTab::SavedModels => MainTab::Models,
-                MainTab::Images => MainTab::SavedModels,
-                MainTab::SavedImages => MainTab::Images,
-                MainTab::Downloads => MainTab::SavedImages,
+                MainTab::LikedModels => MainTab::Models,
+                MainTab::Images => MainTab::LikedModels,
+                MainTab::LikedImages => MainTab::Images,
+                MainTab::Downloads => MainTab::LikedImages,
                 MainTab::Settings => MainTab::Downloads,
             };
             switch_tab(app, prev);
@@ -184,15 +184,15 @@ fn switch_tab(app: &mut App, target: MainTab) {
     app.active_tab = target;
     app.mode = AppMode::Browsing;
     match app.active_tab {
-        MainTab::SavedModels => app.clamp_bookmark_selection(),
+        MainTab::LikedModels => app.clamp_liked_model_selection(),
         MainTab::Images => {
             if prev_tab != MainTab::Images {
                 request_image_feed_if_needed(app, None);
             }
             ensure_selected_image_loaded(app);
         }
-        MainTab::SavedImages => {
-            app.clamp_image_bookmark_selection();
+        MainTab::LikedImages => {
+            app.clamp_liked_image_selection();
             ensure_selected_image_loaded(app);
         }
         _ => {}

@@ -165,7 +165,7 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
             }
             KeyCode::Char('b') => {
                 if let Some(model) = app.image_model_detail_model.clone() {
-                    app.toggle_bookmark_for_selected_model(&model);
+                    app.toggle_like_for_selected_model(&model);
                 }
             }
             KeyCode::Char('d') => {
@@ -212,16 +212,16 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
         return Some(ModalKeyOutcome::Consumed);
     }
 
-    if app.show_bookmark_confirm_modal {
+    if app.show_like_confirm_modal {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 close_modal_and_refresh_image(app, |app| {
-                    app.confirm_remove_selected_bookmark();
+                    app.confirm_remove_selected_like();
                 });
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 close_modal_and_refresh_image(app, |app| {
-                    app.cancel_bookmark_remove();
+                    app.cancel_like_remove();
                 });
             }
             _ => {}

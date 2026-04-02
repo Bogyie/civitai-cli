@@ -121,16 +121,16 @@ impl App {
         suggestions
     }
 
-    pub fn visible_image_bookmarks(&self) -> &[ImageItem] {
-        &self.visible_image_bookmarks_cache
+    pub fn visible_liked_images(&self) -> &[ImageItem] {
+        &self.visible_liked_images_cache
     }
 
-    pub(super) fn refresh_visible_image_bookmarks_cache(&mut self) {
-        let query = self.image_bookmark_query.trim().to_ascii_lowercase();
-        self.visible_image_bookmarks_cache = if query.is_empty() {
-            self.image_bookmarks.clone()
+    pub(super) fn refresh_visible_liked_images_cache(&mut self) {
+        let query = self.liked_image_query.trim().to_ascii_lowercase();
+        self.visible_liked_images_cache = if query.is_empty() {
+            self.liked_images.clone()
         } else {
-            self.image_bookmarks
+            self.liked_images
                 .iter()
                 .filter(|image| {
                     let username = image
@@ -158,27 +158,27 @@ impl App {
         };
     }
 
-    pub fn clamp_image_bookmark_selection(&mut self) {
-        let visible = self.visible_image_bookmarks();
+    pub fn clamp_liked_image_selection(&mut self) {
+        let visible = self.visible_liked_images();
         if visible.is_empty() {
-            self.selected_image_bookmark_index = 0;
-            self.image_bookmark_list_state.select(None);
+            self.selected_liked_image_index = 0;
+            self.liked_image_list_state.select(None);
             return;
         }
 
-        if self.selected_image_bookmark_index >= visible.len() {
-            self.selected_image_bookmark_index = visible.len() - 1;
+        if self.selected_liked_image_index >= visible.len() {
+            self.selected_liked_image_index = visible.len() - 1;
         }
-        self.image_bookmark_list_state
-            .select(Some(self.selected_image_bookmark_index));
+        self.liked_image_list_state
+            .select(Some(self.selected_liked_image_index));
     }
 
     pub fn selected_image_in_active_view(&self) -> Option<&ImageItem> {
         match self.active_tab {
             MainTab::Images => self.images.get(self.selected_index),
-            MainTab::SavedImages => self
-                .visible_image_bookmarks()
-                .get(self.selected_image_bookmark_index),
+            MainTab::LikedImages => self
+                .visible_liked_images()
+                .get(self.selected_liked_image_index),
             _ => None,
         }
     }
@@ -186,7 +186,7 @@ impl App {
     pub fn active_image_items(&self) -> &[ImageItem] {
         match self.active_tab {
             MainTab::Images => &self.images,
-            MainTab::SavedImages => self.visible_image_bookmarks(),
+            MainTab::LikedImages => self.visible_liked_images(),
             _ => &[],
         }
     }
@@ -194,7 +194,7 @@ impl App {
     pub fn active_image_selected_index(&self) -> usize {
         match self.active_tab {
             MainTab::Images => self.selected_index,
-            MainTab::SavedImages => self.selected_image_bookmark_index,
+            MainTab::LikedImages => self.selected_liked_image_index,
             _ => 0,
         }
     }
@@ -253,12 +253,12 @@ impl App {
         }
 
         if let Some(existing) = self
-            .image_bookmarks
+            .liked_images
             .iter_mut()
             .find(|item| item.id == image.id)
         {
             *existing = image.clone();
-            self.refresh_visible_image_bookmarks_cache();
+            self.refresh_visible_liked_images_cache();
         }
     }
 
@@ -348,7 +348,7 @@ impl App {
                 let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
                 self.set_status(format!("Downloading image {}...", img.id));
             }
-        } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
+        } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::LikedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.request_download_for_model(&model);
@@ -555,7 +555,7 @@ impl App {
     }
 
     pub fn select_next_image_model(&mut self) {
-        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::SavedImages) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::LikedImages) {
             return;
         }
         if let Some(image) = self.selected_image_in_active_view() {
@@ -571,7 +571,7 @@ impl App {
     }
 
     pub fn select_previous_image_model(&mut self) {
-        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::SavedImages) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::LikedImages) {
             return;
         }
         if let Some(image) = self.selected_image_in_active_view() {
@@ -685,59 +685,57 @@ impl App {
             .collect()
     }
 
-    pub fn is_image_bookmarked(&self, image_id: u64) -> bool {
-        self.image_bookmarks
-            .iter()
-            .any(|image| image.id == image_id)
+    pub fn is_image_liked(&self, image_id: u64) -> bool {
+        self.liked_images.iter().any(|image| image.id == image_id)
     }
 
-    pub fn toggle_bookmark_for_selected_image(&mut self, image: &ImageItem) {
-        if self.is_image_bookmarked(image.id) {
-            self.image_bookmarks.retain(|item| item.id != image.id);
-            self.set_status(format!("Removed image bookmark: {}", image.id));
+    pub fn toggle_like_for_selected_image(&mut self, image: &ImageItem) {
+        if self.is_image_liked(image.id) {
+            self.liked_images.retain(|item| item.id != image.id);
+            self.set_status(format!("Removed image liked: {}", image.id));
         } else {
-            self.image_bookmarks.push(image.clone());
-            self.set_status(format!("Added image bookmark: {}", image.id));
+            self.liked_images.push(image.clone());
+            self.set_status(format!("Added image liked: {}", image.id));
         }
-        self.deduplicate_image_bookmarks();
-        self.refresh_visible_image_bookmarks_cache();
-        if self.active_tab == MainTab::SavedImages {
-            self.clamp_image_bookmark_selection();
+        self.deduplicate_liked_images();
+        self.refresh_visible_liked_images_cache();
+        if self.active_tab == MainTab::LikedImages {
+            self.clamp_liked_image_selection();
         }
-        self.persist_image_bookmarks();
+        self.persist_liked_images();
     }
 
-    pub fn begin_image_bookmark_search(&mut self) {
-        self.image_bookmark_query_draft = self.image_bookmark_query.clone();
-        self.mode = AppMode::SearchSavedImages;
-        self.set_status("Search image bookmarks. Enter/Esc apply, close");
+    pub fn begin_liked_image_search(&mut self) {
+        self.liked_image_query_draft = self.liked_image_query.clone();
+        self.mode = AppMode::SearchLikedImages;
+        self.set_status("Search liked images. Enter/Esc apply and close");
     }
 
-    pub fn apply_image_bookmark_query(&mut self) {
-        self.image_bookmark_query = self.image_bookmark_query_draft.clone();
-        self.refresh_visible_image_bookmarks_cache();
+    pub fn apply_liked_image_query(&mut self) {
+        self.liked_image_query = self.liked_image_query_draft.clone();
+        self.refresh_visible_liked_images_cache();
         self.mode = AppMode::Browsing;
-        self.clamp_image_bookmark_selection();
+        self.clamp_liked_image_selection();
         self.set_status(format!(
-            "Image bookmark query applied: {}",
-            if self.image_bookmark_query.is_empty() {
+            "Liked image filter applied: {}",
+            if self.liked_image_query.is_empty() {
                 "<all>".to_string()
             } else {
-                self.image_bookmark_query.clone()
+                self.liked_image_query.clone()
             }
         ));
     }
 
-    pub(super) fn deduplicate_image_bookmarks(&mut self) {
+    pub(super) fn deduplicate_liked_images(&mut self) {
         let mut seen = HashSet::new();
-        self.image_bookmarks.retain(|image| seen.insert(image.id));
+        self.liked_images.retain(|image| seen.insert(image.id));
     }
 
-    pub fn persist_image_bookmarks(&mut self) {
-        if let Some(path) = &self.image_bookmark_file_path
-            && let Err(err) = save_image_bookmarks_to_file(path, &self.image_bookmarks)
+    pub fn persist_liked_images(&mut self) {
+        if let Some(path) = &self.liked_image_file_path
+            && let Err(err) = save_liked_images_to_file(path, &self.liked_images)
         {
-            self.set_error("Failed to persist image bookmarks", err.to_string());
+            self.set_error("Failed to persist liked images", err.to_string());
         }
     }
 

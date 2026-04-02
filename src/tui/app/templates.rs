@@ -119,7 +119,7 @@ impl App {
         self.search_template_name_editing = false;
         self.search_template_name_draft.clear();
         self.clamp_search_template_selection();
-        self.set_status(format!("Saved template \"{}\"", name));
+        self.set_status(format!("Liked template \"{}\"", name));
     }
 
     pub fn delete_selected_search_template(&mut self) {

@@ -28,21 +28,21 @@ fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'stati
     let inner_width = width.saturating_sub(2) as usize;
     let full = [
         "Models (1)",
-        "Saved (2)",
+        "Liked Models (2)",
         "Images (3)",
-        "Saved Images (4)",
+        "Liked Images (4)",
         "Downloads (5)",
         "Settings (6)",
     ];
     let medium = [
         "Models(1)",
-        "Saved(2)",
+        "Liked Models(2)",
         "Images(3)",
-        "Saved Img(4)",
+        "Liked Images(4)",
         "Down(5)",
         "Settings(6)",
     ];
-    let compact = ["M1", "S2", "I3", "SI4", "D5", "Set6"];
+    let compact = ["M1", "LM2", "I3", "LI4", "D5", "Set6"];
 
     let full_divider = " | ";
     let compact_divider = "|";
@@ -97,9 +97,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let (titles, divider, block_title) = tab_layout_for_width(chunks[0].width);
     let active_idx = match app.active_tab {
         MainTab::Models => 0,
-        MainTab::SavedModels => 1,
+        MainTab::LikedModels => 1,
         MainTab::Images => 2,
-        MainTab::SavedImages => 3,
+        MainTab::LikedImages => 3,
         MainTab::Downloads => 4,
         MainTab::Settings => 5,
     };
@@ -107,9 +107,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.mode,
         AppMode::SearchForm
             | AppMode::SearchImages
-            | AppMode::SearchSavedModels
-            | AppMode::SearchSavedImages
-            | AppMode::BookmarkPathPrompt
+            | AppMode::SearchLikedModels
+            | AppMode::SearchLikedImages
+            | AppMode::LikedPathPrompt
     );
 
     let tabs = Tabs::new(titles)
@@ -135,16 +135,17 @@ mod tests {
 
     #[test]
     fn uses_full_tabs_when_space_allows() {
-        let (titles, divider, title) = tab_layout_for_width(90);
+        let (titles, divider, title) = tab_layout_for_width(110);
         assert_eq!(divider, " | ");
-        assert_eq!(titles[3], "Saved Images (4)");
+        assert_eq!(titles[3], "Liked Images (4)");
         assert_eq!(title, " Civitai CLI | [1-6] Switch tab ");
     }
 
     #[test]
     fn falls_back_to_medium_tabs_for_tighter_widths() {
-        let (titles, divider, title) = tab_layout_for_width(70);
+        let (titles, divider, title) = tab_layout_for_width(90);
         assert_eq!(divider, "|");
+        assert_eq!(titles[1], "Liked Models(2)");
         assert_eq!(titles[4], "Down(5)");
         assert_eq!(title, " Civitai | [1-6] Tabs ");
     }
@@ -153,6 +154,7 @@ mod tests {
     fn falls_back_to_compact_tabs_for_narrow_widths() {
         let (titles, divider, title) = tab_layout_for_width(30);
         assert_eq!(divider, "|");
+        assert_eq!(titles[1], "LM2");
         assert_eq!(titles[4], "D5");
         assert_eq!(title, " Tabs ");
     }

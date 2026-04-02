@@ -29,7 +29,7 @@ pub(super) fn draw_models_tab(f: &mut Frame, app: &mut App, area: Rect, enable_n
 
     draw_model_search_summary(f, app, model_chunks[0]);
     let selected_model = app.selected_model_in_active_view().cloned();
-    let bookmarked_ids: Vec<u64> = app.bookmarks.iter().map(|model| model.id).collect();
+    let liked_ids: Vec<u64> = app.liked_models.iter().map(|model| model.id).collect();
 
     if app.show_model_details {
         let split = Layout::default()
@@ -43,7 +43,7 @@ pub(super) fn draw_models_tab(f: &mut Frame, app: &mut App, area: Rect, enable_n
             split[0],
             &app.models,
             &app.model_list_state,
-            &bookmarked_ids,
+            &liked_ids,
             enable_name_rolling,
         );
         draw_model_sidebar(f, app, split[1], selected_model.as_ref());
@@ -54,7 +54,7 @@ pub(super) fn draw_models_tab(f: &mut Frame, app: &mut App, area: Rect, enable_n
             model_chunks[1],
             &app.models,
             &app.model_list_state,
-            &bookmarked_ids,
+            &liked_ids,
             enable_name_rolling,
         );
     }
@@ -64,58 +64,58 @@ pub(super) fn draw_models_tab(f: &mut Frame, app: &mut App, area: Rect, enable_n
     }
 }
 
-pub(super) fn draw_saved_models_tab(
+pub(super) fn draw_liked_models_tab(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
     enable_name_rolling: bool,
 ) {
-    let bookmark_items = app.visible_bookmarks();
-    let bookmark_chunks = Layout::default()
+    let liked_items = app.visible_liked_models();
+    let liked_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(area);
-    let selected_bookmark_model = app.selected_model_in_active_view().cloned();
+    let selected_liked_model = app.selected_model_in_active_view().cloned();
 
-    draw_bookmark_search_summary(f, app, bookmark_chunks[0]);
+    draw_liked_model_search_summary(f, app, liked_chunks[0]);
     if app.show_model_details {
         let split = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(34), Constraint::Percentage(66)])
-            .split(bookmark_chunks[1]);
+            .split(liked_chunks[1]);
 
         draw_model_list(
             app,
             f,
             split[0],
-            bookmark_items,
-            &app.bookmark_list_state,
+            liked_items,
+            &app.liked_model_list_state,
             &[],
             enable_name_rolling,
         );
-        draw_model_sidebar(f, app, split[1], selected_bookmark_model.as_ref());
+        draw_model_sidebar(f, app, split[1], selected_liked_model.as_ref());
     } else {
         draw_model_list(
             app,
             f,
-            bookmark_chunks[1],
-            bookmark_items,
-            &app.bookmark_list_state,
+            liked_chunks[1],
+            liked_items,
+            &app.liked_model_list_state,
             &[],
             enable_name_rolling,
         );
     }
 
-    if app.mode == AppMode::SearchSavedModels {
+    if app.mode == AppMode::SearchLikedModels {
         draw_search_popup(
             f,
-            &app.bookmark_search_form_draft,
-            "Saved Filters",
-            "Saved Search",
+            &app.liked_model_search_form_draft,
+            "Liked Filters",
+            "Liked Search",
         );
     }
-    if app.mode == AppMode::BookmarkPathPrompt {
-        draw_bookmark_path_prompt(f, app);
+    if app.mode == AppMode::LikedPathPrompt {
+        draw_liked_model_path_prompt(f, app);
     }
 }
 
@@ -179,54 +179,54 @@ fn draw_model_search_summary(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
-    let query = if app.bookmark_search_form.query.is_empty() {
+fn draw_liked_model_search_summary(f: &mut Frame, app: &App, area: Rect) {
+    let query = if app.liked_model_search_form.query.is_empty() {
         "<all>"
     } else {
-        &app.bookmark_search_form.query
+        &app.liked_model_search_form.query
     };
-    let selected_types = if app.bookmark_search_form.selected_types.is_empty() {
+    let selected_types = if app.liked_model_search_form.selected_types.is_empty() {
         "All".to_string()
     } else {
-        app.bookmark_search_form
+        app.liked_model_search_form
             .selected_types
             .iter()
             .map(|item| item.label().to_string())
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let selected_bases = if app.bookmark_search_form.selected_base_models.is_empty() {
+    let selected_bases = if app.liked_model_search_form.selected_base_models.is_empty() {
         "All".to_string()
     } else {
-        app.bookmark_search_form
+        app.liked_model_search_form
             .selected_base_models
             .iter()
             .map(|item| item.label().to_string())
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let selected_tags = if app.bookmark_search_form.tag_query.trim().is_empty() {
+    let selected_tags = if app.liked_model_search_form.tag_query.trim().is_empty() {
         "All".to_string()
     } else {
-        app.bookmark_search_form.tag_query.trim().to_string()
+        app.liked_model_search_form.tag_query.trim().to_string()
     };
     let summary = format!(
         "🔖 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Period: {} | Total: {}",
         query,
         selected_types,
         selected_tags,
-        app.bookmark_search_form
+        app.liked_model_search_form
             .sort_options
-            .get(app.bookmark_search_form.selected_sort)
+            .get(app.liked_model_search_form.selected_sort)
             .map(|sort| sort.label().to_string())
             .unwrap_or_else(|| "Relevance".into()),
         selected_bases,
-        app.bookmark_search_form
+        app.liked_model_search_form
             .periods
-            .get(app.bookmark_search_form.selected_period)
+            .get(app.liked_model_search_form.selected_period)
             .map(|period| period.label())
             .unwrap_or("AllTime"),
-        app.visible_bookmarks().len()
+        app.visible_liked_models().len()
     );
 
     let para = Paragraph::new(summary)
@@ -246,7 +246,7 @@ fn draw_model_list(
     area: Rect,
     models: &[civitai_cli::sdk::SearchModelHit],
     list_state: &ListState,
-    bookmarked_ids: &[u64],
+    likeded_ids: &[u64],
     enable_name_rolling: bool,
 ) {
     let block = Block::default()
@@ -274,7 +274,7 @@ fn draw_model_list(
         let metrics = app.parsed_model_metrics(model);
         let creator = creator_name(model).unwrap_or_else(|| "unknown".to_string());
         let mut display_name = model_name(model);
-        let is_bookmarked = bookmarked_ids.contains(&model.id);
+        let is_likeded = likeded_ids.contains(&model.id);
         let has_version_id = !app.parsed_model_versions(model).is_empty();
 
         if enable_name_rolling && is_selected && display_name.chars().count() > name_width {
@@ -286,7 +286,7 @@ fn draw_model_list(
             display_name = rotate_left_chars(&display_name, shift);
         }
 
-        let title_style = if is_bookmarked {
+        let title_style = if is_likeded {
             Style::default().fg(Color::Green)
         } else if !has_version_id {
             Style::default().fg(Color::DarkGray)
@@ -1024,12 +1024,12 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
     f.render_widget(help, sections[6]);
 }
 
-fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
+fn draw_liked_model_path_prompt(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Saved List Path ");
+        .title(" Liked List Path ");
 
-    let action = if app.is_bookmark_export_prompt() {
+    let action = if app.is_liked_model_export_prompt() {
         "Export"
     } else {
         "Import"
@@ -1040,7 +1040,7 @@ fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
                 format!("{} Path: ", action),
                 Style::default().fg(Color::Yellow),
             ),
-            Span::raw(format!("{}█", app.bookmark_path_draft)),
+            Span::raw(format!("{}█", app.liked_model_path_draft)),
         ]),
         Line::from(""),
         Line::from(Span::styled(

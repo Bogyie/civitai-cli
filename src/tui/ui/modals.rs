@@ -43,8 +43,8 @@ pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
         draw_image_model_detail_modal(f, app);
     }
 
-    if app.show_bookmark_confirm_modal {
-        draw_bookmark_confirm_modal(f, app);
+    if app.show_like_confirm_modal {
+        draw_liked_confirm_modal(f, app);
     }
 
     if app.show_search_template_modal {
@@ -302,13 +302,13 @@ fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
     f.render_widget(Clear, area);
 
     let title = if let Some(model) = app.image_model_detail_model.as_ref() {
-        let bookmark_label = if app.is_model_bookmarked(model.id) {
-            "Bookmarked"
+        let liked_label = if app.is_model_liked(model.id) {
+            "Liked"
         } else {
-            "b: Bookmark"
+            "b: Like"
         };
         format!(
-            " Model Details | [←/→] Version | [J/K] Files | [d] Download | [{bookmark_label}] | [Esc] Close "
+            " Model Details | [←/→] Version | [J/K] Files | [d] Download | [{liked_label}] | [Esc] Close "
         )
     } else {
         " Model Details | Loading... | [Esc] Close ".to_string()
@@ -446,9 +446,9 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
 
     let title = match app.active_tab {
         MainTab::Models => "Models",
-        MainTab::SavedModels => "Saved",
+        MainTab::LikedModels => "Liked",
         MainTab::Images => "Images",
-        MainTab::SavedImages => "Saved Images",
+        MainTab::LikedImages => "Liked Images",
         MainTab::Downloads => "Downloads",
         MainTab::Settings => "Settings",
     };
@@ -471,7 +471,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(header, sections[0]);
 
     let nav = Paragraph::new(match app.active_tab {
-        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
+        MainTab::Models | MainTab::LikedModels | MainTab::Images | MainTab::LikedImages => vec![
             Line::from(" [1-6] Switch tabs"),
             Line::from(" [M] Open status history"),
             Line::from(" [j/k] or [↑/↓] Move selection"),
@@ -491,7 +491,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(nav, sections[1]);
 
     let search = Paragraph::new(match app.active_tab {
-        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
+        MainTab::Models | MainTab::LikedModels | MainTab::Images | MainTab::LikedImages => vec![
             Line::from(" [/] Quick search"),
             Line::from(" [f] Open filter builder"),
             Line::from(" [Enter] Apply search / run selected action"),
@@ -523,21 +523,21 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [←/→] Change version"),
             Line::from(" [Shift+↑/↓] or [J/K] Change file"),
             Line::from(" [d] Download selected file"),
-            Line::from(" [b] Bookmark selected model"),
+            Line::from(" [b] Liked selected model"),
             Line::from(" [r] Refresh current search  [c] Clear model search cache"),
         ],
-        MainTab::SavedModels => vec![
+        MainTab::LikedModels => vec![
             Line::from(" [v] Toggle detail panel"),
             Line::from(" [←/→] Change version"),
             Line::from(" [Shift+↑/↓] or [J/K] Change file"),
             Line::from(" [d] Download selected file"),
-            Line::from(" [b] Remove selected saved model"),
-            Line::from(" [e] Export saved list  [i] Import saved list"),
+            Line::from(" [b] Remove selected liked model"),
+            Line::from(" [e] Export liked list  [i] Import liked list"),
         ],
         MainTab::Images => vec![
             Line::from(" [↑/↓] Change image"),
             Line::from(" [d] Download current image"),
-            Line::from(" [b] Bookmark current image"),
+            Line::from(" [b] Liked current image"),
             Line::from(" [m] Open full prompt viewer"),
             Line::from(" [t] Open full tag viewer"),
             Line::from(" [a] Toggle advanced metadata"),
@@ -546,10 +546,10 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [Enter] Open selected model details"),
             Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
         ],
-        MainTab::SavedImages => vec![
+        MainTab::LikedImages => vec![
             Line::from(" [↑/↓] Change image"),
             Line::from(" [d] Download current image"),
-            Line::from(" [b] Remove current saved image"),
+            Line::from(" [b] Remove current liked image"),
             Line::from(" [m] Open full prompt viewer"),
             Line::from(" [t] Open full tag viewer"),
             Line::from(" [a] Toggle advanced metadata"),
@@ -569,7 +569,9 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [j/k] Move between controls"),
             Line::from(" [Enter] Edit or run selected control"),
             Line::from(" [h/l] Cycle media quality"),
-            Line::from(" Clear All Caches keeps bookmarks, tags, settings, and history"),
+            Line::from(
+                " Clear All Caches keeps liked models, liked images, tags, settings, and history",
+            ),
         ],
     };
     let actions = Paragraph::new(actions_lines)
@@ -589,18 +591,18 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(footer, sections[4]);
 }
 
-fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
+fn draw_liked_confirm_modal(f: &mut Frame, app: &App) {
     let name = app
-        .pending_bookmark_remove_id
-        .and_then(|model_id| app.bookmarks.iter().find(|model| model.id == model_id))
+        .pending_liked_model_remove_id
+        .and_then(|model_id| app.liked_models.iter().find(|model| model.id == model_id))
         .map(model_name)
-        .unwrap_or_else(|| "selected bookmark".to_string());
+        .unwrap_or_else(|| "selected liked".to_string());
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Remove Bookmark ");
+        .title(" Remove Liked ");
     let lines = vec![
-        Line::from(format!("Remove bookmark: {}", name)),
+        Line::from(format!("Remove liked: {}", name)),
         Line::from(""),
         Line::from(Span::styled(
             "Press Y to confirm, N or Esc to cancel.",

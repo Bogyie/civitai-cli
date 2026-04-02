@@ -131,8 +131,10 @@ impl MediaQualityPreference {
 pub struct AppConfig {
     pub api_key: Option<String>,
     pub comfyui_path: Option<PathBuf>,
-    pub bookmark_file_path: Option<PathBuf>,
-    pub image_bookmark_file_path: Option<PathBuf>,
+    #[serde(alias = "bookmark_file_path")]
+    pub liked_model_file_path: Option<PathBuf>,
+    #[serde(alias = "image_bookmark_file_path")]
+    pub liked_image_file_path: Option<PathBuf>,
     pub model_cover_cache_path: Option<PathBuf>,
     pub model_search_cache_path: Option<PathBuf>,
     pub image_cache_path: Option<PathBuf>,
@@ -233,12 +235,12 @@ impl AppConfig {
             .map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
     }
 
-    pub fn bookmark_path() -> Option<PathBuf> {
-        Self::config_dir().map(|config_dir| config_dir.join("bookmarks.json"))
+    pub fn liked_model_path() -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("liked_models.json"))
     }
 
-    pub fn image_bookmark_path() -> Option<PathBuf> {
-        Self::config_dir().map(|config_dir| config_dir.join("image_bookmarks.json"))
+    pub fn liked_image_path() -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("liked_images.json"))
     }
 
     pub fn image_tag_catalog_path(&self) -> Option<PathBuf> {
@@ -305,8 +307,8 @@ impl Default for AppConfig {
         Self {
             api_key: None,
             comfyui_path: None,
-            bookmark_file_path: None,
-            image_bookmark_file_path: None,
+            liked_model_file_path: None,
+            liked_image_file_path: None,
             model_cover_cache_path: None,
             model_search_cache_path: None,
             image_cache_path: None,
