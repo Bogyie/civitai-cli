@@ -479,8 +479,8 @@ impl App {
     }
 
     pub fn request_download(&mut self) {
-        if self.active_tab == MainTab::Images {
-            if let Some(img) = self.images.get(self.selected_index)
+        if matches!(self.active_tab, MainTab::Images | MainTab::LikedImages) {
+            if let Some(img) = self.selected_image_in_active_view().cloned()
                 && let Some(tx) = &self.tx
             {
                 let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
@@ -1167,5 +1167,26 @@ mod tests {
 
         assert!(!completed);
         assert_eq!(app.selected_liked_image_index, 0);
+    }
+
+    #[test]
+    fn request_download_sends_selected_liked_image_to_worker() {
+        let mut app = App::new(isolated_config());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        app.tx = Some(tx);
+        app.active_tab = MainTab::LikedImages;
+        app.liked_images = vec![sample_feed_image(10), sample_feed_image(20)];
+        app.refresh_visible_liked_images_cache();
+        app.selected_liked_image_index = 1;
+        app.liked_image_list_state.select(Some(1));
+
+        app.request_download();
+
+        let command = rx.try_recv().expect("expected image download command");
+        match command {
+            WorkerCommand::DownloadImage(image) => assert_eq!(image.id, 20),
+            _ => panic!("expected liked image download command"),
+        }
+        assert_eq!(app.status, "Downloading image 20...");
     }
 }
