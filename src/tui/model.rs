@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use crate::config::AppConfig;
 use civitai_cli::sdk::{
-    CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL, SearchModelHit,
+    CIVITAI_MEDIA_DELIVERY_NAMESPACE, CIVITAI_MEDIA_DELIVERY_URL, SearchModelCategory,
+    SearchModelFile, SearchModelHit, SearchModelImage, SearchModelMetrics, SearchModelTag,
+    SearchModelVersion,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -73,18 +75,18 @@ pub fn creator_name(hit: &SearchModelHit) -> Option<String> {
 }
 
 pub fn category_name(hit: &SearchModelHit) -> Option<String> {
-    value_name(hit.category.as_ref())
+    hit.category
+        .as_ref()
+        .and_then(SearchModelCategory::name)
+        .map(str::to_string)
 }
 
 pub fn tag_names(hit: &SearchModelHit) -> Vec<String> {
     hit.tags
-        .as_ref()
-        .map(|tags| {
-            tags.iter()
-                .filter_map(|tag| value_name(Some(tag)))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default()
+        .iter()
+        .filter_map(SearchModelTag::name)
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn model_metrics(hit: &SearchModelHit) -> ParsedModelMetrics {
@@ -101,11 +103,9 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
         push_or_merge_version(&mut versions, version);
     }
 
-    if let Some(items) = hit.versions.as_ref() {
-        for item in items {
-            if let Some(version) = parse_version(item) {
-                push_or_merge_version(&mut versions, version);
-            }
+    for item in &hit.versions {
+        if let Some(version) = parse_version(item) {
+            push_or_merge_version(&mut versions, version);
         }
     }
 
@@ -115,15 +115,12 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
         versions.push(ParsedModelVersion {
             id: version_id,
             name: format!("Version {version_id}"),
-            base_model: hit
-                .version
-                .as_ref()
-                .and_then(|value| value_string(value.get("baseModel"))),
+            base_model: hit.version.as_ref().and_then(|value| value.base_model.clone()),
             ..ParsedModelVersion::default()
         });
     }
 
-    let top_level_images = parse_images_from_array(hit.images.as_ref());
+    let top_level_images = parse_images_from_array(&hit.images);
     if !top_level_images.is_empty() {
         for version in &mut versions {
             if version.images.is_empty() {
@@ -167,11 +164,7 @@ pub fn selected_version(hit: &SearchModelHit, index: usize) -> Option<ParsedMode
 pub fn default_base_model(hit: &SearchModelHit) -> Option<String> {
     selected_version(hit, 0)
         .and_then(|version| version.base_model)
-        .or_else(|| {
-            hit.version
-                .as_ref()
-                .and_then(|value| value_string(value.get("baseModel")))
-        })
+        .or_else(|| hit.version.as_ref().and_then(|value| value.base_model.clone()))
 }
 
 pub fn build_model_url(hit: &SearchModelHit, version_id: Option<u64>) -> String {
@@ -333,41 +326,40 @@ fn push_or_merge_version(versions: &mut Vec<ParsedModelVersion>, incoming: Parse
 }
 
 
-fn parse_version(value: &Value) -> Option<ParsedModelVersion> {
-    let id = value_u64(value.get("id"))?;
+fn parse_version(value: &SearchModelVersion) -> Option<ParsedModelVersion> {
+    let id = value.id;
     Some(ParsedModelVersion {
         id,
-        name: value_string(value.get("name")).unwrap_or_else(|| format!("Version {id}")),
-        base_model: value_string(value.get("baseModel")),
-        created_at: value_string(value.get("createdAt")),
-        updated_at: value_string(value.get("updatedAt")),
-        early_access_time_frame: value_u64(value.get("earlyAccessTimeFrame")),
-        description: value_string(value.get("description")),
-        stats: parse_metrics(value.get("stats").or_else(|| value.get("metrics"))),
-        files: parse_files(
-            value
-                .get("files")
-                .or_else(|| value.get("downloadableFiles"))
-                .or_else(|| value.get("modelFiles")),
-        ),
-        images: parse_images(value.get("images")),
+        name: value
+            .name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| format!("Version {id}")),
+        base_model: value.base_model.clone(),
+        created_at: value.created_at.clone(),
+        updated_at: value.updated_at.clone(),
+        early_access_time_frame: value.early_access_time_frame,
+        description: value.description.clone(),
+        stats: parse_metrics(value.stats.as_ref()),
+        files: parse_files(&value.files),
+        images: parse_images(&value.images),
     })
 }
 
-fn parse_metrics(value: Option<&Value>) -> ParsedModelMetrics {
+fn parse_metrics(value: Option<&SearchModelMetrics>) -> ParsedModelMetrics {
     let Some(value) = value else {
         return ParsedModelMetrics::default();
     };
 
     ParsedModelMetrics {
-        download_count: value_u64(value.get("downloadCount")).unwrap_or(0),
-        thumbs_up_count: value_u64(value.get("thumbsUpCount")).unwrap_or(0),
-        favorite_count: value_u64(value.get("favoriteCount")).unwrap_or(0),
-        comment_count: value_u64(value.get("commentCount")).unwrap_or(0),
-        collected_count: value_u64(value.get("collectedCount")).unwrap_or(0),
-        tipped_amount_count: value_u64(value.get("tippedAmountCount")).unwrap_or(0),
-        rating_count: value_u64(value.get("ratingCount")).unwrap_or(0),
-        rating: value_f64(value.get("rating")).unwrap_or(0.0),
+        download_count: value.download_count,
+        thumbs_up_count: value.thumbs_up_count,
+        favorite_count: value.favorite_count,
+        comment_count: value.comment_count,
+        collected_count: value.collected_count,
+        tipped_amount_count: value.tipped_amount_count,
+        rating_count: value.rating_count,
+        rating: value.rating,
     }
 }
 
@@ -398,32 +390,25 @@ fn merge_metrics(target: &mut ParsedModelMetrics, incoming: &ParsedModelMetrics)
     }
 }
 
-fn parse_files(value: Option<&Value>) -> Vec<ParsedModelFile> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| ParsedModelFile {
-                    id: value_u64(item.get("id")),
-                    name: value_string(item.get("name"))
-                        .unwrap_or_else(|| "Unnamed file".to_string()),
-                    file_type: value_string(item.get("type")),
-                    size_kb: value_f64(item.get("sizeKB")),
-                    format: item
-                        .get("metadata")
-                        .and_then(|metadata| value_string(metadata.get("format"))),
-                    fp: item
-                        .get("metadata")
-                        .and_then(|metadata| value_string(metadata.get("fp"))),
-                    primary: value_bool(item.get("primary")).unwrap_or(false),
-                    download_url: value_string(item.get("downloadUrl")),
-                    pickle_scan_result: value_string(item.get("pickleScanResult")),
-                    virus_scan_result: value_string(item.get("virusScanResult")),
-                })
-                .collect()
+fn parse_files(items: &[SearchModelFile]) -> Vec<ParsedModelFile> {
+    items
+        .iter()
+        .map(|item| ParsedModelFile {
+            id: item.id,
+            name: item
+                .name
+                .clone()
+                .unwrap_or_else(|| "Unnamed file".to_string()),
+            file_type: item.file_type.clone(),
+            size_kb: item.size_kb,
+            format: item.metadata.as_ref().and_then(|metadata| metadata.format.clone()),
+            fp: item.metadata.as_ref().and_then(|metadata| metadata.fp.clone()),
+            primary: item.primary,
+            download_url: item.download_url.clone(),
+            pickle_scan_result: item.pickle_scan_result.clone(),
+            virus_scan_result: item.virus_scan_result.clone(),
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 fn synthetic_files(hit: &SearchModelHit) -> Vec<ParsedModelFile> {
@@ -453,53 +438,26 @@ fn synthetic_files(hit: &SearchModelHit) -> Vec<ParsedModelFile> {
         .collect()
 }
 
-fn parse_images(value: Option<&Value>) -> Vec<ParsedModelImage> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let url = normalize_model_image_url(&value_string(item.get("url"))?)?;
-                    Some(ParsedModelImage {
-                        id: value_u64(item.get("id")),
-                        model_version_id: value_u64(item.get("modelVersionId")),
-                        url,
-                        width: value_u64(item.get("width"))
-                            .and_then(|value| u32::try_from(value).ok()),
-                        height: value_u64(item.get("height"))
-                            .and_then(|value| u32::try_from(value).ok()),
-                        nsfw: value_string(item.get("nsfw")),
-                        meta: item.get("meta").cloned(),
-                    })
-                })
-                .collect()
+fn parse_images(items: &[SearchModelImage]) -> Vec<ParsedModelImage> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let url = normalize_model_image_url(&item.url)?;
+            Some(ParsedModelImage {
+                id: item.id,
+                model_version_id: item.model_version_id,
+                url,
+                width: item.width,
+                height: item.height,
+                nsfw: item.nsfw.clone(),
+                meta: item.meta.clone(),
+            })
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-fn parse_images_from_array(value: Option<&Vec<Value>>) -> Vec<ParsedModelImage> {
-    value
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let url = normalize_model_image_url(&value_string(item.get("url"))?)?;
-                    Some(ParsedModelImage {
-                        id: value_u64(item.get("id")),
-                        model_version_id: value_u64(item.get("modelVersionId")),
-                        url,
-                        width: value_u64(item.get("width"))
-                            .and_then(|value| u32::try_from(value).ok()),
-                        height: value_u64(item.get("height"))
-                            .and_then(|value| u32::try_from(value).ok()),
-                        nsfw: value_string(item.get("nsfw")),
-                        meta: item.get("meta").cloned(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+fn parse_images_from_array(items: &[SearchModelImage]) -> Vec<ParsedModelImage> {
+    parse_images(items)
 }
 
 fn normalize_model_image_url(raw: &str) -> Option<String> {
@@ -518,63 +476,6 @@ fn normalize_model_image_url(raw: &str) -> Option<String> {
         CIVITAI_MEDIA_DELIVERY_NAMESPACE.trim_matches('/'),
         raw
     ))
-}
-
-fn value_name(value: Option<&Value>) -> Option<String> {
-    let value = value?;
-    if let Some(text) = value_string(Some(value)) {
-        return Some(text);
-    }
-    value_string(value.get("name"))
-}
-
-fn value_string(value: Option<&Value>) -> Option<String> {
-    let value = value?;
-    match value {
-        Value::String(text) => {
-            let trimmed = text.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        }
-        Value::Number(number) => Some(number.to_string()),
-        Value::Bool(value) => Some(value.to_string()),
-        _ => None,
-    }
-}
-
-fn value_bool(value: Option<&Value>) -> Option<bool> {
-    let value = value?;
-    match value {
-        Value::Bool(value) => Some(*value),
-        Value::Number(number) => Some(number.as_u64().unwrap_or(0) != 0),
-        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(true),
-            "false" | "0" | "no" => Some(false),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn value_u64(value: Option<&Value>) -> Option<u64> {
-    let value = value?;
-    match value {
-        Value::Number(number) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok())),
-        Value::String(text) => text.trim().parse::<u64>().ok(),
-        Value::Bool(value) => Some(if *value { 1 } else { 0 }),
-        _ => None,
-    }
-}
-
-fn value_f64(value: Option<&Value>) -> Option<f64> {
-    let value = value?;
-    match value {
-        Value::Number(number) => number.as_f64(),
-        Value::String(text) => text.trim().parse::<f64>().ok(),
-        Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

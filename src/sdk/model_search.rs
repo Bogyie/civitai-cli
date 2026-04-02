@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::constants::{CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL};
@@ -276,23 +276,23 @@ pub struct SearchModelHit {
     #[serde(default)]
     pub hashes: Vec<String>,
     #[serde(default)]
-    pub tags: Option<Vec<Value>>,
+    pub tags: Vec<SearchModelTag>,
     #[serde(default)]
-    pub category: Option<Value>,
+    pub category: Option<SearchModelCategory>,
     #[serde(default)]
     pub permissions: Option<Value>,
     #[serde(default)]
-    pub metrics: Option<Value>,
+    pub metrics: Option<SearchModelMetrics>,
     #[serde(default)]
     pub rank: Option<Value>,
     #[serde(default)]
     pub user: Option<ImageHitUser>,
     #[serde(default)]
-    pub version: Option<Value>,
+    pub version: Option<SearchModelVersion>,
     #[serde(default)]
-    pub versions: Option<Vec<Value>>,
+    pub versions: Vec<SearchModelVersion>,
     #[serde(default)]
-    pub images: Option<Vec<Value>>,
+    pub images: Vec<SearchModelImage>,
     #[serde(default)]
     pub can_generate: Option<bool>,
     #[serde(default)]
@@ -316,12 +316,8 @@ impl SearchModelHit {
     pub fn primary_model_version_id(&self) -> Option<u64> {
         self.version
             .as_ref()
-            .and_then(Self::extract_version_id)
-            .or_else(|| {
-                self.versions
-                    .as_ref()
-                    .and_then(|versions| versions.iter().find_map(Self::extract_version_id))
-            })
+            .map(|version| version.id)
+            .or_else(|| self.versions.first().map(|version| version.id))
     }
 
     pub fn model_download_url(&self) -> Option<String> {
@@ -346,10 +342,318 @@ impl SearchModelHit {
             build_model_download_url_with_token_and_base(base_url, version_id, token)
         })
     }
+}
 
-    fn extract_version_id(value: &Value) -> Option<u64> {
-        value.get("id").and_then(Value::as_u64)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SearchModelTag {
+    Name { name: String },
+    NameOnly(String),
+}
+
+impl SearchModelTag {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Name { name } | Self::NameOnly(name) if !name.trim().is_empty() => Some(name),
+            _ => None,
+        }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SearchModelCategory {
+    Name { name: String },
+    NameOnly(String),
+}
+
+impl SearchModelCategory {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Name { name } | Self::NameOnly(name) if !name.trim().is_empty() => Some(name),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchModelMetrics {
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub download_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub thumbs_up_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub favorite_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub comment_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub collected_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub tipped_amount_count: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub rating_count: u64,
+    #[serde(default, deserialize_with = "deserialize_f64ish")]
+    pub rating: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchModelVersion {
+    pub id: u64,
+    pub name: Option<String>,
+    pub base_model: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub early_access_time_frame: Option<u64>,
+    pub description: Option<String>,
+    pub stats: Option<SearchModelMetrics>,
+    pub files: Vec<SearchModelFile>,
+    pub images: Vec<SearchModelImage>,
+}
+
+impl<'de> Deserialize<'de> for SearchModelVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawSearchModelVersion {
+            #[serde(deserialize_with = "deserialize_u64ish")]
+            id: u64,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            base_model: Option<String>,
+            #[serde(default)]
+            created_at: Option<String>,
+            #[serde(default)]
+            updated_at: Option<String>,
+            #[serde(default, deserialize_with = "deserialize_option_u64ish")]
+            early_access_time_frame: Option<u64>,
+            #[serde(default)]
+            description: Option<String>,
+            #[serde(default, alias = "metrics")]
+            stats: Option<SearchModelMetrics>,
+            #[serde(default, alias = "downloadableFiles", alias = "modelFiles")]
+            files: Vec<SearchModelFile>,
+            #[serde(default)]
+            images: Vec<SearchModelImage>,
+        }
+
+        let raw = RawSearchModelVersion::deserialize(deserializer)?;
+        Ok(Self {
+            id: raw.id,
+            name: raw.name,
+            base_model: normalize_optional_string(raw.base_model),
+            created_at: normalize_optional_string(raw.created_at),
+            updated_at: normalize_optional_string(raw.updated_at),
+            early_access_time_frame: raw.early_access_time_frame,
+            description: normalize_optional_string(raw.description),
+            stats: raw.stats,
+            files: raw.files,
+            images: raw.images,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchModelFile {
+    pub id: Option<u64>,
+    pub name: Option<String>,
+    pub file_type: Option<String>,
+    pub size_kb: Option<f64>,
+    pub metadata: Option<SearchModelFileMetadata>,
+    pub primary: bool,
+    pub download_url: Option<String>,
+    pub pickle_scan_result: Option<String>,
+    pub virus_scan_result: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SearchModelFile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawSearchModelFile {
+            #[serde(default, deserialize_with = "deserialize_option_u64ish")]
+            id: Option<u64>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default, rename = "type")]
+            file_type: Option<String>,
+            #[serde(
+                default,
+                rename = "sizeKB",
+                alias = "sizeKb",
+                alias = "size_kb",
+                deserialize_with = "deserialize_option_f64ish"
+            )]
+            size_kb: Option<f64>,
+            #[serde(
+                default,
+                rename = "sizeMB",
+                alias = "sizeMb",
+                alias = "size_mb",
+                deserialize_with = "deserialize_option_f64ish"
+            )]
+            size_mb: Option<f64>,
+            #[serde(
+                default,
+                rename = "sizeB",
+                alias = "sizeBytes",
+                alias = "size_bytes",
+                deserialize_with = "deserialize_option_f64ish"
+            )]
+            size_b: Option<f64>,
+            #[serde(default)]
+            metadata: Option<SearchModelFileMetadata>,
+            #[serde(default, deserialize_with = "deserialize_boolish")]
+            primary: bool,
+            #[serde(default)]
+            download_url: Option<String>,
+            #[serde(default)]
+            pickle_scan_result: Option<String>,
+            #[serde(default)]
+            virus_scan_result: Option<String>,
+        }
+
+        let raw = RawSearchModelFile::deserialize(deserializer)?;
+        let size_kb = raw
+            .size_kb
+            .or_else(|| raw.size_mb.map(|value| value * 1024.0))
+            .or_else(|| raw.size_b.map(|value| value / 1024.0));
+        Ok(Self {
+            id: raw.id,
+            name: normalize_optional_string(raw.name),
+            file_type: normalize_optional_string(raw.file_type),
+            size_kb,
+            metadata: raw.metadata,
+            primary: raw.primary,
+            download_url: normalize_optional_string(raw.download_url),
+            pickle_scan_result: normalize_optional_string(raw.pickle_scan_result),
+            virus_scan_result: normalize_optional_string(raw.virus_scan_result),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchModelFileMetadata {
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub size: Option<String>,
+    #[serde(default)]
+    pub fp: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchModelImage {
+    #[serde(default, deserialize_with = "deserialize_option_u64ish")]
+    pub id: Option<u64>,
+    pub url: String,
+    #[serde(default, deserialize_with = "deserialize_option_stringish")]
+    pub nsfw: Option<String>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default, deserialize_with = "deserialize_option_u64ish")]
+    pub model_version_id: Option<u64>,
+    #[serde(default)]
+    pub meta: Option<Value>,
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn deserialize_option_stringish<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::String(text)) => normalize_optional_string(Some(text)),
+        Some(Value::Number(number)) => Some(number.to_string()),
+        Some(Value::Bool(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn deserialize_u64ish<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_option_u64ish(deserializer)?.unwrap_or(0))
+}
+
+fn deserialize_option_u64ish<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok())),
+        Some(Value::String(text)) => text.trim().parse::<f64>().ok().and_then(|value| {
+            (value.is_finite() && value >= 0.0).then_some(value.round() as u64)
+        }),
+        Some(Value::Bool(value)) => Some(if value { 1 } else { 0 }),
+        _ => None,
+    })
+}
+
+fn deserialize_f64ish<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(deserialize_option_f64ish(deserializer)?.unwrap_or(0.0))
+}
+
+fn deserialize_option_f64ish<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
+        Some(Value::Bool(value)) => {
+            if value {
+                Some(1.0)
+            } else {
+                Some(0.0)
+            }
+        }
+        _ => None,
+    })
+}
+
+fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Bool(value)) => value,
+        Some(Value::Number(number)) => number.as_u64().unwrap_or(0) != 0,
+        Some(Value::String(text)) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes"
+        ),
+        _ => false,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,7 +2,8 @@ use civitai_cli::sdk::{
     DownloadClient, ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy,
     ImageSearchState, ImageTechnique, ImageTool, ModelBaseModel, ModelCategory,
     ModelCheckpointType, ModelDownloadAuth, ModelFileFormat, ModelSearchSortBy, ModelSearchState,
-    ModelType, SearchImageHit, SearchModelHit, SearchSdkConfig, WebSearchClient,
+    ModelType, SearchImageHit, SearchModelHit, SearchModelVersion, SearchSdkConfig,
+    WebSearchClient,
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
 };
@@ -51,21 +52,30 @@ mod fixtures {
             availability: Some("Public".to_string()),
             file_formats: vec!["SafeTensor".to_string()],
             hashes: vec!["hash1".to_string()],
-            tags: None,
+            tags: vec![],
             category: None,
             permissions: None,
             metrics: None,
             rank: None,
             user: None,
-            version: Some(json!({
-                "id": 987654,
-                "baseModel": "SDXL"
-            })),
-            versions: Some(vec![
-                json!({ "id": 987654, "name": "primary" }),
-                json!({ "id": 123456, "name": "secondary" }),
-            ]),
-            images: None,
+            version: Some(SearchModelVersion {
+                id: 987654,
+                base_model: Some("SDXL".to_string()),
+                ..SearchModelVersion::default()
+            }),
+            versions: vec![
+                SearchModelVersion {
+                    id: 987654,
+                    name: Some("primary".to_string()),
+                    ..SearchModelVersion::default()
+                },
+                SearchModelVersion {
+                    id: 123456,
+                    name: Some("secondary".to_string()),
+                    ..SearchModelVersion::default()
+                },
+            ],
+            images: vec![],
             can_generate: Some(false),
             nsfw: Some(false),
             nsfw_level: None,
@@ -438,17 +448,79 @@ mod model_hit_tests {
 
         let fallback_hit = SearchModelHit {
             version: None,
-            versions: Some(vec![json!({ "id": 123456 })]),
+            versions: vec![SearchModelVersion {
+                id: 123456,
+                ..SearchModelVersion::default()
+            }],
             ..fixtures::sample_model_hit()
         };
         assert_eq!(fallback_hit.primary_model_version_id(), Some(123456));
 
         let missing_hit = SearchModelHit {
             version: None,
-            versions: None,
+            versions: vec![],
             ..fixtures::sample_model_hit()
         };
         assert_eq!(missing_hit.primary_model_version_id(), None);
+    }
+
+    #[test]
+    fn deserializes_typed_model_search_fields() {
+        let hit: SearchModelHit = serde_json::from_value(json!({
+            "id": 999,
+            "name": "Typed example",
+            "tags": [{ "name": "portrait" }, "anime"],
+            "category": { "name": "character" },
+            "metrics": {
+                "downloadCount": "12",
+                "thumbsUpCount": 3,
+                "rating": "4.5"
+            },
+            "version": {
+                "id": "111",
+                "baseModel": "SDXL",
+                "files": [{
+                    "id": 1,
+                    "name": "weights.safetensors",
+                    "type": "Model",
+                    "sizeBytes": "1048576",
+                    "metadata": { "format": "SafeTensor", "fp": "fp16" },
+                    "primary": "true"
+                }]
+            },
+            "versions": [{
+                "id": 222,
+                "downloadableFiles": [{
+                    "name": "extra.bin",
+                    "sizeMB": 2
+                }]
+            }],
+            "images": [{
+                "id": 7,
+                "modelVersionId": "111",
+                "url": "abc-token",
+                "nsfw": false
+            }]
+        }))
+        .expect("typed model hit");
+
+        assert_eq!(hit.tags.len(), 2);
+        assert_eq!(
+            hit.category.as_ref().and_then(|value| value.name()),
+            Some("character")
+        );
+        assert_eq!(hit.metrics.as_ref().map(|value| value.download_count), Some(12));
+        assert_eq!(hit.version.as_ref().map(|value| value.id), Some(111));
+        assert_eq!(
+            hit.version
+                .as_ref()
+                .and_then(|value| value.files.first())
+                .and_then(|file| file.size_kb),
+            Some(1024.0)
+        );
+        assert_eq!(hit.versions[0].files[0].size_kb, Some(2048.0));
+        assert_eq!(hit.images[0].model_version_id, Some(111));
+        assert_eq!(hit.images[0].nsfw.as_deref(), Some("false"));
     }
 
     #[test]

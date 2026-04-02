@@ -299,7 +299,7 @@ impl App {
             let file_idx = *self.selected_file_index.get(&version.id).unwrap_or(&0);
             if let Some(tx) = &self.tx {
                 let _ = tx.try_send(WorkerCommand::DownloadModel(
-                    model.clone(),
+                    Box::new(model.clone()),
                     version.id,
                     file_idx,
                 ));

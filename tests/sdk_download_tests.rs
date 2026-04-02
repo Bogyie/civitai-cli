@@ -1,6 +1,7 @@
 use civitai_cli::sdk::{
     DownloadClient, DownloadEvent, DownloadKind, DownloadOptions, DownloadSpec, ImageSearchState,
-    ModelDownloadAuth, ModelSearchState, SearchImageHit, SearchModelHit, WebSearchClient,
+    ModelDownloadAuth, ModelSearchState, SearchImageHit, SearchModelHit, SearchModelVersion,
+    WebSearchClient,
 };
 use civitai_cli::sdk::{DownloadDestination, SearchSdkConfig};
 use futures_util::StreamExt;
@@ -173,15 +174,18 @@ fn sample_model_hit() -> SearchModelHit {
         availability: None,
         file_formats: vec![],
         hashes: vec![],
-        tags: None,
+        tags: vec![],
         category: None,
         permissions: None,
         metrics: None,
         rank: None,
         user: None,
-        version: Some(serde_json::json!({ "id": 999 })),
-        versions: None,
-        images: None,
+        version: Some(SearchModelVersion {
+            id: 999,
+            ..SearchModelVersion::default()
+        }),
+        versions: vec![],
+        images: vec![],
         can_generate: None,
         nsfw: None,
         nsfw_level: None,

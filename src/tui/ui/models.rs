@@ -584,17 +584,19 @@ pub(super) fn draw_model_sidebar(
                         } else {
                             "  "
                         };
+                        let size_label = file
+                            .size_kb
+                            .map(compact_file_size)
+                            .unwrap_or_else(|| "N/A".to_string());
                         let summary = format!(
-                            "{}{} | {}{}{}",
+                            "{}[{}] {} | {}{}",
                             prefix,
+                            size_label,
                             file.name,
                             file.format.as_deref().unwrap_or("file"),
                             file.fp
                                 .as_deref()
                                 .map(|value| format!("/{value}"))
-                                .unwrap_or_default(),
-                            file.size_kb
-                                .map(|value| format!(" | {}", compact_file_size(value)))
                                 .unwrap_or_default(),
                         );
                         Line::from(Span::styled(

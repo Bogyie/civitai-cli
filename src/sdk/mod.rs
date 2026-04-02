@@ -37,7 +37,9 @@ pub use image_search_types::{
     ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageTechnique, ImageTool,
 };
 pub use model_search::{
-    ModelDownloadAuth, ModelSearchState, SearchModelHit, SearchModelResponse,
+    ModelDownloadAuth, ModelSearchState, SearchModelCategory, SearchModelFile,
+    SearchModelFileMetadata, SearchModelHit, SearchModelImage, SearchModelMetrics,
+    SearchModelResponse, SearchModelTag, SearchModelVersion,
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
 };

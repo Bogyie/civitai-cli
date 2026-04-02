@@ -157,7 +157,7 @@ pub enum WorkerCommand {
     PrioritizeModelCover(u64, Option<String>, Option<(u32, u32)>, MediaRenderRequest),
     PrefetchModelCovers(Vec<VersionCoverJob>, MediaRenderRequest),
     DownloadImage(ImageItem),
-    DownloadModel(Model, u64, usize),
+    DownloadModel(Box<Model>, u64, usize),
     PauseDownload(DownloadKey),
     ResumeDownload(DownloadKey),
     CancelDownload(DownloadKey),
