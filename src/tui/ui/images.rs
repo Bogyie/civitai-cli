@@ -457,7 +457,7 @@ fn draw_saved_image_search_popup(f: &mut Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(Span::styled(
-            " [Type] Query | [Enter] Apply | [Esc] Cancel ",
+            " [Type] Query | [Enter] Apply | [Esc] Apply & Close ",
             Style::default().fg(Color::DarkGray),
         )),
     ];
@@ -520,7 +520,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                " [Type] Query | [Enter] Apply | [Esc] Cancel | [Ctrl+R] Reset | [f] Open Builder ",
+                " [Type] Query | [Enter] Apply | [Esc] Apply & Close | [Ctrl+R] Reset | [f] Open Builder ",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -864,7 +864,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     f.render_widget(
         Paragraph::new(
-            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Cancel ",
+            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Apply & Close ",
         )
         .wrap(Wrap { trim: true }),
         sections[9],

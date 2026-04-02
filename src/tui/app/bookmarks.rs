@@ -127,7 +127,7 @@ impl App {
         self.bookmark_search_form_draft = self.bookmark_search_form.clone();
         self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::SearchSavedModels;
-        self.set_status("Filter bookmarks. Enter apply, Esc cancel");
+        self.set_status("Filter bookmarks. Enter/Esc apply, close");
     }
 
     pub fn begin_bookmark_export_prompt(&mut self) {
@@ -221,13 +221,6 @@ impl App {
                 self.bookmark_search_form.query.clone()
             }
         ));
-    }
-
-    pub fn cancel_bookmark_search(&mut self) {
-        self.bookmark_search_form_draft = self.bookmark_search_form.clone();
-        self.bookmark_query_draft = self.bookmark_search_form.query.clone();
-        self.mode = AppMode::Browsing;
-        self.set_status("Bookmark filter cancelled.");
     }
 
     pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {

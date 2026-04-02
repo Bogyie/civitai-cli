@@ -774,7 +774,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                " [Type] Query | [Enter] Apply | [Esc] Cancel | [Ctrl+R] Reset | [f] Open Builder ",
+                " [Type] Query | [Enter] Apply | [Esc] Apply & Close | [Ctrl+R] Reset | [f] Open Builder ",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -1017,7 +1017,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
     f.render_widget(base_widget, sections[5]);
 
     let help = Paragraph::new(
-        " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Cancel ",
+        " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Apply & Close ",
     )
     .alignment(Alignment::Left)
     .wrap(Wrap { trim: true });

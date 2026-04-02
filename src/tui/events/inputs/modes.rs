@@ -103,8 +103,28 @@ fn handle_model_search_mode(app: &mut App, code: KeyCode) {
 
     match code {
         KeyCode::Esc => {
-            app.mode = AppMode::Browsing;
-            reload_selected_model_cover(app);
+            let selected_model_id = app.selected_model_version().map(|(model_id, _)| model_id);
+            let selected_version_id = app
+                .selected_model_version()
+                .map(|(_, version_id)| version_id);
+            let search_options = app.search_form.build_options();
+            if let Some(tx) = &app.tx {
+                let _ = tx.try_send(WorkerCommand::SearchModels(
+                    search_options,
+                    selected_model_id,
+                    selected_version_id,
+                    false,
+                    false,
+                    None,
+                ));
+                app.model_search_has_more = true;
+                app.model_search_loading_more = false;
+                app.mode = AppMode::Browsing;
+                app.status = format!("Searching for models: '{}'...", app.search_form.query);
+            } else {
+                app.mode = AppMode::Browsing;
+                reload_selected_model_cover(app);
+            }
         }
         KeyCode::Enter => {
             app.mode = AppMode::Browsing;
@@ -288,10 +308,7 @@ fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
     }
 
     match code {
-        KeyCode::Esc => {
-            app.cancel_bookmark_search();
-            reload_selected_model_cover(app);
-        }
+        KeyCode::Esc => app.apply_bookmark_query(),
         KeyCode::Enter => app.apply_bookmark_query(),
         KeyCode::Up => {
             if app.bookmark_search_form_draft.mode == SearchFormMode::Builder {
@@ -483,7 +500,25 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => {
             app.mode = AppMode::Browsing;
-            reload_selected_image(app);
+            app.images.clear();
+            app.image_cache.clear();
+            app.image_bytes_cache.clear();
+            app.selected_index = 0;
+            app.image_feed_loaded = false;
+            app.image_feed_loading = false;
+            app.image_feed_next_page = None;
+            app.image_feed_has_more = true;
+            if let Some(tx) = &app.tx {
+                let _ = tx.try_send(WorkerCommand::FetchImages(
+                    app.image_search_form.build_options(),
+                    None,
+                    current_image_render_request(),
+                ));
+                app.image_feed_loading = true;
+                app.status = "Searching image feed...".into();
+            } else {
+                reload_selected_image(app);
+            }
         }
         KeyCode::Up => {
             if app.image_search_form.mode == SearchFormMode::Builder {
@@ -735,7 +770,7 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
 
 fn handle_image_bookmark_search_mode(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Esc => app.cancel_image_bookmark_search(),
+        KeyCode::Esc => app.apply_image_bookmark_query(),
         KeyCode::Enter => app.apply_image_bookmark_query(),
         KeyCode::Char(c) => app.image_bookmark_query_draft.push(c),
         KeyCode::Backspace => {

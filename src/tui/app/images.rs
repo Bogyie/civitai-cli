@@ -457,8 +457,12 @@ impl App {
 
         match self.image_tag_modal_column {
             TagViewerColumn::Current => {
-                self.image_tag_modal_include_pending.insert(key.clone());
-                self.image_tag_modal_exclude_pending.remove(&key);
+                if self.image_tag_modal_exclude_pending.contains(&key) {
+                    self.image_tag_modal_exclude_pending.remove(&key);
+                } else {
+                    self.image_tag_modal_include_pending.insert(key.clone());
+                    self.image_tag_modal_exclude_pending.remove(&key);
+                }
             }
             TagViewerColumn::Exclude => {
                 self.image_tag_modal_exclude_pending.remove(&key);
@@ -477,8 +481,12 @@ impl App {
 
         match self.image_tag_modal_column {
             TagViewerColumn::Current => {
-                self.image_tag_modal_exclude_pending.insert(key.clone());
-                self.image_tag_modal_include_pending.remove(&key);
+                if self.image_tag_modal_include_pending.contains(&key) {
+                    self.image_tag_modal_include_pending.remove(&key);
+                } else {
+                    self.image_tag_modal_exclude_pending.insert(key.clone());
+                    self.image_tag_modal_include_pending.remove(&key);
+                }
             }
             TagViewerColumn::Include => {
                 self.image_tag_modal_include_pending.remove(&key);
@@ -702,7 +710,7 @@ impl App {
     pub fn begin_image_bookmark_search(&mut self) {
         self.image_bookmark_query_draft = self.image_bookmark_query.clone();
         self.mode = AppMode::SearchSavedImages;
-        self.set_status("Search image bookmarks. Enter apply, Esc cancel");
+        self.set_status("Search image bookmarks. Enter/Esc apply, close");
     }
 
     pub fn apply_image_bookmark_query(&mut self) {
@@ -718,12 +726,6 @@ impl App {
                 self.image_bookmark_query.clone()
             }
         ));
-    }
-
-    pub fn cancel_image_bookmark_search(&mut self) {
-        self.image_bookmark_query_draft = self.image_bookmark_query.clone();
-        self.mode = AppMode::Browsing;
-        self.set_status("Image bookmark search cancelled.");
     }
 
     pub(super) fn deduplicate_image_bookmarks(&mut self) {
@@ -796,6 +798,7 @@ mod tests {
         app.toggle_image_tag_modal_right();
         app.select_previous_image_tag_modal_row();
         app.toggle_image_tag_modal_right();
+        app.toggle_image_tag_modal_right();
 
         let changed = app.apply_image_tag_modal_filters();
 
@@ -862,5 +865,29 @@ mod tests {
 
         app.select_next_image_tag_modal_row();
         assert_eq!(app.image_tag_modal_selected_index, 1);
+    }
+
+    #[test]
+    fn image_tag_modal_opposite_direction_cancels_before_switching_sides() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_image_with_tags(&["foo"])];
+
+        app.open_image_tags_modal();
+        app.toggle_image_tag_modal_left();
+        assert!(app.image_tag_modal_include_pending.contains("foo"));
+        assert!(!app.image_tag_modal_exclude_pending.contains("foo"));
+
+        app.toggle_image_tag_modal_right();
+        assert!(!app.image_tag_modal_include_pending.contains("foo"));
+        assert!(!app.image_tag_modal_exclude_pending.contains("foo"));
+
+        app.toggle_image_tag_modal_right();
+        assert!(!app.image_tag_modal_include_pending.contains("foo"));
+        assert!(app.image_tag_modal_exclude_pending.contains("foo"));
+
+        app.toggle_image_tag_modal_left();
+        assert!(!app.image_tag_modal_include_pending.contains("foo"));
+        assert!(!app.image_tag_modal_exclude_pending.contains("foo"));
     }
 }

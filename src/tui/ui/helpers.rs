@@ -183,41 +183,70 @@ pub(super) fn build_horizontal_option_window_lines(
         return Vec::new();
     }
 
-    let window = build_horizontal_item_window(
-        &items
-            .iter()
-            .map(|(text, focused, _)| (text.clone(), *focused))
-            .collect::<Vec<_>>(),
-        max_width,
-    );
-    if window.is_empty() {
-        return Vec::new();
+    let item_count = items.len();
+    let selected_idx = items
+        .iter()
+        .position(|(_, focused, _)| *focused)
+        .unwrap_or(0)
+        .min(item_count - 1);
+    let separator = 2usize;
+
+    let prepared: Vec<(String, bool, bool, usize)> = items
+        .iter()
+        .map(|(text, focused, checked)| {
+            let label = format!("{} {}", if *checked { "[x]" } else { "[ ]" }, text);
+            let width = label.chars().count().max(1);
+            (text.clone(), *focused, *checked, width)
+        })
+        .collect();
+
+    let ellipsis_width = if item_count > 1 { 4usize } else { 0usize };
+    let available_width = max_width.saturating_sub(ellipsis_width * 2).max(1);
+
+    let mut start = selected_idx;
+    let mut end = selected_idx + 1;
+    let mut used_width = prepared[selected_idx].3.min(available_width);
+
+    while start > 0 || end < item_count {
+        let mut extended = false;
+
+        if end < item_count {
+            let next_width = prepared[end].3 + separator;
+            if used_width + next_width <= available_width {
+                used_width += next_width;
+                end += 1;
+                extended = true;
+            }
+        }
+
+        if start > 0 {
+            let next_width = prepared[start - 1].3 + separator;
+            if used_width + next_width <= available_width {
+                used_width += next_width;
+                start = start.saturating_sub(1);
+                extended = true;
+            }
+        }
+
+        if !extended {
+            break;
+        }
     }
 
-    let selected_text = items
-        .iter()
-        .find(|(_, focused, _)| *focused)
-        .map(|(text, _, _)| text.as_str())
-        .unwrap_or_default();
+    let mut spans = Vec::new();
+    if start > 0 {
+        spans.push(Span::styled("... ", help_text_style()));
+    }
 
-    let spans = window
-        .iter()
-        .enumerate()
-        .flat_map(|(idx, (text, focused))| {
-            let checked = items
-                .iter()
-                .find(|(item_text, _, _)| item_text == text && item_text == selected_text)
-                .or_else(|| items.iter().find(|(item_text, _, _)| item_text == text))
-                .map(|(_, _, checked)| *checked)
-                .unwrap_or(false);
-            let label = format!("{} {}", if checked { "[x]" } else { "[ ]" }, text);
+    spans.extend(prepared[start..end].iter().enumerate().flat_map(
+        |(idx, (text, focused, checked, _))| {
             let style = if box_focused && *focused {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
-            } else if box_focused && checked {
+            } else if box_focused && *checked {
                 Style::default().fg(Color::Green)
-            } else if checked {
+            } else if *checked {
                 Style::default().fg(Color::Yellow)
             } else if box_focused {
                 Style::default().fg(Color::White)
@@ -225,16 +254,21 @@ pub(super) fn build_horizontal_option_window_lines(
                 inactive_box_style(false)
             };
             let mut spans = Vec::new();
-            if idx > 0 {
+            if idx > 0 || start > 0 {
                 spans.push(Span::raw("  "));
             }
             spans.push(Span::styled(
-                compact_cell_text_with_ellipsis(&label, max_width),
+                format!("{} {}", if *checked { "[x]" } else { "[ ]" }, text),
                 style,
             ));
             spans
-        })
-        .collect::<Vec<_>>();
+        },
+    ));
+
+    if end < item_count {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled("...", help_text_style()));
+    }
 
     vec![Line::from(spans)]
 }
