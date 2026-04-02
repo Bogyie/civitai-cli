@@ -24,6 +24,10 @@ pub(super) struct CachedSearchResult {
 pub(super) struct CachedImageSearchResult {
     pub cache_key: String,
     pub items: Vec<ImageItem>,
+    #[serde(default)]
+    pub next_page: Option<u32>,
+    #[serde(default)]
+    pub total_hits: Option<u64>,
     pub cached_at_unix_secs: u64,
 }
 

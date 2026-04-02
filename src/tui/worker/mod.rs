@@ -285,7 +285,7 @@ pub async fn spawn_worker(
                         };
 
                         let fetch_result = if let Some(entry) = cached_response {
-                            Ok((entry.items, request_state.page, None))
+                            Ok((entry.items, entry.next_page, entry.total_hits))
                         } else {
                             sdk_clone
                                 .search_images(&request_state)
@@ -336,6 +336,8 @@ pub async fn spawn_worker(
                                             CachedImageSearchResult {
                                                 cache_key: current_url.clone(),
                                                 items: visible_items.clone(),
+                                                next_page,
+                                                total_hits,
                                                 cached_at_unix_secs: now_unix_secs(),
                                             },
                                         );
