@@ -606,6 +606,18 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             )
         })
         .collect::<Vec<_>>();
+    let excluded_base_items = form
+        .base_options
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            (
+                item.label().to_string(),
+                idx == form.excluded_base_cursor,
+                form.excluded_base_models.contains(item.as_query_value()),
+            )
+        })
+        .collect::<Vec<_>>();
     let ratio_items = form
         .aspect_ratio_options
         .iter()
@@ -738,6 +750,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             items: &type_items,
             selected: &selected_media_types,
             show_selected: false,
+            empty_summary: "All",
             width: sections[3].width.saturating_sub(4) as usize,
             height: sections[3].height.saturating_sub(3) as usize,
         }))
@@ -794,6 +807,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             items: &base_items,
             selected: &selected_base_models,
             show_selected: false,
+            empty_summary: "All",
             width: sections[6].width.saturating_sub(4) as usize,
             height: sections[6].height.saturating_sub(3) as usize,
         }))
@@ -811,9 +825,10 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             label: "Excluded Base Model",
             focused: excluded_base_focused,
             configured: !form.excluded_base_models.is_empty(),
-            items: &base_items,
+            items: &excluded_base_items,
             selected: &excluded_base_models,
             show_selected: false,
+            empty_summary: "None",
             width: sections[7].width.saturating_sub(4) as usize,
             height: sections[7].height.saturating_sub(3) as usize,
         }))
@@ -834,6 +849,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             items: &ratio_items,
             selected: &selected_aspect_ratios,
             show_selected: false,
+            empty_summary: "All",
             width: sections[8].width.saturating_sub(4) as usize,
             height: sections[8].height.saturating_sub(3) as usize,
         }))

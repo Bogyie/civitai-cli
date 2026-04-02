@@ -174,6 +174,71 @@ pub(super) fn build_wrapped_option_lines(
     lines
 }
 
+pub(super) fn build_horizontal_option_window_lines(
+    items: &[(String, bool, bool)],
+    max_width: usize,
+    box_focused: bool,
+) -> Vec<Line<'static>> {
+    if items.is_empty() || max_width == 0 {
+        return Vec::new();
+    }
+
+    let window = build_horizontal_item_window(
+        &items
+            .iter()
+            .map(|(text, focused, _)| (text.clone(), *focused))
+            .collect::<Vec<_>>(),
+        max_width,
+    );
+    if window.is_empty() {
+        return Vec::new();
+    }
+
+    let selected_text = items
+        .iter()
+        .find(|(_, focused, _)| *focused)
+        .map(|(text, _, _)| text.as_str())
+        .unwrap_or_default();
+
+    let spans = window
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, (text, focused))| {
+            let checked = items
+                .iter()
+                .find(|(item_text, _, _)| item_text == text && item_text == selected_text)
+                .or_else(|| items.iter().find(|(item_text, _, _)| item_text == text))
+                .map(|(_, _, checked)| *checked)
+                .unwrap_or(false);
+            let label = format!("{} {}", if checked { "[x]" } else { "[ ]" }, text);
+            let style = if box_focused && *focused {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if box_focused && checked {
+                Style::default().fg(Color::Green)
+            } else if checked {
+                Style::default().fg(Color::Yellow)
+            } else if box_focused {
+                Style::default().fg(Color::White)
+            } else {
+                inactive_box_style(false)
+            };
+            let mut spans = Vec::new();
+            if idx > 0 {
+                spans.push(Span::raw("  "));
+            }
+            spans.push(Span::styled(
+                compact_cell_text_with_ellipsis(&label, max_width),
+                style,
+            ));
+            spans
+        })
+        .collect::<Vec<_>>();
+
+    vec![Line::from(spans)]
+}
+
 pub(super) fn build_horizontal_item_window(
     items: &[(String, bool)],
     max_width: usize,
@@ -425,6 +490,7 @@ pub(super) struct ImageFilterBoxProps<'a> {
     pub items: &'a [(String, bool, bool)],
     pub selected: &'a [String],
     pub show_selected: bool,
+    pub empty_summary: &'a str,
     pub width: usize,
     pub height: usize,
 }
@@ -437,12 +503,13 @@ pub(super) fn build_image_filter_box_lines(props: ImageFilterBoxProps<'_>) -> Ve
         items,
         selected,
         show_selected,
+        empty_summary,
         width,
         height,
     } = props;
     if !focused {
         let summary = if selected.is_empty() {
-            "All".to_string()
+            empty_summary.to_string()
         } else {
             selected.join(", ")
         };
@@ -465,13 +532,13 @@ pub(super) fn build_image_filter_box_lines(props: ImageFilterBoxProps<'_>) -> Ve
         .find(|(_, current, _)| *current)
         .map(|(text, _, checked)| {
             format!(
-                "{} Current: {} {}",
+                "{} Cursor: {} {}",
                 if focused { ">" } else { " " },
                 text,
                 if *checked { "[x]" } else { "[ ]" }
             )
         })
-        .unwrap_or_else(|| format!("{} Current: <none>", if focused { ">" } else { " " }));
+        .unwrap_or_else(|| format!("{} Cursor: <none>", if focused { ">" } else { " " }));
 
     let mut lines = vec![Line::from(Span::styled(
         current,
@@ -487,7 +554,8 @@ pub(super) fn build_image_filter_box_lines(props: ImageFilterBoxProps<'_>) -> Ve
         format!("Browse {} with Left/Right, toggle with Space", label),
         help_text_style(),
     )));
-    lines.extend(build_wrapped_option_lines(items, width, 2, focused));
+    let _ = height;
+    lines.extend(build_horizontal_option_window_lines(items, width, focused));
     if show_selected {
         lines.push(Line::from(Span::styled(
             "Selected",

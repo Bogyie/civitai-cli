@@ -962,6 +962,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         items: &type_items,
         selected: &selected_types,
         show_selected: false,
+        empty_summary: "All",
         width: sections[3].width.saturating_sub(4) as usize,
         height: sections[3].height.saturating_sub(3) as usize,
     }))
@@ -1003,6 +1004,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
         items: &base_items,
         selected: &selected_base_models,
         show_selected: false,
+        empty_summary: "All",
         width: sections[5].width.saturating_sub(4) as usize,
         height: sections[5].height.saturating_sub(3) as usize,
     }))
