@@ -283,6 +283,7 @@ async fn downloads_to_directory_and_uses_server_filename() -> Result<(), Box<dyn
         .await?;
 
     assert_eq!(result.path, target_dir.join("server.bin"));
+    assert_eq!(result.downloaded_bytes, b"attachment body".len() as u64);
     assert_eq!(tokio::fs::read(&result.path).await?, b"attachment body");
     Ok(())
 }

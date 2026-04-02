@@ -947,6 +947,14 @@ impl DownloadClient {
             }
         }
 
+        // Ensure buffered async writes are visible before callers inspect the file.
+        file.flush()
+            .await
+            .with_context(|| format!("Failed to flush {}", actual_target_path.display()))?;
+        file.sync_all()
+            .await
+            .with_context(|| format!("Failed to sync {}", actual_target_path.display()))?;
+
         emit_event(
             &progress_tx,
             DownloadEvent::Completed {
