@@ -65,6 +65,13 @@ pub enum SearchTemplateKind {
     Image,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TagViewerColumn {
+    Include,
+    Current,
+    Exclude,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ModelSearchTemplate {
     pub name: String,

@@ -27,7 +27,7 @@ pub use self::types::{
     AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
     DownloadKey, DownloadState, DownloadTracker, ImageSearchTemplate, InterruptedDownloadSession,
     MainTab, ModelSearchTemplate, NewDownloadHistoryEntry, SearchTemplateKind, SearchTemplateStore,
-    SelectedModelCover, SelectedVersionCover, VersionCoverJob, WorkerCommand,
+    SelectedModelCover, SelectedVersionCover, TagViewerColumn, VersionCoverJob, WorkerCommand,
 };
 use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
 use crate::tui::model::{
@@ -120,6 +120,10 @@ pub struct App {
     pub image_model_detail_model: Option<Model>,
     pub image_prompt_scroll: u16,
     pub image_tags_scroll: u16,
+    pub image_tag_modal_column: TagViewerColumn,
+    pub image_tag_modal_selected_index: usize,
+    pub image_tag_modal_include_pending: HashSet<String>,
+    pub image_tag_modal_exclude_pending: HashSet<String>,
 
     pub active_downloads: HashMap<DownloadKey, DownloadTracker>,
     pub active_download_order: Vec<DownloadKey>,
@@ -263,6 +267,10 @@ impl App {
             image_model_detail_model: None,
             image_prompt_scroll: 0,
             image_tags_scroll: 0,
+            image_tag_modal_column: TagViewerColumn::Current,
+            image_tag_modal_selected_index: 0,
+            image_tag_modal_include_pending: HashSet::new(),
+            image_tag_modal_exclude_pending: HashSet::new(),
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,

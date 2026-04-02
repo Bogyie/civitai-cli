@@ -1,6 +1,75 @@
 use super::*;
 
 impl App {
+    fn image_tag_modal_selectable_indices(&self) -> Vec<usize> {
+        let tags = self.selected_image_tag_list();
+        match self.image_tag_modal_column {
+            TagViewerColumn::Current => (0..tags.len()).collect(),
+            TagViewerColumn::Include => tags
+                .iter()
+                .enumerate()
+                .filter(|(_, tag)| {
+                    self.image_tag_modal_include_pending
+                        .contains(&tag.to_lowercase())
+                })
+                .map(|(idx, _)| idx)
+                .collect(),
+            TagViewerColumn::Exclude => tags
+                .iter()
+                .enumerate()
+                .filter(|(_, tag)| {
+                    self.image_tag_modal_exclude_pending
+                        .contains(&tag.to_lowercase())
+                })
+                .map(|(idx, _)| idx)
+                .collect(),
+        }
+    }
+
+    fn clamp_image_tag_modal_selection(&mut self) {
+        let selectable = self.image_tag_modal_selectable_indices();
+        if selectable.is_empty() {
+            self.image_tag_modal_selected_index = 0;
+            return;
+        }
+
+        if selectable.contains(&self.image_tag_modal_selected_index) {
+            return;
+        }
+
+        if let Some(next_idx) = selectable
+            .iter()
+            .copied()
+            .find(|idx| *idx >= self.image_tag_modal_selected_index)
+            .or_else(|| selectable.last().copied())
+        {
+            self.image_tag_modal_selected_index = next_idx;
+        }
+    }
+
+    fn parse_tag_filter_values(value: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty())
+            .filter_map(|tag| {
+                let normalized = tag.to_lowercase();
+                seen.insert(normalized).then(|| tag.to_string())
+            })
+            .collect()
+    }
+
+    fn join_tag_filter_values(values: &[String]) -> String {
+        values.join(", ")
+    }
+
+    fn selected_image_tag_list(&self) -> Vec<String> {
+        self.selected_image_in_active_view()
+            .map(image_tags)
+            .unwrap_or_default()
+    }
+
     fn image_tag_suggestions_for(&self, query: &str, limit: usize) -> Vec<String> {
         if limit == 0 {
             return Vec::new();
@@ -291,6 +360,192 @@ impl App {
         self.image_model_detail_model = None;
     }
 
+    pub fn open_image_tags_modal(&mut self) {
+        let tags = self.selected_image_tag_list();
+        self.image_tag_modal_include_pending.clear();
+        self.image_tag_modal_exclude_pending.clear();
+
+        let selected_include = Self::parse_tag_filter_values(&self.image_search_form.tag_query)
+            .into_iter()
+            .map(|tag| tag.to_lowercase())
+            .collect::<HashSet<_>>();
+        let selected_exclude =
+            Self::parse_tag_filter_values(&self.image_search_form.excluded_tag_query)
+                .into_iter()
+                .map(|tag| tag.to_lowercase())
+                .collect::<HashSet<_>>();
+
+        for tag in tags {
+            let key = tag.to_lowercase();
+            if selected_include.contains(&key) {
+                self.image_tag_modal_include_pending.insert(key.clone());
+            }
+            if selected_exclude.contains(&key) {
+                self.image_tag_modal_exclude_pending.insert(key);
+            }
+        }
+
+        self.show_image_tags_modal = true;
+        self.image_tags_scroll = 0;
+        self.image_tag_modal_column = TagViewerColumn::Current;
+        self.image_tag_modal_selected_index = 0;
+        self.clamp_image_tag_modal_selection();
+        self.set_status("Tag viewer opened");
+    }
+
+    pub fn close_image_tags_modal(&mut self) {
+        self.show_image_tags_modal = false;
+        self.image_tags_scroll = 0;
+        self.image_tag_modal_column = TagViewerColumn::Current;
+        self.image_tag_modal_selected_index = 0;
+        self.image_tag_modal_include_pending.clear();
+        self.image_tag_modal_exclude_pending.clear();
+    }
+
+    pub fn select_next_image_tag_modal_row(&mut self) {
+        let selectable = self.image_tag_modal_selectable_indices();
+        let Some(position) = selectable
+            .iter()
+            .position(|idx| *idx == self.image_tag_modal_selected_index)
+        else {
+            self.clamp_image_tag_modal_selection();
+            return;
+        };
+        if position + 1 < selectable.len() {
+            self.image_tag_modal_selected_index = selectable[position + 1];
+        }
+    }
+
+    pub fn select_previous_image_tag_modal_row(&mut self) {
+        let selectable = self.image_tag_modal_selectable_indices();
+        let Some(position) = selectable
+            .iter()
+            .position(|idx| *idx == self.image_tag_modal_selected_index)
+        else {
+            self.clamp_image_tag_modal_selection();
+            return;
+        };
+        if position > 0 {
+            self.image_tag_modal_selected_index = selectable[position - 1];
+        }
+    }
+
+    pub fn cycle_image_tag_modal_column_forward(&mut self) {
+        self.image_tag_modal_column = match self.image_tag_modal_column {
+            TagViewerColumn::Include => TagViewerColumn::Current,
+            TagViewerColumn::Current => TagViewerColumn::Exclude,
+            TagViewerColumn::Exclude => TagViewerColumn::Include,
+        };
+        self.clamp_image_tag_modal_selection();
+    }
+
+    pub fn cycle_image_tag_modal_column_backward(&mut self) {
+        self.image_tag_modal_column = match self.image_tag_modal_column {
+            TagViewerColumn::Include => TagViewerColumn::Exclude,
+            TagViewerColumn::Current => TagViewerColumn::Include,
+            TagViewerColumn::Exclude => TagViewerColumn::Current,
+        };
+        self.clamp_image_tag_modal_selection();
+    }
+
+    pub fn toggle_image_tag_modal_left(&mut self) {
+        let tags = self.selected_image_tag_list();
+        let Some(tag) = tags.get(self.image_tag_modal_selected_index) else {
+            return;
+        };
+        let key = tag.to_lowercase();
+
+        match self.image_tag_modal_column {
+            TagViewerColumn::Current => {
+                self.image_tag_modal_include_pending.insert(key.clone());
+                self.image_tag_modal_exclude_pending.remove(&key);
+            }
+            TagViewerColumn::Exclude => {
+                self.image_tag_modal_exclude_pending.remove(&key);
+                self.clamp_image_tag_modal_selection();
+            }
+            TagViewerColumn::Include => {}
+        }
+    }
+
+    pub fn toggle_image_tag_modal_right(&mut self) {
+        let tags = self.selected_image_tag_list();
+        let Some(tag) = tags.get(self.image_tag_modal_selected_index) else {
+            return;
+        };
+        let key = tag.to_lowercase();
+
+        match self.image_tag_modal_column {
+            TagViewerColumn::Current => {
+                self.image_tag_modal_exclude_pending.insert(key.clone());
+                self.image_tag_modal_include_pending.remove(&key);
+            }
+            TagViewerColumn::Include => {
+                self.image_tag_modal_include_pending.remove(&key);
+                self.clamp_image_tag_modal_selection();
+            }
+            TagViewerColumn::Exclude => {}
+        }
+    }
+
+    pub fn apply_image_tag_modal_filters(&mut self) -> bool {
+        let tags = self.selected_image_tag_list();
+        if tags.is_empty() {
+            return false;
+        }
+
+        let mut include_values = Self::parse_tag_filter_values(&self.image_search_form.tag_query);
+        let mut exclude_values =
+            Self::parse_tag_filter_values(&self.image_search_form.excluded_tag_query);
+
+        let mut include_keys = include_values
+            .iter()
+            .map(|tag| tag.to_lowercase())
+            .collect::<HashSet<_>>();
+        let mut exclude_keys = exclude_values
+            .iter()
+            .map(|tag| tag.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        for tag in &tags {
+            let key = tag.to_lowercase();
+            let should_include = self.image_tag_modal_include_pending.contains(&key);
+            let should_exclude = self.image_tag_modal_exclude_pending.contains(&key);
+
+            if should_include {
+                if include_keys.insert(key.clone()) {
+                    include_values.push(tag.clone());
+                }
+                if exclude_keys.remove(&key) {
+                    exclude_values.retain(|value| !value.eq_ignore_ascii_case(tag));
+                }
+            } else if should_exclude {
+                if exclude_keys.insert(key.clone()) {
+                    exclude_values.push(tag.clone());
+                }
+                if include_keys.remove(&key) {
+                    include_values.retain(|value| !value.eq_ignore_ascii_case(tag));
+                }
+            } else {
+                if include_keys.remove(&key) {
+                    include_values.retain(|value| !value.eq_ignore_ascii_case(tag));
+                }
+                if exclude_keys.remove(&key) {
+                    exclude_values.retain(|value| !value.eq_ignore_ascii_case(tag));
+                }
+            }
+        }
+
+        let next_include = Self::join_tag_filter_values(&include_values);
+        let next_exclude = Self::join_tag_filter_values(&exclude_values);
+        let changed = self.image_search_form.tag_query != next_include
+            || self.image_search_form.excluded_tag_query != next_exclude;
+
+        self.image_search_form.tag_query = next_include;
+        self.image_search_form.excluded_tag_query = next_exclude;
+        changed
+    }
+
     pub fn select_next_image_model(&mut self) {
         if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::SavedImages) {
             return;
@@ -492,5 +747,120 @@ impl App {
         if let Err(err) = save_image_tag_catalog_to_file(path.as_path(), &self.image_tag_catalog) {
             self.set_error("Failed to persist image tag catalog", err.to_string());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn sample_image_with_tags(tags: &[&str]) -> ImageItem {
+        ImageItem {
+            id: 42,
+            url: None,
+            width: None,
+            height: None,
+            r#type: None,
+            created_at: None,
+            prompt: None,
+            base_model: None,
+            hash: None,
+            hide_meta: None,
+            user: None,
+            stats: None,
+            tag_names: tags.iter().map(|tag| Some((*tag).to_string())).collect(),
+            model_version_ids: Vec::new(),
+            nsfw_level: None,
+            browsing_level: None,
+            sort_at: None,
+            sort_at_unix: None,
+            metadata: None,
+            generation_process: None,
+            ai_nsfw_level: None,
+            combined_nsfw_level: None,
+            thumbnail_url: None,
+        }
+    }
+
+    #[test]
+    fn image_tag_modal_syncs_selected_image_tags_back_to_filters() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
+        app.image_search_form.tag_query = "foo, keep".into();
+        app.image_search_form.excluded_tag_query = "bar, keep-out".into();
+
+        app.open_image_tags_modal();
+        app.select_next_image_tag_modal_row();
+        app.toggle_image_tag_modal_right();
+        app.select_previous_image_tag_modal_row();
+        app.toggle_image_tag_modal_right();
+
+        let changed = app.apply_image_tag_modal_filters();
+
+        assert!(changed);
+        assert_eq!(app.image_search_form.tag_query, "keep");
+        assert_eq!(
+            app.image_search_form.excluded_tag_query,
+            "bar, keep-out, foo"
+        );
+    }
+
+    #[test]
+    fn image_tag_modal_adds_new_include_without_touching_other_filters() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_image_with_tags(&["foo", "bar"])];
+        app.image_search_form.tag_query = "keep".into();
+        app.image_search_form.excluded_tag_query = "keep-out".into();
+
+        app.open_image_tags_modal();
+        app.toggle_image_tag_modal_left();
+
+        let changed = app.apply_image_tag_modal_filters();
+
+        assert!(changed);
+        assert_eq!(app.image_search_form.tag_query, "keep, foo");
+        assert_eq!(app.image_search_form.excluded_tag_query, "keep-out");
+    }
+
+    #[test]
+    fn image_tag_modal_keeps_focus_in_current_column_when_adding() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
+
+        app.open_image_tags_modal();
+        app.toggle_image_tag_modal_left();
+
+        assert_eq!(app.image_tag_modal_column, TagViewerColumn::Current);
+        assert_eq!(app.image_tag_modal_selected_index, 0);
+        assert!(
+            app.image_tag_modal_include_pending.contains("foo"),
+            "expected foo to be queued for include"
+        );
+    }
+
+    #[test]
+    fn image_tag_modal_moves_only_across_tags_present_in_focused_column() {
+        let mut app = App::new(AppConfig::default());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
+
+        app.open_image_tags_modal();
+        app.toggle_image_tag_modal_left();
+        app.select_next_image_tag_modal_row();
+        app.toggle_image_tag_modal_left();
+
+        app.cycle_image_tag_modal_column_backward();
+        assert_eq!(app.image_tag_modal_column, TagViewerColumn::Include);
+        assert_eq!(app.image_tag_modal_selected_index, 1);
+
+        app.select_previous_image_tag_modal_row();
+        assert_eq!(app.image_tag_modal_selected_index, 0);
+
+        app.select_next_image_tag_modal_row();
+        assert_eq!(app.image_tag_modal_selected_index, 1);
     }
 }

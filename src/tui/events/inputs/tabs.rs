@@ -183,9 +183,7 @@ pub(super) fn handle_tab_key(
             if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
                 && app.selected_image_in_active_view().is_some()
             {
-                app.show_image_tags_modal = true;
-                app.image_tags_scroll = 0;
-                app.status = "Tag viewer opened".into();
+                app.open_image_tags_modal();
             }
             return Some(LoopControl::Continue);
         }

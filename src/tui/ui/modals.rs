@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::tui::{
-    app::{App, MainTab, SearchTemplateKind},
+    app::{App, MainTab, SearchTemplateKind, TagViewerColumn},
     image::{image_negative_prompt, image_prompt},
     model::model_name,
     status::format_status_timestamp,
@@ -110,33 +110,191 @@ fn draw_image_tags_modal(f: &mut Frame, app: &App) {
     };
 
     let tags = crate::tui::image::image_tags(img);
-    let content = if tags.is_empty() {
-        "<no tags>".to_string()
-    } else {
-        tags.join("\n")
-    };
-
-    let area = centered_rect(62, 78, f.area());
+    let area = centered_rect(86, 78, f.area());
     let block = Block::default().borders(Borders::ALL).title(" Tag Viewer ");
     f.render_widget(Clear, area);
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
     let sections = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(4),
+            Constraint::Length(2),
+        ])
         .split(inner);
 
-    let tags_para = Paragraph::new(content)
-        .wrap(Wrap { trim: false })
-        .scroll((app.image_tags_scroll, 0));
-    f.render_widget(tags_para, sections[0]);
+    let description = Paragraph::new(Line::from(Span::styled(
+        "Search helper: move tags into Tags or Excluded Tags, then close this modal to apply once.",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center)
+    .wrap(Wrap { trim: true });
+    f.render_widget(description, sections[0]);
+
+    if tags.is_empty() {
+        let empty = Paragraph::new("<no tags>")
+            .alignment(Alignment::Center)
+            .wrap(Wrap { trim: false });
+        f.render_widget(empty, sections[1]);
+    } else {
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(33),
+                Constraint::Percentage(34),
+                Constraint::Percentage(33),
+            ])
+            .split(sections[1]);
+
+        let visible_rows = columns[1].height.saturating_sub(2) as usize;
+        let selected_row = app
+            .image_tag_modal_selected_index
+            .min(tags.len().saturating_sub(1));
+        let start_idx = if visible_rows == 0 || selected_row < visible_rows {
+            0
+        } else {
+            selected_row + 1 - visible_rows
+        };
+
+        let include_items = tags
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows.max(1))
+            .map(|(idx, tag)| {
+                let selected =
+                    idx == selected_row && app.image_tag_modal_column == TagViewerColumn::Include;
+                let active = app
+                    .image_tag_modal_include_pending
+                    .contains(&tag.to_lowercase());
+                let text = if active { tag.clone() } else { String::new() };
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else if active {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(text, style)))
+            })
+            .collect::<Vec<_>>();
+
+        let current_items = tags
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows.max(1))
+            .map(|(idx, tag)| {
+                let selected =
+                    idx == selected_row && app.image_tag_modal_column == TagViewerColumn::Current;
+                let pending = app
+                    .image_tag_modal_include_pending
+                    .contains(&tag.to_lowercase())
+                    || app
+                        .image_tag_modal_exclude_pending
+                        .contains(&tag.to_lowercase());
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if pending {
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(Line::from(Span::styled(tag.clone(), style)))
+            })
+            .collect::<Vec<_>>();
+
+        let exclude_items = tags
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(visible_rows.max(1))
+            .map(|(idx, tag)| {
+                let selected =
+                    idx == selected_row && app.image_tag_modal_column == TagViewerColumn::Exclude;
+                let active = app
+                    .image_tag_modal_exclude_pending
+                    .contains(&tag.to_lowercase());
+                let text = if active { tag.clone() } else { String::new() };
+                let style = if selected {
+                    Style::default()
+                        .fg(Color::White)
+                        .bg(Color::Red)
+                        .add_modifier(Modifier::BOLD)
+                } else if active {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(Span::styled(text, style)))
+            })
+            .collect::<Vec<_>>();
+
+        let include_title = format!(" Tags ({}) ", app.image_tag_modal_include_pending.len());
+        let exclude_title = format!(
+            " Excluded Tags ({}) ",
+            app.image_tag_modal_exclude_pending.len()
+        );
+        let include_border = if app.image_tag_modal_column == TagViewerColumn::Include {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let current_border = if app.image_tag_modal_column == TagViewerColumn::Current {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        let exclude_border = if app.image_tag_modal_column == TagViewerColumn::Exclude {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        f.render_widget(
+            List::new(include_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(include_title)
+                    .border_style(include_border),
+            ),
+            columns[0],
+        );
+        f.render_widget(
+            List::new(current_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Current Tags ")
+                    .border_style(current_border),
+            ),
+            columns[1],
+        );
+        f.render_widget(
+            List::new(exclude_items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(exclude_title)
+                    .border_style(exclude_border),
+            ),
+            columns[2],
+        );
+    }
 
     let help = Paragraph::new(Line::from(Span::styled(
-        " [j/k or ↑/↓] Scroll  [t] Close  [Esc] Close ",
+        " [j/k or ↑/↓] Move  [←/→] Add/Remove  [Tab] Focus column  [t/Enter/Esc] Apply & Close ",
         help_text_style(),
     )))
     .alignment(Alignment::Center);
-    f.render_widget(help, sections[1]);
+    f.render_widget(help, sections[2]);
 }
 
 fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {

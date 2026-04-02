@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::fs;
 use std::io::ErrorKind;
 
-use crate::tui::app::{App, WorkerCommand};
+use crate::tui::app::{App, MainTab, WorkerCommand};
 use crate::tui::status::StatusHistoryFilter;
 
 use super::actions::{
@@ -19,6 +19,22 @@ pub(super) enum ModalKeyOutcome {
 fn close_modal_and_refresh_image(app: &mut App, close: impl FnOnce(&mut App)) {
     close(app);
     reload_selected_image(app);
+}
+
+fn close_image_tags_modal(app: &mut App) {
+    let changed = app.apply_image_tag_modal_filters();
+    app.close_image_tags_modal();
+
+    if changed {
+        if app.active_tab == MainTab::Images {
+            app.execute_image_search();
+        } else {
+            app.set_status("Updated image tag filters");
+            reload_selected_image(app);
+        }
+    } else {
+        reload_selected_image(app);
+    }
 }
 
 pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyOutcome> {
@@ -115,15 +131,25 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
     if app.show_image_tags_modal {
         match key.code {
             KeyCode::Char('t') | KeyCode::Esc | KeyCode::Enter => {
-                close_modal_and_refresh_image(app, |app| {
-                    app.show_image_tags_modal = false;
-                });
+                close_image_tags_modal(app);
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                app.image_tags_scroll = app.image_tags_scroll.saturating_add(1);
+                app.select_next_image_tag_modal_row();
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                app.image_tags_scroll = app.image_tags_scroll.saturating_sub(1);
+                app.select_previous_image_tag_modal_row();
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                app.toggle_image_tag_modal_left();
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                app.toggle_image_tag_modal_right();
+            }
+            KeyCode::Tab => {
+                app.cycle_image_tag_modal_column_forward();
+            }
+            KeyCode::BackTab => {
+                app.cycle_image_tag_modal_column_backward();
             }
             _ => {}
         }
