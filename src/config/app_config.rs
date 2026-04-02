@@ -243,6 +243,10 @@ impl AppConfig {
         Self::config_dir().map(|config_dir| config_dir.join("image_tags.json"))
     }
 
+    pub fn search_templates_path(&self) -> Option<PathBuf> {
+        Self::config_dir().map(|config_dir| config_dir.join("search_templates.json"))
+    }
+
     pub fn model_cover_cache_path(&self) -> Option<PathBuf> {
         self.model_cover_cache_path
             .clone()

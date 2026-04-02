@@ -127,6 +127,7 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
         || app.show_image_prompt_modal
         || app.show_image_model_detail_modal
         || app.show_bookmark_confirm_modal
+        || app.show_search_template_modal
         || app.show_exit_confirm_modal
         || app.show_resume_download_modal
         || matches!(

@@ -5,6 +5,7 @@ use ratatui_image::protocol::StatefulProtocol;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::config::{PersistedImageFilterState, PersistedModelFilterState};
 use crate::tui::app::MediaRenderRequest;
 use crate::tui::status::StatusEvent;
 
@@ -56,6 +57,30 @@ pub enum AppMode {
 pub enum BookmarkPathAction {
     Export,
     Import,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum SearchTemplateKind {
+    Model,
+    Image,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ModelSearchTemplate {
+    pub name: String,
+    pub state: PersistedModelFilterState,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ImageSearchTemplate {
+    pub name: String,
+    pub state: PersistedImageFilterState,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SearchTemplateStore {
+    pub model_templates: Vec<ModelSearchTemplate>,
+    pub image_templates: Vec<ImageSearchTemplate>,
 }
 
 pub enum AppMessage {

@@ -81,6 +81,9 @@ fn handle_model_search_mode(app: &mut App, code: KeyCode) {
                 app.status = format!("Searching for models: '{}'...", app.search_form.query);
             }
         }
+        KeyCode::Char('T') => {
+            app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Model);
+        }
         KeyCode::Up => {
             if app.search_form.mode == SearchFormMode::Builder {
                 app.search_form.focused_section = match app.search_form.focused_section {
@@ -533,6 +536,9 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                 app.image_feed_loading = true;
                 app.status = "Searching image feed...".into();
             }
+        }
+        KeyCode::Char('T') => {
+            app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Image);
         }
         KeyCode::Char('f') => app.image_search_form.begin_builder(),
         KeyCode::Char(' ') => {

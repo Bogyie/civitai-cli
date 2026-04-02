@@ -179,6 +179,18 @@ pub(super) fn handle_tab_key(
             }
             return Some(LoopControl::Continue);
         }
+        KeyCode::Char('T') => {
+            match app.active_tab {
+                MainTab::Models | MainTab::SavedModels => {
+                    app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Model);
+                }
+                MainTab::Images | MainTab::SavedImages => {
+                    app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Image);
+                }
+                MainTab::Downloads | MainTab::Settings => {}
+            }
+            return Some(LoopControl::Continue);
+        }
         KeyCode::Char('M') => {
             app.begin_status_history_modal();
             app.status = "Status history opened".into();

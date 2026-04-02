@@ -165,6 +165,52 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
         return Some(ModalKeyOutcome::Consumed);
     }
 
+    if app.show_search_template_modal {
+        if app.search_template_name_editing {
+            match key.code {
+                KeyCode::Esc => {
+                    app.search_template_name_editing = false;
+                    app.search_template_name_draft.clear();
+                    app.set_status("Template save cancelled");
+                }
+                KeyCode::Enter => {
+                    app.save_current_search_template();
+                }
+                KeyCode::Backspace => {
+                    app.search_template_name_draft.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.search_template_name_draft.push(c);
+                }
+                _ => {}
+            }
+            return Some(ModalKeyOutcome::Consumed);
+        }
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('T') => {
+                app.close_search_template_modal();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                app.select_next_search_template();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                app.select_previous_search_template();
+            }
+            KeyCode::Enter | KeyCode::Char('l') => {
+                app.load_selected_search_template();
+            }
+            KeyCode::Char('s') => {
+                app.begin_search_template_save();
+            }
+            KeyCode::Char('d') => {
+                app.delete_selected_search_template();
+            }
+            _ => {}
+        }
+        return Some(ModalKeyOutcome::Consumed);
+    }
+
     if app.show_resume_download_modal {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {

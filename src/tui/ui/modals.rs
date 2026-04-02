@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::tui::{
-    app::{App, MainTab},
+    app::{App, MainTab, SearchTemplateKind},
     image::{image_negative_prompt, image_prompt},
     model::model_name,
     status::format_status_timestamp,
@@ -41,6 +41,10 @@ pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
 
     if app.show_bookmark_confirm_modal {
         draw_bookmark_confirm_modal(f, app);
+    }
+
+    if app.show_search_template_modal {
+        draw_search_template_modal(f, app);
     }
 
     if app.show_exit_confirm_modal {
@@ -137,7 +141,11 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
         format!("Level: {}", app.status_level.label()),
         format!("Summary: {}", app.status),
     ];
-    if let Some(detail) = app.status_detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
+    if let Some(detail) = app
+        .status_detail
+        .as_deref()
+        .filter(|detail| !detail.trim().is_empty())
+    {
         full_text.push(String::new());
         full_text.push("Detail:".to_string());
         full_text.push(detail.to_string());
@@ -178,7 +186,9 @@ fn draw_status_history_modal(f: &mut Frame, app: &App) {
     let filtered = app.filtered_status_history();
     let max_width = sections[0].width.saturating_sub(6) as usize;
     let items = if filtered.is_empty() {
-        vec![ListItem::new(Line::from("No status messages recorded yet."))]
+        vec![ListItem::new(Line::from(
+            "No status messages recorded yet.",
+        ))]
     } else {
         filtered
             .iter()
@@ -197,12 +207,10 @@ fn draw_status_history_modal(f: &mut Frame, app: &App) {
     }
 
     let list = List::new(items)
-        .block(
-            Block::default().borders(Borders::ALL).title(format!(
-                " Messages | Filter: {} ",
-                app.status_history_filter.label()
-            )),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " Messages | Filter: {} ",
+            app.status_history_filter.label()
+        )))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -289,6 +297,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
             Line::from(" [/] Quick search"),
             Line::from(" [f] Open filter builder"),
+            Line::from(" [T] Open search template manager"),
             Line::from(" [Enter] Apply search / run selected action"),
             Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle"),
             Line::from(" Text sections accept typing directly"),
@@ -406,6 +415,69 @@ fn draw_bookmark_confirm_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 20, f.area());
     f.render_widget(Clear, area);
     f.render_widget(p, area);
+}
+
+fn draw_search_template_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(72, 58, f.area());
+    f.render_widget(Clear, area);
+
+    let title = match app.search_template_kind {
+        SearchTemplateKind::Model => " Model Search Templates ",
+        SearchTemplateKind::Image => " Image Search Templates ",
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(6),
+            Constraint::Length(4),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let names = app.search_template_names();
+    let empty = names.is_empty();
+    let items = if empty {
+        vec![ListItem::new(Line::from("No saved templates."))]
+    } else {
+        names.into_iter().map(ListItem::new).collect::<Vec<_>>()
+    };
+    let mut state = ListState::default();
+    if !empty {
+        state.select(Some(app.selected_search_template_index));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Templates "))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    f.render_stateful_widget(list, sections[0], &mut state);
+
+    let input_text = if app.search_template_name_editing {
+        format!(" Name: {}█", app.search_template_name_draft)
+    } else {
+        " Press [s] to save current filters as a template ".to_string()
+    };
+    let input = Paragraph::new(input_text)
+        .block(Block::default().borders(Borders::ALL).title(" Save "))
+        .wrap(Wrap { trim: true });
+    f.render_widget(input, sections[1]);
+
+    let help_text = if app.search_template_name_editing {
+        " [Type] Name  [Enter] Save  [Esc] Cancel "
+    } else {
+        " [j/k] Move  [Enter] Load  [s] Save current  [d] Delete  [Esc] Close "
+    };
+    let help = Paragraph::new(Line::from(Span::styled(help_text, help_text_style())))
+        .alignment(Alignment::Center);
+    f.render_widget(help, sections[2]);
 }
 
 fn draw_exit_confirm_modal(f: &mut Frame, app: &App) {

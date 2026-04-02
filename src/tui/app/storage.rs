@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::tui::app::SearchTemplateStore;
 use crate::tui::app::{DownloadHistoryEntry, DownloadHistoryStatus, InterruptedDownloadSession};
 
 pub(super) fn load_bookmarks(path: Option<&Path>) -> Vec<Model> {
@@ -59,6 +60,19 @@ pub(super) fn load_image_tag_catalog(path: Option<&Path>) -> Vec<String> {
     tags
 }
 
+pub(super) fn load_search_templates(path: Option<&Path>) -> SearchTemplateStore {
+    let Some(path) = path else {
+        return SearchTemplateStore::default();
+    };
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(_) => return SearchTemplateStore::default(),
+    };
+
+    serde_json::from_str::<SearchTemplateStore>(&content).unwrap_or_default()
+}
+
 pub(super) fn save_bookmarks_to_file(path: &Path, bookmarks: &[Model]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
@@ -105,6 +119,19 @@ pub(super) fn save_image_tag_catalog_to_file(path: &Path, tags: &[String]) -> Re
     normalized.sort_by_key(|tag| tag.to_lowercase());
 
     let json = serde_json::to_string_pretty(&normalized).map_err(|err| err.to_string())?;
+    fs::write(path, json).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+pub(super) fn save_search_templates_to_file(
+    path: &Path,
+    store: &SearchTemplateStore,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+
+    let json = serde_json::to_string_pretty(store).map_err(|err| err.to_string())?;
     fs::write(path, json).map_err(|err| err.to_string())?;
     Ok(())
 }
@@ -164,7 +191,8 @@ pub(super) fn collect_paused_sessions_from_history(
         let session_key = (
             entry.model_id,
             entry.version_id,
-            entry.file_path
+            entry
+                .file_path
                 .clone()
                 .unwrap_or_else(|| PathBuf::from(entry.filename.clone())),
         );

@@ -5,6 +5,7 @@ mod forms;
 mod images;
 mod models;
 mod storage;
+mod templates;
 pub(crate) mod types;
 
 use self::filters::{
@@ -18,14 +19,15 @@ pub use self::forms::{
 use self::storage::{
     collect_paused_sessions_from_history, load_bookmarks, load_download_history,
     load_image_bookmarks, load_image_tag_catalog, load_interrupted_downloads,
-    save_bookmarks_to_file, save_download_history_to_file, save_image_bookmarks_to_file,
-    save_image_tag_catalog_to_file, save_interrupted_downloads_to_file,
+    load_search_templates, save_bookmarks_to_file, save_download_history_to_file,
+    save_image_bookmarks_to_file, save_image_tag_catalog_to_file,
+    save_interrupted_downloads_to_file, save_search_templates_to_file,
 };
 pub use self::types::{
     AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
-    DownloadKey, DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab,
-    NewDownloadHistoryEntry, SelectedModelCover, SelectedVersionCover, VersionCoverJob,
-    WorkerCommand,
+    DownloadKey, DownloadState, DownloadTracker, ImageSearchTemplate, InterruptedDownloadSession,
+    MainTab, ModelSearchTemplate, NewDownloadHistoryEntry, SearchTemplateKind, SearchTemplateStore,
+    SelectedModelCover, SelectedVersionCover, VersionCoverJob, WorkerCommand,
 };
 use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
 use crate::tui::model::{
@@ -69,6 +71,14 @@ pub struct App {
     pub image_bookmarks: Vec<ImageItem>,
     visible_image_bookmarks_cache: Vec<ImageItem>,
     pub image_tag_catalog: Vec<String>,
+    pub model_search_templates: Vec<ModelSearchTemplate>,
+    pub image_search_templates: Vec<ImageSearchTemplate>,
+    pub search_template_file_path: Option<PathBuf>,
+    pub show_search_template_modal: bool,
+    pub search_template_kind: SearchTemplateKind,
+    pub selected_search_template_index: usize,
+    pub search_template_name_draft: String,
+    pub search_template_name_editing: bool,
     pub show_model_details: bool,
     pub model_list_state: ListState,
     pub bookmark_list_state: ListState,
@@ -145,6 +155,8 @@ impl App {
             .or_else(crate::config::AppConfig::image_bookmark_path);
         let image_bookmarks = load_image_bookmarks(image_bookmark_file_path.as_deref());
         let image_tag_catalog = load_image_tag_catalog(config.image_tag_catalog_path().as_deref());
+        let search_template_file_path = config.search_templates_path();
+        let search_templates = load_search_templates(search_template_file_path.as_deref());
         let download_history_file_path = config
             .download_history_file_path
             .clone()
@@ -202,6 +214,14 @@ impl App {
             image_bookmarks,
             visible_image_bookmarks_cache: Vec::new(),
             image_tag_catalog,
+            model_search_templates: search_templates.model_templates,
+            image_search_templates: search_templates.image_templates,
+            search_template_file_path,
+            show_search_template_modal: false,
+            search_template_kind: SearchTemplateKind::Model,
+            selected_search_template_index: 0,
+            search_template_name_draft: String::new(),
+            search_template_name_editing: false,
             show_model_details: false,
             model_list_state,
             bookmark_list_state,
