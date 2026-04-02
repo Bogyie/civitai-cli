@@ -221,23 +221,20 @@ impl App {
     }
 
     pub fn persist_interrupted_downloads(&mut self) {
-        if let Some(path) = &self.interrupted_download_file_path {
-            if let Err(err) =
+        if let Some(path) = &self.interrupted_download_file_path
+            && let Err(err) =
                 save_interrupted_downloads_to_file(path, &self.interrupted_download_sessions)
-            {
-                self.last_error = Some(err.to_string());
-            } else {
-                self.last_error = None;
-            }
+        {
+            self.set_error("Failed to persist interrupted downloads", err.to_string());
         }
     }
 
     pub fn begin_exit_confirm_modal(&mut self) {
         self.show_exit_confirm_modal = true;
-        self.status = format!(
+        self.set_warn(format!(
             "Active downloads detected ({}). Confirm exit: [Y] Save and exit, [D] Delete and exit, [N] Cancel.",
             self.active_downloads.len()
-        );
+        ));
     }
 
     pub fn cancel_exit_confirm_modal(&mut self) {
@@ -245,12 +242,10 @@ impl App {
     }
 
     pub fn persist_download_history(&mut self) {
-        if let Some(path) = &self.download_history_file_path {
-            if let Err(err) = save_download_history_to_file(path, &self.download_history) {
-                self.last_error = Some(err.to_string());
-            } else {
-                self.last_error = None;
-            }
+        if let Some(path) = &self.download_history_file_path
+            && let Err(err) = save_download_history_to_file(path, &self.download_history)
+        {
+            self.set_error("Failed to persist download history", err.to_string());
         }
     }
 }

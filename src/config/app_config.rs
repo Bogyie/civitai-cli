@@ -25,6 +25,10 @@ fn default_media_quality() -> MediaQualityPreference {
     MediaQualityPreference::Medium
 }
 
+fn default_debug_logging() -> bool {
+    false
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MediaQualityPreference {
@@ -84,6 +88,8 @@ pub struct AppConfig {
     pub image_cache_ttl_minutes: u64,
     #[serde(default = "default_media_quality")]
     pub media_quality: MediaQualityPreference,
+    #[serde(default = "default_debug_logging")]
+    pub debug_logging: bool,
 }
 
 impl AppConfig {
@@ -224,6 +230,7 @@ impl Default for AppConfig {
             image_detail_cache_ttl_minutes: default_image_detail_cache_ttl_minutes(),
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
             media_quality: default_media_quality(),
+            debug_logging: default_debug_logging(),
         }
     }
 }

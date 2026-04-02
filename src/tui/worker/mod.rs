@@ -37,6 +37,7 @@ use crate::tui::model::{
     resolve_image_download_target_dir,
 };
 use crate::tui::runtime::{debug_fetch_log, render_request_key};
+use crate::tui::status::StatusEvent;
 use civitai_cli::sdk::{
     DownloadControl, DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec,
     ModelDownloadAuth, SdkClientBuilder, SearchModelHit as Model,
@@ -50,12 +51,16 @@ fn build_model_page_url(model: &Model, version_id: Option<u64>) -> String {
     crate::tui::model::build_model_url(model, version_id)
 }
 
-fn status_with_url(action: &str, url: &str) -> String {
-    format!("{} | {}", action, url)
+fn status_message(event: impl Into<StatusEvent>) -> AppMessage {
+    AppMessage::StatusUpdate(event.into())
 }
 
-fn error_status_with_url(action: &str, url: &str, err: &str) -> String {
-    format!("{} | {} | {}", action, url, err)
+fn status_with_url(action: &str, url: &str) -> StatusEvent {
+    StatusEvent::info_detail(action, format!("URL: {url}"))
+}
+
+fn error_status_with_url(action: &str, url: &str, err: &str) -> StatusEvent {
+    StatusEvent::error_detail(action, format!("URL: {url}\nError: {err}"))
 }
 
 fn collect_model_cover_jobs(
@@ -183,7 +188,7 @@ pub async fn spawn_worker(
                         let request_key = render_request_key(render_request, media_quality);
                         let use_image_search_cache = image_search_ttl_minutes > 0;
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(status_with_url(
+                            .send(status_message(status_with_url(
                                 if is_append {
                                     "Fetching image feed next page"
                                 } else {
@@ -233,7 +238,7 @@ pub async fn spawn_worker(
                                     ) =>
                                 {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(status_with_url(
+                                        .send(status_message(status_with_url(
                                             "Loaded cached image feed",
                                             &current_url,
                                         )))
@@ -342,13 +347,12 @@ pub async fn spawn_worker(
                                     &format!("FetchImages: get_images failed: {}", e),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(
+                                    .send(status_message(
                                         error_status_with_url(
                                             "Error fetching images",
                                             &current_url,
                                             &e.to_string(),
-                                        )
-                                        .to_string(),
+                                        ),
                                     ))
                                     .await;
                                 return;
@@ -519,7 +523,7 @@ pub async fn spawn_worker(
                         );
 
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(format!(
+                            .send(status_message(format!(
                                 "Loading cache lookup for \"{}\"...",
                                 query_label
                             )))
@@ -544,7 +548,7 @@ pub async fn spawn_worker(
                                 && let Some(cache_root) = cache_path.as_deref()
                             {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
+                                    .send(status_message(format!(
                                         "Checking on-disk cache for \"{}\"",
                                         query_label
                                     )))
@@ -564,7 +568,7 @@ pub async fn spawn_worker(
                                             ),
                                         );
                                         let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
+                                            .send(status_message(format!(
                                                 "Loaded on-disk cached results for \"{}\"",
                                                 query_label
                                             )))
@@ -578,7 +582,7 @@ pub async fn spawn_worker(
                                             ),
                                         );
                                         let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
+                                            .send(status_message(format!(
                                                 "Cached file expired for \"{}\", refreshing",
                                                 query_label
                                             )))
@@ -602,7 +606,7 @@ pub async fn spawn_worker(
                                             ),
                                         );
                                         let _ = tx_msg_clone
-                                            .send(AppMessage::StatusUpdate(format!(
+                                            .send(status_message(format!(
                                                 "Using in-memory cached results for \"{}\"",
                                                 query_label
                                             )))
@@ -618,7 +622,7 @@ pub async fn spawn_worker(
                                     }
                                 } else {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(format!(
+                                        .send(status_message(format!(
                                             "Cached results expired for \"{}\", refreshing...",
                                             query_label
                                         )))
@@ -638,7 +642,7 @@ pub async fn spawn_worker(
                                     &format!("SearchModels: no cache hit for \"{}\"", query_label),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
+                                    .send(status_message(format!(
                                         "No cached results for \"{}\"",
                                         query_label
                                     )))
@@ -646,7 +650,7 @@ pub async fn spawn_worker(
                             }
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(
+                                .send(status_message(
                                     (if use_cache {
                                         format!(
                                             "Bypassing cache for \"{}\" due to manual refresh",
@@ -716,7 +720,7 @@ pub async fn spawn_worker(
                             }
 
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
+                                .send(status_message(format!(
                                     "Loaded {} cached models",
                                     cached_len
                                 )))
@@ -733,7 +737,7 @@ pub async fn spawn_worker(
                                 }
                             }
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
+                                .send(status_message(format!(
                                     "Cache skipped, fetching models for \"{}\"",
                                     query_label
                                 )))
@@ -742,7 +746,7 @@ pub async fn spawn_worker(
 
                         if next_page_index.is_some() {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(status_with_url(
+                                .send(status_message(status_with_url(
                                     &format!("Fetching next models page for '{}'", query_label),
                                     &request_url,
                                 )))
@@ -753,7 +757,7 @@ pub async fn spawn_worker(
                             );
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(status_with_url(
+                                .send(status_message(status_with_url(
                                     &format!("Fetching models matching '{}'", query_label),
                                     &request_url,
                                 )))
@@ -827,7 +831,7 @@ pub async fn spawn_worker(
                                         .await;
                                 }
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(status_with_url(
+                                    .send(status_message(status_with_url(
                                         &format!(
                                             "Fetched {} models for \"{}\"",
                                             model_count, query_label
@@ -901,7 +905,7 @@ pub async fn spawn_worker(
                                     ),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(error_status_with_url(
+                                    .send(status_message(error_status_with_url(
                                         "Search failed",
                                         &request_url,
                                         &e.to_string(),
@@ -924,7 +928,7 @@ pub async fn spawn_worker(
 
                     tokio::spawn(async move {
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(format!(
+                            .send(status_message(format!(
                                 "Loading model details for {}...",
                                 model_id
                             )))
@@ -946,7 +950,7 @@ pub async fn spawn_worker(
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
+                                    .send(status_message(format!(
                                         "Error loading model details for {}: {}",
                                         model_query, err
                                     )))
@@ -957,9 +961,11 @@ pub async fn spawn_worker(
                 }
                 WorkerCommand::ClearSearchCache => {
                     if !use_search_cache() {
-                        let _ = tx_msg
-                            .send(AppMessage::StatusUpdate(
-                                "Debug mode: search cache is disabled, nothing to clear.".into(),
+                            let _ = tx_msg
+                                .send(status_message(
+                                StatusEvent::debug(
+                                    "Debug mode: search cache is disabled, nothing to clear.",
+                                ),
                             ))
                             .await;
                         continue;
@@ -980,7 +986,7 @@ pub async fn spawn_worker(
                         &format!("Search cache clear requested, removed={} entries", cleared),
                     );
                     let _ = tx_msg
-                        .send(AppMessage::StatusUpdate(format!(
+                        .send(status_message(format!(
                             "Cleared {} cached search item(s)",
                             cleared
                         )))
@@ -1026,7 +1032,7 @@ pub async fn spawn_worker(
                         &format!("Clear all caches requested, removed_targets={removed_targets}"),
                     );
                     let _ = tx_msg
-                        .send(AppMessage::StatusUpdate(format!(
+                        .send(status_message(format!(
                             "Cleared cache storage ({removed_targets} target(s))"
                         )))
                         .await;
@@ -1142,15 +1148,15 @@ pub async fn spawn_worker(
                                 *image_detail_path = new_image_detail_cache_path;
                             }
 
-                            let _ = tx_msg
-                                .send(AppMessage::StatusUpdate(
-                                    "Configuration sync applied to worker".into(),
+                                let _ = tx_msg
+                                    .send(status_message(
+                                    StatusEvent::debug("Configuration sync applied to worker"),
                                 ))
-                                .await;
+                                    .await;
                         }
                         Err(err) => {
                             let _ = tx_msg
-                                .send(AppMessage::StatusUpdate(format!(
+                                .send(status_message(format!(
                                     "Failed to update worker API config: {}",
                                     err
                                 )))
@@ -1173,7 +1179,7 @@ pub async fn spawn_worker(
                         let Some(spec) = download_client.build_media_download_spec(&image_hit)
                         else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
+                                .send(status_message(format!(
                                     "No downloadable media found for image {}",
                                     image_hit.id
                                 )))
@@ -1190,7 +1196,7 @@ pub async fn spawn_worker(
                             ..DownloadOptions::default()
                         };
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(format!(
+                            .send(status_message(format!(
                                 "Downloading image {}...",
                                 image_hit.id
                             )))
@@ -1199,7 +1205,7 @@ pub async fn spawn_worker(
                         match download_client.download(&spec, &options, None, None).await {
                             Ok(result) => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
+                                    .send(status_message(format!(
                                         "Downloaded image {} to {}",
                                         image_hit.id,
                                         result.path.display()
@@ -1208,7 +1214,7 @@ pub async fn spawn_worker(
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::StatusUpdate(format!(
+                                    .send(status_message(format!(
                                         "Failed to download image {}: {}",
                                         image_hit.id, err
                                     )))
@@ -1235,7 +1241,7 @@ pub async fn spawn_worker(
                         let model_id = model_hit.id;
                         let model_url = build_model_url(&model_hit, version_id);
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(status_with_url(
+                            .send(status_message(status_with_url(
                                 &format!("Preparing download for {}", model_name(&model_hit)),
                                 &model_url,
                             )))
@@ -1294,7 +1300,7 @@ pub async fn spawn_worker(
                                 model_name(&model_hit),
                             ));
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(format!(
+                                .send(status_message(format!(
                                     "Starting download stream for {}",
                                     model_name(&model_hit)
                                 )))
@@ -1324,7 +1330,7 @@ pub async fn spawn_worker(
                             }
                         } else {
                             let _ = tx_msg_clone
-                                .send(AppMessage::StatusUpdate(error_status_with_url(
+                                .send(status_message(error_status_with_url(
                                     &format!(
                                         "Failed to resolve version {} for model {}",
                                         version_id, model_id
@@ -1367,7 +1373,7 @@ pub async fn spawn_worker(
                         let model_url =
                             format!("https://civitai.com/api/download/models/{}", version_id);
                         let _ = tx_msg_clone
-                            .send(AppMessage::StatusUpdate(status_with_url(
+                            .send(status_message(status_with_url(
                                 &format!("Resuming download for model {}", model_id),
                                 &model_url,
                             )))

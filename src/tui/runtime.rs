@@ -14,6 +14,9 @@ pub fn debug_fetch_log_path(config: &AppConfig) -> Option<PathBuf> {
 }
 
 pub fn debug_fetch_log(config: &AppConfig, message: &str) {
+    if !config.debug_logging {
+        return;
+    }
     let Some(path) = debug_fetch_log_path(config) else {
         return;
     };
@@ -54,10 +57,6 @@ pub fn render_request_key(request: MediaRenderRequest, quality: MediaQualityPref
 }
 
 fn write_debug_fetch_log(path: &Path, message: &str) {
-    if !cfg!(debug_assertions) {
-        return;
-    }
-
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

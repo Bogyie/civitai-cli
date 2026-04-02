@@ -32,6 +32,7 @@ use crate::tui::model::{
     ParsedModelMetrics, ParsedModelVersion, default_base_model, model_metrics, model_name,
     model_versions,
 };
+use crate::tui::status::{StatusEvent, StatusHistoryFilter, StatusLevel};
 use civitai_cli::sdk::{
     ModelSearchSortBy, ModelSearchState, SearchImageHit as ImageItem, SearchModelHit as Model,
 };
@@ -46,11 +47,6 @@ struct ParsedModelCacheEntry {
     metrics: ParsedModelMetrics,
     versions: Vec<ParsedModelVersion>,
     default_base_model: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct StatusHistoryEntry {
-    pub message: String,
 }
 
 pub struct App {
@@ -119,14 +115,18 @@ pub struct App {
     pub download_history: Vec<DownloadHistoryEntry>,
 
     pub status: String,
+    pub status_detail: Option<String>,
+    pub status_level: StatusLevel,
+    pub status_recorded_at: std::time::SystemTime,
     pub last_error: Option<String>,
     pub show_help_modal: bool,
     pub show_status_modal: bool,
     pub show_status_history_modal: bool,
     pub show_exit_confirm_modal: bool,
     pub show_resume_download_modal: bool,
-    pub status_history: Vec<StatusHistoryEntry>,
+    pub status_history: Vec<StatusEvent>,
     pub selected_status_history_index: usize,
+    pub status_history_filter: StatusHistoryFilter,
     pub bookmark_path_prompt_action: Option<BookmarkPathAction>,
     pub bookmark_path_draft: String,
     pub tx: Option<mpsc::Sender<WorkerCommand>>,
@@ -182,6 +182,7 @@ impl App {
         let mut model_list_state = ListState::default();
         model_list_state.select(Some(0));
 
+        let initial_status = StatusEvent::info("Initializing App...");
         let mut app = Self {
             active_tab: MainTab::Models,
             mode: AppMode::Browsing,
@@ -244,16 +245,18 @@ impl App {
             interrupted_download_file_path,
             interrupted_download_sessions: interrupted_sessions_for_state,
             show_resume_download_modal,
-            status: "Initializing App...".to_string(),
+            status: initial_status.summary.clone(),
+            status_detail: initial_status.detail.clone(),
+            status_level: initial_status.level,
+            status_recorded_at: initial_status.recorded_at,
             last_error: None,
             show_help_modal: false,
             show_status_modal: false,
             show_status_history_modal: false,
             show_exit_confirm_modal: false,
-            status_history: vec![StatusHistoryEntry {
-                message: "Initializing App...".to_string(),
-            }],
+            status_history: vec![initial_status],
             selected_status_history_index: 0,
+            status_history_filter: StatusHistoryFilter::All,
             bookmark_path_prompt_action: None,
             bookmark_path_draft: String::new(),
             tx: None,
@@ -295,36 +298,88 @@ impl App {
         self.image_feed_next_page
     }
 
-    pub fn current_status_snapshot(&self) -> String {
-        if let Some(error) = self.last_error.as_deref() {
-            format!("{} | ERROR: {}", self.status, error)
-        } else {
-            self.status.clone()
-        }
-    }
-
-    pub fn record_status_snapshot_if_needed(&mut self) {
-        let snapshot = self.current_status_snapshot();
-        if snapshot.trim().is_empty() {
-            return;
-        }
-
-        if self
+    pub fn apply_status(&mut self, event: StatusEvent) {
+        let is_duplicate = self
             .status_history
             .first()
-            .map(|entry| entry.message == snapshot)
-            .unwrap_or(false)
-        {
+            .map(|entry| {
+                entry.level == event.level
+                    && entry.summary == event.summary
+                    && entry.detail == event.detail
+            })
+            .unwrap_or(false);
+
+        self.status = event.summary.clone();
+        self.status_detail = event.detail.clone();
+        self.status_level = event.level;
+        self.status_recorded_at = event.recorded_at;
+        self.last_error = if event.level == StatusLevel::Error {
+            Some(
+                event
+                    .detail
+                    .clone()
+                    .unwrap_or_else(|| event.summary.clone()),
+            )
+        } else {
+            None
+        };
+        self.show_status_modal = event.show_modal;
+
+        if !is_duplicate {
+            self.status_history.insert(0, event);
+            const STATUS_HISTORY_LIMIT: usize = 200;
+            if self.status_history.len() > STATUS_HISTORY_LIMIT {
+                self.status_history.truncate(STATUS_HISTORY_LIMIT);
+            }
+        }
+        self.clamp_selected_status_history_index();
+    }
+
+    pub fn sync_status_history_from_fields(&mut self) {
+        let level = if self.last_error.is_some() {
+            StatusLevel::Error
+        } else {
+            self.status_level
+        };
+        let detail = if level == StatusLevel::Error {
+            self.last_error.clone().or_else(|| self.status_detail.clone())
+        } else {
+            self.status_detail.clone()
+        };
+        let differs = self
+            .status_history
+            .first()
+            .map(|entry| {
+                entry.level != level || entry.summary != self.status || entry.detail != detail
+            })
+            .unwrap_or(true);
+        if !differs || self.status.trim().is_empty() {
             return;
         }
 
-        self.status_history
-            .insert(0, StatusHistoryEntry { message: snapshot });
-        const STATUS_HISTORY_LIMIT: usize = 200;
-        if self.status_history.len() > STATUS_HISTORY_LIMIT {
-            self.status_history.truncate(STATUS_HISTORY_LIMIT);
-        }
-        self.clamp_selected_status_history_index();
+        self.apply_status(StatusEvent {
+            level,
+            summary: self.status.clone(),
+            detail,
+            recorded_at: std::time::SystemTime::now(),
+            show_modal: self.show_status_modal,
+        });
+    }
+
+    pub fn set_status(&mut self, summary: impl Into<String>) {
+        self.apply_status(StatusEvent::info(summary));
+    }
+
+    pub fn set_status_detail(&mut self, summary: impl Into<String>, detail: impl Into<String>) {
+        self.apply_status(StatusEvent::info_detail(summary, detail));
+    }
+
+    pub fn set_warn(&mut self, summary: impl Into<String>) {
+        self.apply_status(StatusEvent::warn(summary));
+    }
+
+    pub fn set_error(&mut self, summary: impl Into<String>, detail: impl Into<String>) {
+        self.apply_status(StatusEvent::error_detail(summary, detail));
     }
 
     pub fn begin_status_history_modal(&mut self) {
@@ -338,15 +393,16 @@ impl App {
     }
 
     pub fn clamp_selected_status_history_index(&mut self) {
-        if self.status_history.is_empty() {
+        let len = self.filtered_status_history().len();
+        if len == 0 {
             self.selected_status_history_index = 0;
-        } else if self.selected_status_history_index >= self.status_history.len() {
-            self.selected_status_history_index = self.status_history.len() - 1;
+        } else if self.selected_status_history_index >= len {
+            self.selected_status_history_index = len - 1;
         }
     }
 
     pub fn select_next_status_history(&mut self) {
-        if self.selected_status_history_index + 1 < self.status_history.len() {
+        if self.selected_status_history_index + 1 < self.filtered_status_history().len() {
             self.selected_status_history_index += 1;
         }
     }
@@ -362,13 +418,29 @@ impl App {
     }
 
     pub fn select_last_status_history(&mut self) {
-        if !self.status_history.is_empty() {
-            self.selected_status_history_index = self.status_history.len() - 1;
+        let len = self.filtered_status_history().len();
+        if len > 0 {
+            self.selected_status_history_index = len - 1;
         }
     }
 
-    pub fn selected_status_history_entry(&self) -> Option<&StatusHistoryEntry> {
-        self.status_history.get(self.selected_status_history_index)
+    pub fn set_status_history_filter(&mut self, filter: StatusHistoryFilter) {
+        self.status_history_filter = filter;
+        self.selected_status_history_index = 0;
+        self.clamp_selected_status_history_index();
+    }
+
+    pub fn filtered_status_history(&self) -> Vec<&StatusEvent> {
+        self.status_history
+            .iter()
+            .filter(|entry| self.status_history_filter.matches(entry.level))
+            .collect()
+    }
+
+    pub fn selected_status_history_entry(&self) -> Option<&StatusEvent> {
+        self.filtered_status_history()
+            .get(self.selected_status_history_index)
+            .copied()
     }
 }
 
@@ -442,26 +514,21 @@ mod tests {
     fn status_history_records_new_snapshots_without_duplicates() {
         let mut app = App::new(isolated_config());
 
-        app.status = "Searching models".into();
-        app.record_status_snapshot_if_needed();
-        app.record_status_snapshot_if_needed();
-        app.last_error = Some("network".into());
-        app.record_status_snapshot_if_needed();
+        app.set_status("Searching models");
+        app.set_status("Searching models");
+        app.set_error("Search failed", "network");
 
-        assert_eq!(app.status_history[0].message, "Searching models | ERROR: network");
-        assert_eq!(app.status_history[1].message, "Searching models");
+        assert_eq!(app.status_history[0].summary, "Search failed");
+        assert_eq!(app.status_history[0].detail.as_deref(), Some("network"));
+        assert_eq!(app.status_history[1].summary, "Searching models");
     }
 
     #[test]
     fn status_history_selection_clamps_to_bounds() {
         let mut app = App::new(isolated_config());
         app.status_history = vec![
-            StatusHistoryEntry {
-                message: "Newest".into(),
-            },
-            StatusHistoryEntry {
-                message: "Older".into(),
-            },
+            crate::tui::status::StatusEvent::info("Newest"),
+            crate::tui::status::StatusEvent::warn("Older"),
         ];
 
         app.select_next_status_history();

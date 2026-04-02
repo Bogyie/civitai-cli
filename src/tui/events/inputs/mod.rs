@@ -28,7 +28,7 @@ pub async fn run_event_loop(
     mut rx: mpsc::Receiver<AppMessage>,
 ) -> Result<()> {
     loop {
-        app.record_status_snapshot_if_needed();
+        app.sync_status_history_from_fields();
 
         let poll_timeout_ms = match app.mode {
             AppMode::SearchForm

@@ -187,10 +187,10 @@ pub(super) fn request_image_feed_if_needed(app: &mut App, next_page: Option<u32>
             .is_ok()
     {
         app.image_feed_loading = true;
-        app.status = if app.image_feed_loaded {
-            "Loading more images...".to_string()
+        if app.image_feed_loaded {
+            app.set_status("Loading more images...");
         } else {
-            "Fetching image feed...".to_string()
-        };
+            app.set_status("Fetching image feed...");
+        }
     }
 }

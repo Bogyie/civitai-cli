@@ -339,7 +339,17 @@ fn handle_enter(app: &mut App) {
                 }
                 return;
             }
-            if app.settings_form.focused_field == 11 {
+            if app.settings_form.focused_field == 10 {
+                app.config.debug_logging = !app.config.debug_logging;
+                if let Err(e) = app.config.save() {
+                    app.last_error = Some(format!("Failed to save config: {}", e));
+                    app.show_status_modal = true;
+                } else if let Some(tx) = &app.tx {
+                    let _ = tx.try_send(WorkerCommand::UpdateConfig(app.config.clone()));
+                }
+                return;
+            }
+            if app.settings_form.focused_field == 12 {
                 app.image_cache.clear();
                 app.image_bytes_cache.clear();
                 app.image_request_keys.clear();
@@ -383,13 +393,13 @@ fn handle_enter(app: &mut App) {
                 6 => app.config.image_search_cache_ttl_minutes.to_string(),
                 7 => app.config.image_detail_cache_ttl_minutes.to_string(),
                 8 => app.config.image_cache_ttl_minutes.to_string(),
-                10 => app
+                11 => app
                     .config
                     .download_history_file_path
                     .as_ref()
                     .map(|path| path.to_string_lossy().to_string())
                     .unwrap_or_default(),
-                9 | 11 => String::new(),
+                9 | 10 | 12 => String::new(),
                 _ => app.config.model_search_cache_ttl_hours.to_string(),
             };
         }
@@ -468,7 +478,7 @@ fn handle_bookmark_toggle(app: &mut App) {
 
 fn handle_next_selection(app: &mut App) {
     if app.active_tab == MainTab::Settings {
-        if app.settings_form.focused_field < 11 {
+        if app.settings_form.focused_field < 12 {
             app.settings_form.focused_field += 1;
         }
     } else if app.active_tab == MainTab::Downloads {
@@ -541,7 +551,7 @@ fn handle_previous_selection(app: &mut App) {
 fn handle_down(app: &mut App) {
     match app.active_tab {
         MainTab::Settings => {
-            if app.settings_form.focused_field < 11 {
+            if app.settings_form.focused_field < 12 {
                 app.settings_form.focused_field += 1;
             }
         }

@@ -10,6 +10,7 @@ use crate::tui::{
     app::{App, MainTab},
     image::{image_negative_prompt, image_prompt},
     model::model_name,
+    status::format_status_timestamp,
 };
 
 use super::{
@@ -131,15 +132,19 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
         .borders(Borders::ALL)
         .title(" Full Status Message ");
 
-    let err_msg = app.last_error.as_deref().unwrap_or("");
-    let full_text = if !err_msg.is_empty() {
-        format!("{}\n\nERROR:\n{}", app.status, err_msg)
-    } else {
-        app.status.clone()
-    };
+    let mut full_text = vec![
+        format!("Time: {}", format_status_timestamp(app.status_recorded_at)),
+        format!("Level: {}", app.status_level.label()),
+        format!("Summary: {}", app.status),
+    ];
+    if let Some(detail) = app.status_detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
+        full_text.push(String::new());
+        full_text.push("Detail:".to_string());
+        full_text.push(detail.to_string());
+    }
 
     let text = vec![
-        Line::from(full_text),
+        Line::from(full_text.join("\n")),
         Line::from(""),
         Line::from(Span::styled(
             " [m] Close | [Esc] Close ",
@@ -170,15 +175,16 @@ fn draw_status_history_modal(f: &mut Frame, app: &App) {
         .constraints([Constraint::Min(4), Constraint::Length(2)])
         .split(inner);
 
+    let filtered = app.filtered_status_history();
     let max_width = sections[0].width.saturating_sub(6) as usize;
-    let items = if app.status_history.is_empty() {
+    let items = if filtered.is_empty() {
         vec![ListItem::new(Line::from("No status messages recorded yet."))]
     } else {
-        app.status_history
+        filtered
             .iter()
             .map(|entry| {
                 ListItem::new(Line::from(compact_cell_text_with_ellipsis(
-                    &entry.message,
+                    &entry.history_preview(),
                     max_width,
                 )))
             })
@@ -186,12 +192,17 @@ fn draw_status_history_modal(f: &mut Frame, app: &App) {
     };
 
     let mut list_state = ListState::default();
-    if !app.status_history.is_empty() {
+    if !filtered.is_empty() {
         list_state.select(Some(app.selected_status_history_index));
     }
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Messages "))
+        .block(
+            Block::default().borders(Borders::ALL).title(format!(
+                " Messages | Filter: {} ",
+                app.status_history_filter.label()
+            )),
+        )
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -201,7 +212,7 @@ fn draw_status_history_modal(f: &mut Frame, app: &App) {
     f.render_stateful_widget(list, sections[0], &mut list_state);
 
     let help = Paragraph::new(Line::from(Span::styled(
-        " [j/k or ↑/↓] Move  [g/G] First/Last  [y] Copy full message  [M/Esc] Close ",
+        " [j/k or ↑/↓] Move  [g/G] First/Last  [0-4] Filter  [y] Copy full message  [M/Esc] Close ",
         help_text_style(),
     )))
     .alignment(Alignment::Center);

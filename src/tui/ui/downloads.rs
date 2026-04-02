@@ -420,7 +420,14 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
                 }
             }
             9 => app.config.media_quality.label().to_string(),
-            10 => app
+            10 => {
+                if app.config.debug_logging {
+                    "Enabled".to_string()
+                } else {
+                    "Disabled".to_string()
+                }
+            }
+            11 => app
                 .config
                 .download_history_file_path
                 .as_ref()
@@ -431,7 +438,7 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
                         .map(|p| p.to_string_lossy().to_string())
                 })
                 .unwrap_or_else(|| "Default".to_string()),
-            11 => "Delete search/detail/media caches".to_string(),
+            12 => "Delete search/detail/media caches".to_string(),
             _ => String::new(),
         }
     };
@@ -447,7 +454,7 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
         };
         let value_style = if focused && fm.editing {
             Style::default().fg(Color::Yellow)
-        } else if idx == 11 {
+        } else if idx == 12 {
             Style::default().fg(Color::LightRed)
         } else {
             Style::default().fg(Color::Cyan)
@@ -497,6 +504,7 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
 
     let media = Paragraph::new(vec![
         item_line(9, "Media Quality"),
+        item_line(10, "Debug Logging"),
         Line::from(Span::styled(
             "  Left/Right cycles render preference",
             help_text_style(),
@@ -532,13 +540,13 @@ pub(super) fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
     .wrap(Wrap { trim: true });
     f.render_widget(image_cache, middle[1]);
 
-    let storage = Paragraph::new(vec![item_line(10, "Download History File")])
+    let storage = Paragraph::new(vec![item_line(11, "Download History File")])
         .block(Block::default().borders(Borders::ALL).title(" Storage "))
         .wrap(Wrap { trim: true });
     f.render_widget(storage, bottom[0]);
 
     let actions = Paragraph::new(vec![
-        item_line(11, "Clear All Caches"),
+        item_line(12, "Clear All Caches"),
         Line::from(Span::styled(
             "  Keeps settings, bookmarks, tags, and history",
             help_text_style(),

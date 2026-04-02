@@ -3,6 +3,7 @@ use std::fs;
 use std::io::ErrorKind;
 
 use crate::tui::app::{App, WorkerCommand};
+use crate::tui::status::StatusHistoryFilter;
 
 use super::actions::{
     send_image_model_detail_cover_prefetch, send_image_model_detail_cover_priority,
@@ -27,6 +28,21 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
             KeyCode::Char('M') | KeyCode::Esc | KeyCode::Enter => {
                 app.close_status_history_modal();
             }
+            KeyCode::Char('0') => {
+                app.set_status_history_filter(StatusHistoryFilter::All);
+            }
+            KeyCode::Char('1') => {
+                app.set_status_history_filter(StatusHistoryFilter::Info);
+            }
+            KeyCode::Char('2') => {
+                app.set_status_history_filter(StatusHistoryFilter::Warn);
+            }
+            KeyCode::Char('3') => {
+                app.set_status_history_filter(StatusHistoryFilter::Debug);
+            }
+            KeyCode::Char('4') => {
+                app.set_status_history_filter(StatusHistoryFilter::Error);
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 app.select_next_status_history();
             }
@@ -40,16 +56,16 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
                 app.select_last_status_history();
             }
             KeyCode::Char('y') => {
-                if let Some(message) = app.selected_status_history_entry().map(|entry| entry.message.clone()) {
+                if let Some(message) = app
+                    .selected_status_history_entry()
+                    .map(|entry| entry.full_text())
+                {
                     match copy_to_clipboard(&message) {
                         Ok(()) => {
-                            app.status = "Copied status history message".into();
-                            app.last_error = None;
+                            app.set_status("Copied status history message");
                         }
                         Err(err) => {
-                            app.last_error = Some(err.to_string());
-                            app.show_status_modal = true;
-                            app.status = "Failed to copy status history message".into();
+                            app.set_error("Failed to copy status history message", err.to_string());
                         }
                     }
                 }

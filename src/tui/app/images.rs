@@ -239,7 +239,7 @@ impl App {
                 && let Some(tx) = &self.tx
             {
                 let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
-                self.status = format!("Downloading image {}...", img.id);
+                self.set_status(format!("Downloading image {}...", img.id));
             }
         } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
             && let Some(model) = self.selected_model_in_active_view().cloned()
@@ -393,10 +393,10 @@ impl App {
     pub fn toggle_bookmark_for_selected_image(&mut self, image: &ImageItem) {
         if self.is_image_bookmarked(image.id) {
             self.image_bookmarks.retain(|item| item.id != image.id);
-            self.status = format!("Removed image bookmark: {}", image.id);
+            self.set_status(format!("Removed image bookmark: {}", image.id));
         } else {
             self.image_bookmarks.push(image.clone());
-            self.status = format!("Added image bookmark: {}", image.id);
+            self.set_status(format!("Added image bookmark: {}", image.id));
         }
         self.deduplicate_image_bookmarks();
         self.refresh_visible_image_bookmarks_cache();
@@ -409,7 +409,7 @@ impl App {
     pub fn begin_image_bookmark_search(&mut self) {
         self.image_bookmark_query_draft = self.image_bookmark_query.clone();
         self.mode = AppMode::SearchImageBookmarks;
-        self.status = "Search image bookmarks. Enter apply, Esc cancel".to_string();
+        self.set_status("Search image bookmarks. Enter apply, Esc cancel");
     }
 
     pub fn apply_image_bookmark_query(&mut self) {
@@ -417,20 +417,20 @@ impl App {
         self.refresh_visible_image_bookmarks_cache();
         self.mode = AppMode::Browsing;
         self.clamp_image_bookmark_selection();
-        self.status = format!(
+        self.set_status(format!(
             "Image bookmark query applied: {}",
             if self.image_bookmark_query.is_empty() {
                 "<all>".to_string()
             } else {
                 self.image_bookmark_query.clone()
             }
-        );
+        ));
     }
 
     pub fn cancel_image_bookmark_search(&mut self) {
         self.image_bookmark_query_draft = self.image_bookmark_query.clone();
         self.mode = AppMode::Browsing;
-        self.status = "Image bookmark search cancelled.".to_string();
+        self.set_status("Image bookmark search cancelled.");
     }
 
     pub(super) fn deduplicate_image_bookmarks(&mut self) {
@@ -439,12 +439,10 @@ impl App {
     }
 
     pub fn persist_image_bookmarks(&mut self) {
-        if let Some(path) = &self.image_bookmark_file_path {
-            if let Err(err) = save_image_bookmarks_to_file(path, &self.image_bookmarks) {
-                self.last_error = Some(err.to_string());
-            } else {
-                self.last_error = None;
-            }
+        if let Some(path) = &self.image_bookmark_file_path
+            && let Err(err) = save_image_bookmarks_to_file(path, &self.image_bookmarks)
+        {
+            self.set_error("Failed to persist image bookmarks", err.to_string());
         }
     }
 
@@ -454,9 +452,7 @@ impl App {
         };
 
         if let Err(err) = save_image_tag_catalog_to_file(path.as_path(), &self.image_tag_catalog) {
-            self.last_error = Some(err.to_string());
-        } else {
-            self.last_error = None;
+            self.set_error("Failed to persist image tag catalog", err.to_string());
         }
     }
 }

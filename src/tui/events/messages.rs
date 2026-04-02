@@ -17,20 +17,20 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                 let before = app.images.len();
                 app.append_image_feed_results(new_images, next_page);
                 if app.active_tab == crate::tui::app::MainTab::Images {
-                    app.status = format!(
+                    app.set_status(format!(
                         "Loaded {} more images (total {})",
                         app.images.len().saturating_sub(before),
                         app.images.len()
-                    );
+                    ));
                 }
             } else {
                 app.set_image_feed_results(new_images, next_page);
                 if app.active_tab == crate::tui::app::MainTab::Images {
-                    app.status = format!("Loaded {} images", app.images.len());
+                    app.set_status(format!("Loaded {} images", app.images.len()));
                 }
             }
             if app.status.is_empty() && app.active_tab == crate::tui::app::MainTab::Images {
-                app.status = format!("Loaded {} images", app.images.len());
+                app.set_status(format!("Loaded {} images", app.images.len()));
             }
             if loaded_count == 0 {
                 if let Some(next_page) = app.next_image_feed_page() {
@@ -99,11 +99,11 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                         app.model_search_has_more
                     ),
                 );
-                app.status = format!(
+                app.set_status(format!(
                     "Loaded {} more models (total {})",
                     appended_len,
                     app.models.len()
-                );
+                ));
             } else {
                 app.set_models_results(results, has_more, next_page);
                 debug_fetch_log(
@@ -116,41 +116,38 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                 );
                 send_cover_priority(app);
                 send_cover_prefetch(app);
-                app.status = format!("Found {} models", app.models.len());
+                app.set_status(format!("Found {} models", app.models.len()));
             }
         }
         AppMessage::ModelDetailLoaded(model, version_id) => {
             app.open_image_model_detail_modal(*model, version_id);
             send_image_model_detail_cover_priority(app);
             send_image_model_detail_cover_prefetch(app);
-            app.status = if let Some(model) = app.image_model_detail_model.as_ref() {
-                format!(
+            if let Some(model) = app.image_model_detail_model.as_ref() {
+                app.set_status(format!(
                     "Loaded model details: {}",
                     crate::tui::model::model_name(model)
-                )
+                ));
             } else {
-                "Loaded model details".to_string()
-            };
+                app.set_status("Loaded model details");
+            }
         }
         AppMessage::ModelSidebarDetailLoaded(model) => {
             app.apply_sidebar_model_detail(*model);
-            app.status = if let Some(model) = app.selected_model_in_active_view() {
-                format!("Loaded model details: {}", crate::tui::model::model_name(model))
+            if let Some(model) = app.selected_model_in_active_view() {
+                app.set_status(format!(
+                    "Loaded model details: {}",
+                    crate::tui::model::model_name(model)
+                ));
             } else {
-                "Loaded model details".to_string()
-            };
+                app.set_status("Loaded model details");
+            }
         }
         AppMessage::StatusUpdate(status) => {
-            app.status = status;
-            if app.status.contains("Error fetching images") {
+            let is_image_fetch_error = status.summary.contains("Error fetching images");
+            app.apply_status(status);
+            if is_image_fetch_error {
                 app.image_feed_loading = false;
-            }
-            if is_error_status(&app.status) {
-                app.last_error = Some(app.status.clone());
-                app.show_status_modal = true;
-            } else {
-                app.last_error = None;
-                app.show_status_modal = false;
             }
         }
         AppMessage::DownloadProgress(
@@ -188,25 +185,28 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                     state: DownloadState::Running,
                 },
             );
-            app.status = format!(
+            app.set_status(format!(
                 "Download started for model {} ({})",
                 download_key.model_id, download_key.version_id
-            );
+            ));
         }
         AppMessage::DownloadPaused(download_key) => {
             if let Some(tracker) = app.active_downloads.get_mut(&download_key) {
                 tracker.state = DownloadState::Paused;
-                app.status = format!("Download paused: {}", tracker.filename);
+                let filename = tracker.filename.clone();
+                let _ = tracker;
+                app.set_status(format!("Download paused: {}", filename));
             }
         }
         AppMessage::DownloadResumed(download_key) => {
             if let Some(tracker) = app.active_downloads.get_mut(&download_key) {
                 tracker.state = DownloadState::Running;
-                app.status = format!("Download resumed: {}", tracker.filename);
+                let filename = tracker.filename.clone();
+                let _ = tracker;
+                app.set_status(format!("Download resumed: {}", filename));
             }
         }
         AppMessage::DownloadCompleted(download_key) => {
-            app.last_error = None;
             if let Some(tracker) = app.active_downloads.remove(&download_key) {
                 app.push_download_history(NewDownloadHistoryEntry {
                     model_id: download_key.model_id,
@@ -223,7 +223,7 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
             app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
-            app.status = format!("Download complete: {}", download_key.filename);
+            app.set_status(format!("Download complete: {}", download_key.filename));
         }
         AppMessage::DownloadFailed(download_key, reason) => {
             if let Some(tracker) = app.active_downloads.remove(&download_key) {
@@ -242,9 +242,7 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
             app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
-            app.last_error = Some(reason.clone());
-            app.show_status_modal = true;
-            app.status = format!("Download failed: {}", reason);
+            app.set_error(format!("Download failed: {}", reason), reason);
         }
         AppMessage::DownloadCancelled(download_key) => {
             if let Some(tracker) = app.active_downloads.remove(&download_key) {
@@ -263,12 +261,7 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
             app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
-            app.status = format!("Download cancelled: {}", download_key.filename);
+            app.set_status(format!("Download cancelled: {}", download_key.filename));
         }
     }
-}
-
-fn is_error_status(value: &str) -> bool {
-    let lowered = value.to_lowercase();
-    lowered.contains("error") || lowered.contains("failed") || lowered.contains("fail")
 }

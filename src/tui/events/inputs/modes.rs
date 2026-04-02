@@ -632,7 +632,7 @@ fn handle_settings_edit_mode(app: &mut App, code: KeyCode) {
             app.settings_form.editing = false;
         }
         KeyCode::Enter => {
-            if app.settings_form.focused_field == 11 {
+            if app.settings_form.focused_field == 12 {
                 app.image_cache.clear();
                 app.image_bytes_cache.clear();
                 app.image_request_keys.clear();
@@ -731,7 +731,7 @@ fn handle_settings_edit_mode(app: &mut App, code: KeyCode) {
                 };
                 app.config.bookmark_file_path = path.clone();
                 app.bookmark_file_path = path;
-            } else if app.settings_form.focused_field == 10 {
+            } else if app.settings_form.focused_field == 11 {
                 let path = if app.settings_form.input_buffer.is_empty() {
                     None
                 } else {
@@ -748,6 +748,8 @@ fn handle_settings_edit_mode(app: &mut App, code: KeyCode) {
             } else if app.settings_form.focused_field == 9 {
                 app.config.media_quality = app.config.media_quality.next();
                 refresh_visible_media(app);
+            } else if app.settings_form.focused_field == 10 {
+                app.config.debug_logging = !app.config.debug_logging;
             }
             if let Err(e) = app.config.save() {
                 app.last_error = Some(format!("Failed to save config: {}", e));

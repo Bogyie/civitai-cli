@@ -69,10 +69,10 @@ impl App {
     pub fn toggle_bookmark_for_selected_model(&mut self, model: &Model) {
         if self.is_model_bookmarked(model.id) {
             self.bookmarks.retain(|item| item.id != model.id);
-            self.status = format!("Removed bookmark: {}", model_name(model));
+            self.set_status(format!("Removed bookmark: {}", model_name(model)));
         } else {
             self.bookmarks.push(model.clone());
-            self.status = format!("Added bookmark: {}", model_name(model));
+            self.set_status(format!("Added bookmark: {}", model_name(model)));
         }
         self.deduplicate_bookmarks();
         self.rebuild_parsed_model_cache();
@@ -96,9 +96,9 @@ impl App {
             self.refresh_visible_bookmarks_cache();
             self.persist_bookmarks();
             self.clamp_bookmark_selection();
-            self.status = format!("Removed bookmark: {}", name);
+            self.set_status(format!("Removed bookmark: {}", name));
         } else {
-            self.status = "Bookmark already removed.".to_string();
+            self.set_warn("Bookmark already removed.");
         }
 
         self.show_bookmark_confirm_modal = false;
@@ -119,7 +119,7 @@ impl App {
             self.pending_bookmark_remove_id = Some(model.id);
             self.show_bookmark_confirm_modal = true;
         } else {
-            self.status = "No bookmark selected".to_string();
+            self.set_warn("No bookmark selected");
         }
     }
 
@@ -127,7 +127,7 @@ impl App {
         self.bookmark_search_form_draft = self.bookmark_search_form.clone();
         self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::SearchBookmarks;
-        self.status = "Filter bookmarks. Enter apply, Esc cancel".to_string();
+        self.set_status("Filter bookmarks. Enter apply, Esc cancel");
     }
 
     pub fn begin_bookmark_export_prompt(&mut self) {
@@ -137,7 +137,7 @@ impl App {
             .unwrap_or_default();
         self.bookmark_path_prompt_action = Some(BookmarkPathAction::Export);
         self.mode = AppMode::BookmarkPathPrompt;
-        self.status = "Bookmark export path. Enter to confirm, Esc to cancel.".to_string();
+        self.set_status("Bookmark export path. Enter to confirm, Esc to cancel.");
     }
 
     pub fn begin_bookmark_import_prompt(&mut self) {
@@ -147,13 +147,13 @@ impl App {
             .unwrap_or_default();
         self.bookmark_path_prompt_action = Some(BookmarkPathAction::Import);
         self.mode = AppMode::BookmarkPathPrompt;
-        self.status = "Bookmark import path. Enter to confirm, Esc to cancel.".to_string();
+        self.set_status("Bookmark import path. Enter to confirm, Esc to cancel.");
     }
 
     pub fn cancel_bookmark_path_prompt(&mut self) {
         self.bookmark_path_prompt_action = None;
         self.mode = AppMode::Browsing;
-        self.status = "Bookmark path input cancelled.".to_string();
+        self.set_status("Bookmark path input cancelled.");
     }
 
     pub fn apply_bookmark_path_prompt(&mut self) {
@@ -175,7 +175,7 @@ impl App {
         };
 
         let Some(path) = path else {
-            self.status = "No bookmark file path configured.".to_string();
+            self.set_warn("No bookmark file path configured.");
             return;
         };
 
@@ -213,37 +213,34 @@ impl App {
         self.refresh_visible_bookmarks_cache();
         self.mode = AppMode::Browsing;
         self.clamp_bookmark_selection();
-        self.status = format!(
+        self.set_status(format!(
             "Bookmark filter applied: {}",
             if self.bookmark_search_form.query.is_empty() {
                 "<all>".to_string()
             } else {
                 self.bookmark_search_form.query.clone()
             }
-        );
+        ));
     }
 
     pub fn cancel_bookmark_search(&mut self) {
         self.bookmark_search_form_draft = self.bookmark_search_form.clone();
         self.bookmark_query_draft = self.bookmark_search_form.query.clone();
         self.mode = AppMode::Browsing;
-        self.status = "Bookmark filter cancelled.".to_string();
+        self.set_status("Bookmark filter cancelled.");
     }
 
     pub fn export_bookmarks_to_path(&mut self, path: PathBuf) {
         self.set_bookmark_file_path(path.clone());
 
         if let Err(err) = save_bookmarks_to_file(&path, &self.bookmarks) {
-            self.last_error = Some(err.to_string());
-            self.status = "Failed to export bookmarks".to_string();
+            self.set_error("Failed to export bookmarks", err.to_string());
             return;
         }
 
-        self.last_error = None;
-        self.status = format!(
-            "Exported {} bookmarks to {}",
-            self.bookmarks.len(),
-            path.display()
+        self.set_status_detail(
+            format!("Exported {} bookmarks", self.bookmarks.len()),
+            format!("Destination: {}", path.display()),
         );
     }
 
@@ -251,7 +248,7 @@ impl App {
         self.set_bookmark_file_path(path.clone());
         let mut imported = load_bookmarks(Some(path.as_path()));
         if imported.is_empty() {
-            self.status = "No bookmarks found in import file.".to_string();
+            self.set_warn("No bookmarks found in import file.");
             return;
         }
 
@@ -264,13 +261,12 @@ impl App {
         self.persist_bookmarks();
 
         if self.bookmarks.len() > before {
-            self.status = format!(
+            self.set_status(format!(
                 "Imported {} new bookmark(s).",
                 self.bookmarks.len() - before
-            );
-            self.last_error = None;
+            ));
         } else {
-            self.status = "Import completed, no new bookmarks.".to_string();
+            self.set_status("Import completed, no new bookmarks.");
         }
     }
 
@@ -280,12 +276,10 @@ impl App {
     }
 
     pub fn persist_bookmarks(&mut self) {
-        if let Some(path) = &self.bookmark_file_path {
-            if let Err(err) = save_bookmarks_to_file(path, &self.bookmarks) {
-                self.last_error = Some(err.to_string());
-            } else {
-                self.last_error = None;
-            }
+        if let Some(path) = &self.bookmark_file_path
+            && let Err(err) = save_bookmarks_to_file(path, &self.bookmarks)
+        {
+            self.set_error("Failed to persist bookmarks", err.to_string());
         }
     }
 }

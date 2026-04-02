@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::tui::app::MediaRenderRequest;
+use crate::tui::status::StatusEvent;
 
 pub type ImageDimensions = (u32, u32);
 pub type CoverImageUrl = Option<String>;
@@ -66,7 +67,7 @@ pub enum AppMessage {
     ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String),
     ModelCoverLoadFailed(u64),
-    StatusUpdate(String),
+    StatusUpdate(StatusEvent),
     DownloadStarted(DownloadKey, String, u64, Option<PathBuf>),
     DownloadProgress(DownloadKey, f64, u64, u64),
     DownloadPaused(DownloadKey),

@@ -14,8 +14,14 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(1), Constraint::Min(2)])
         .split(area);
 
-    let left_status = format!(" {}", app.current_status_snapshot());
-    let status_line = Line::from(Span::styled(left_status, Style::default().fg(Color::Cyan)));
+    let status_color = match app.status_level {
+        crate::tui::status::StatusLevel::Info => Color::Cyan,
+        crate::tui::status::StatusLevel::Warn => Color::Yellow,
+        crate::tui::status::StatusLevel::Debug => Color::DarkGray,
+        crate::tui::status::StatusLevel::Error => Color::Red,
+    };
+    let left_status = format!(" [{}] {}", app.status_level.label(), app.status);
+    let status_line = Line::from(Span::styled(left_status, Style::default().fg(status_color)));
     let status = Paragraph::new(status_line).alignment(ratatui::layout::Alignment::Left);
     f.render_widget(status, rows[0]);
 
