@@ -304,25 +304,7 @@ pub async fn spawn_worker(
                         let (visible_items, final_next_page) = match fetch_result {
                             Ok((items, next_page)) => {
                                 let total_items = items.len();
-                                let detail_cache_root =
-                                    image_detail_cache_path.lock().await.clone();
-                                let mut visible_items =
-                                    stream::iter(items.into_iter().map(|item| {
-                                        let sdk_clone = sdk_clone.clone();
-                                        let detail_cache_root = detail_cache_root.clone();
-                                        async move {
-                                            enrich_image_detail(
-                                                &sdk_clone,
-                                                detail_cache_root.as_deref(),
-                                                item,
-                                                image_detail_ttl_minutes,
-                                            )
-                                            .await
-                                        }
-                                    }))
-                                    .buffered(6)
-                                    .collect::<Vec<_>>()
-                                    .await;
+                                let mut visible_items = items;
                                 visible_items
                                     .retain(|item| item.r#type.as_deref() != Some("video"));
                                 if !request_state.excluded_tags.is_empty() {
@@ -391,11 +373,35 @@ pub async fn spawn_worker(
 
                         let _ = tx_msg_clone
                             .send(AppMessage::ImagesLoaded(
-                                visible_items,
+                                visible_items.clone(),
                                 is_append,
                                 final_next_page,
                             ))
                             .await;
+
+                        let detail_cache_root = image_detail_cache_path.lock().await.clone();
+                        let enriched_items = stream::iter(visible_items.into_iter().map(|item| {
+                            let sdk_clone = sdk_clone.clone();
+                            let detail_cache_root = detail_cache_root.clone();
+                            async move {
+                                enrich_image_detail(
+                                    &sdk_clone,
+                                    detail_cache_root.as_deref(),
+                                    item,
+                                    image_detail_ttl_minutes,
+                                )
+                                .await
+                            }
+                        }))
+                        .buffered(6)
+                        .collect::<Vec<_>>()
+                        .await;
+
+                        for enriched in enriched_items {
+                            let _ = tx_msg_clone
+                                .send(AppMessage::ImageDetailEnriched(enriched))
+                                .await;
+                        }
 
                         let fetch_semaphore = Arc::new(Semaphore::new(3));
                         let mut handles = Vec::with_capacity(image_jobs.len());

@@ -85,6 +85,7 @@ pub struct SearchTemplateStore {
 
 pub enum AppMessage {
     ImagesLoaded(Vec<ImageItem>, bool, Option<u32>),
+    ImageDetailEnriched(ImageItem),
     ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelDetailLoaded(Box<Model>, Option<u64>),

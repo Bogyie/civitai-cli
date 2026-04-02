@@ -49,6 +49,10 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                 app.image_request_keys.insert(id, request_key);
             }
         }
+        AppMessage::ImageDetailEnriched(image) => {
+            app.merge_image_tag_catalog_from_hits(std::slice::from_ref(&image));
+            app.update_image_detail(&image);
+        }
         AppMessage::ModelCoverDecoded(version_id, protocol, bytes, request_key) => {
             app.model_version_image_cache
                 .insert(version_id, vec![protocol]);

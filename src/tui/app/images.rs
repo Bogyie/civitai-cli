@@ -168,6 +168,21 @@ impl App {
         }
     }
 
+    pub fn update_image_detail(&mut self, image: &ImageItem) {
+        if let Some(existing) = self.images.iter_mut().find(|item| item.id == image.id) {
+            *existing = image.clone();
+        }
+
+        if let Some(existing) = self
+            .image_bookmarks
+            .iter_mut()
+            .find(|item| item.id == image.id)
+        {
+            *existing = image.clone();
+            self.refresh_visible_image_bookmarks_cache();
+        }
+    }
+
     pub fn has_cached_image_request(&self, image_id: u64, request_key: &str) -> bool {
         self.image_cache.contains_key(&image_id)
             && self

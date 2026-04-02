@@ -153,7 +153,7 @@ pub(super) async fn enrich_image_detail(
     let mut image = if let Some(cache_root) = cache_root {
         match load_cached_image_detail(cache_root, image.id) {
             Some(entry) if is_cache_valid_minutes(entry.cached_at_unix_secs, ttl_minutes) => {
-                fill_image_detail_from_cache(image, &entry.image)
+                return fill_image_detail_from_cache(image, &entry.image);
             }
             Some(_) => {
                 let _ = std::fs::remove_file(image_detail_cache_path(cache_root, image.id));
