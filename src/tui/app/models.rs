@@ -1,6 +1,33 @@
 use super::*;
 
 impl App {
+    pub fn request_selected_model_detail_sidebar(&mut self) {
+        if !self.show_model_details {
+            return;
+        }
+        let Some(model) = self.selected_model_in_active_view().cloned() else {
+            return;
+        };
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(WorkerCommand::FetchModelDetail(
+                model.id,
+                self.selected_model_version().map(|(_, version_id)| version_id),
+                model_name(&model),
+            ));
+        }
+    }
+
+    pub fn apply_sidebar_model_detail(&mut self, model: Model) {
+        if let Some(existing) = self.models.iter_mut().find(|item| item.id == model.id) {
+            *existing = model.clone();
+        }
+        if let Some(existing) = self.bookmarks.iter_mut().find(|item| item.id == model.id) {
+            *existing = model;
+            self.refresh_visible_bookmarks_cache();
+        }
+        self.rebuild_parsed_model_cache();
+    }
+
     pub fn can_request_more_models(&self) -> bool {
         self.active_tab == MainTab::Models
             && !self.models.is_empty()
@@ -39,6 +66,7 @@ impl App {
                 let current = self.model_list_state.selected().unwrap_or(0);
                 if current < self.models.len() - 1 {
                     self.model_list_state.select(Some(current + 1));
+                    self.request_selected_model_detail_sidebar();
                 }
             }
         } else if self.active_tab == MainTab::Bookmarks {
@@ -46,9 +74,11 @@ impl App {
             if let Some(current) = self.bookmark_list_state.selected() {
                 if current < visible.len().saturating_sub(1) {
                     self.bookmark_list_state.select(Some(current + 1));
+                    self.request_selected_model_detail_sidebar();
                 }
             } else if !visible.is_empty() {
                 self.bookmark_list_state.select(Some(0));
+                self.request_selected_model_detail_sidebar();
             }
         }
     }
@@ -68,11 +98,13 @@ impl App {
             let current = self.model_list_state.selected().unwrap_or(0);
             if current > 0 {
                 self.model_list_state.select(Some(current - 1));
+                self.request_selected_model_detail_sidebar();
             }
         } else if self.active_tab == MainTab::Bookmarks {
             let current = self.bookmark_list_state.selected().unwrap_or(0);
             if current > 0 {
                 self.bookmark_list_state.select(Some(current - 1));
+                self.request_selected_model_detail_sidebar();
             }
         }
     }
@@ -88,6 +120,7 @@ impl App {
                 let max = self.models.len().saturating_sub(1) as isize;
                 let next = (current + delta).clamp(0, max) as usize;
                 self.model_list_state.select(Some(next));
+                self.request_selected_model_detail_sidebar();
             }
             MainTab::Bookmarks => {
                 let visible = self.visible_bookmarks();
@@ -99,6 +132,7 @@ impl App {
                 let max = visible.len().saturating_sub(1) as isize;
                 let next = (current + delta).clamp(0, max) as usize;
                 self.bookmark_list_state.select(Some(next));
+                self.request_selected_model_detail_sidebar();
             }
             _ => {}
         }
@@ -111,6 +145,7 @@ impl App {
                     self.model_list_state.select(None);
                 } else {
                     self.model_list_state.select(Some(0));
+                    self.request_selected_model_detail_sidebar();
                 }
             }
             MainTab::Bookmarks => {
@@ -118,6 +153,7 @@ impl App {
                     self.bookmark_list_state.select(None);
                 } else {
                     self.bookmark_list_state.select(Some(0));
+                    self.request_selected_model_detail_sidebar();
                 }
             }
             _ => {}
@@ -132,6 +168,7 @@ impl App {
                 } else {
                     self.model_list_state
                         .select(Some(self.models.len().saturating_sub(1)));
+                    self.request_selected_model_detail_sidebar();
                 }
             }
             MainTab::Bookmarks => {
@@ -141,6 +178,7 @@ impl App {
                 } else {
                     self.bookmark_list_state
                         .select(Some(visible.len().saturating_sub(1)));
+                    self.request_selected_model_detail_sidebar();
                 }
             }
             _ => {}

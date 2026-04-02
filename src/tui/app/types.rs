@@ -62,6 +62,7 @@ pub enum AppMessage {
     ImageDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelsSearchedChunk(Vec<Model>, bool, bool, Option<u32>),
     ModelDetailLoaded(Box<Model>, Option<u64>),
+    ModelSidebarDetailLoaded(Box<Model>),
     ModelCoverDecoded(u64, StatefulProtocol, Vec<u8>, String),
     ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String),
     ModelCoverLoadFailed(u64),

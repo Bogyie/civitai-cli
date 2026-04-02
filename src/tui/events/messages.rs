@@ -132,6 +132,14 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                 "Loaded model details".to_string()
             };
         }
+        AppMessage::ModelSidebarDetailLoaded(model) => {
+            app.apply_sidebar_model_detail(*model);
+            app.status = if let Some(model) = app.selected_model_in_active_view() {
+                format!("Loaded model details: {}", crate::tui::model::model_name(model))
+            } else {
+                "Loaded model details".to_string()
+            };
+        }
         AppMessage::StatusUpdate(status) => {
             app.status = status;
             if app.status.contains("Error fetching images") {

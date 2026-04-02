@@ -216,6 +216,9 @@ pub(super) fn handle_tab_key(
         KeyCode::Char('v') => {
             if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
                 app.show_model_details = !app.show_model_details;
+                if app.show_model_details {
+                    app.request_selected_model_detail_sidebar();
+                }
                 app.status = if app.show_model_details {
                     "Model details panel enabled".into()
                 } else {

@@ -911,7 +911,7 @@ pub async fn spawn_worker(
                         }
                     });
                 }
-                WorkerCommand::FetchModelDetail(model_id, preferred_version_id, _model_query) => {
+                WorkerCommand::FetchModelDetail(model_id, preferred_version_id, model_query) => {
                     let tx_msg_clone = tx_msg.clone();
                     let sdk_clone = {
                         let builder = if let Some(api_key) = downloader_config.api_key.clone() {
@@ -932,18 +932,23 @@ pub async fn spawn_worker(
 
                         match sdk_clone.get_model(model_id).await {
                             Ok(model) => {
-                                let _ = tx_msg_clone
-                                    .send(AppMessage::ModelDetailLoaded(
+                                let message = if preferred_version_id.is_some() {
+                                    AppMessage::ModelDetailLoaded(
                                         Box::new(model.into()),
                                         preferred_version_id,
-                                    ))
+                                    )
+                                } else {
+                                    AppMessage::ModelSidebarDetailLoaded(Box::new(model.into()))
+                                };
+                                let _ = tx_msg_clone
+                                    .send(message)
                                     .await;
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
                                     .send(AppMessage::StatusUpdate(format!(
-                                        "Error loading model details: {}",
-                                        err
+                                        "Error loading model details for {}: {}",
+                                        model_query, err
                                     )))
                                     .await;
                             }
