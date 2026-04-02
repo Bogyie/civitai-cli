@@ -28,6 +28,8 @@ pub async fn run_event_loop(
     mut rx: mpsc::Receiver<AppMessage>,
 ) -> Result<()> {
     loop {
+        app.record_status_snapshot_if_needed();
+
         let poll_timeout_ms = match app.mode {
             AppMode::SearchForm
             | AppMode::SearchImages
@@ -120,6 +122,7 @@ fn handle_resize(app: &mut App) {
 
 fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
     if app.show_status_modal
+        || app.show_status_history_modal
         || app.show_help_modal
         || app.show_image_prompt_modal
         || app.show_image_model_detail_modal

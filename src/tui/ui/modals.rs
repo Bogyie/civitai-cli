@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::tui::{
@@ -13,13 +13,17 @@ use crate::tui::{
 };
 
 use super::{
-    helpers::{centered_rect, help_text_style},
+    helpers::{centered_rect, compact_cell_text_with_ellipsis, help_text_style},
     models::draw_model_sidebar,
 };
 
 pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
     if app.show_status_modal {
         draw_status_modal(f, app);
+    }
+
+    if app.show_status_history_modal {
+        draw_status_history_modal(f, app);
     }
 
     if app.show_help_modal {
@@ -151,6 +155,59 @@ fn draw_status_modal(f: &mut Frame, app: &App) {
     f.render_widget(p, area);
 }
 
+fn draw_status_history_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(82, 72, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Status History ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+
+    let max_width = sections[0].width.saturating_sub(6) as usize;
+    let items = if app.status_history.is_empty() {
+        vec![ListItem::new(Line::from("No status messages recorded yet."))]
+    } else {
+        app.status_history
+            .iter()
+            .map(|entry| {
+                ListItem::new(Line::from(compact_cell_text_with_ellipsis(
+                    &entry.message,
+                    max_width,
+                )))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut list_state = ListState::default();
+    if !app.status_history.is_empty() {
+        list_state.select(Some(app.selected_status_history_index));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Messages "))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    f.render_stateful_widget(list, sections[0], &mut list_state);
+
+    let help = Paragraph::new(Line::from(Span::styled(
+        " [j/k or ↑/↓] Move  [g/G] First/Last  [y] Copy full message  [M/Esc] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(help, sections[1]);
+}
+
 fn draw_help_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(72, 60, f.area());
     let block = Block::default()
@@ -200,12 +257,14 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     let nav = Paragraph::new(match app.active_tab {
         MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
             Line::from(" [1-6] Switch tabs"),
+            Line::from(" [M] Open status history"),
             Line::from(" [j/k] or [↑/↓] Move selection"),
             Line::from(" [g/G] First/Last item"),
             Line::from(" [Ctrl-u / Ctrl-d] Jump faster"),
         ],
         MainTab::Downloads | MainTab::Settings => vec![
             Line::from(" [1-6] Switch tabs"),
+            Line::from(" [M] Open status history"),
             Line::from(" [j/k] Move selection"),
             Line::from(" [Esc] Close modal / cancel"),
             Line::from(" [?] Toggle this help"),

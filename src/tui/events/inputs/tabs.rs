@@ -179,6 +179,11 @@ pub(super) fn handle_tab_key(
             }
             return Some(LoopControl::Continue);
         }
+        KeyCode::Char('M') => {
+            app.begin_status_history_modal();
+            app.status = "Status history opened".into();
+            return Some(LoopControl::Continue);
+        }
         KeyCode::Char('a') => {
             if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
                 app.image_advanced_visible = !app.image_advanced_visible;

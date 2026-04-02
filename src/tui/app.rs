@@ -48,6 +48,11 @@ struct ParsedModelCacheEntry {
     default_base_model: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct StatusHistoryEntry {
+    pub message: String,
+}
+
 pub struct App {
     pub active_tab: MainTab,
     pub mode: AppMode,
@@ -117,8 +122,11 @@ pub struct App {
     pub last_error: Option<String>,
     pub show_help_modal: bool,
     pub show_status_modal: bool,
+    pub show_status_history_modal: bool,
     pub show_exit_confirm_modal: bool,
     pub show_resume_download_modal: bool,
+    pub status_history: Vec<StatusHistoryEntry>,
+    pub selected_status_history_index: usize,
     pub bookmark_path_prompt_action: Option<BookmarkPathAction>,
     pub bookmark_path_draft: String,
     pub tx: Option<mpsc::Sender<WorkerCommand>>,
@@ -240,7 +248,12 @@ impl App {
             last_error: None,
             show_help_modal: false,
             show_status_modal: false,
+            show_status_history_modal: false,
             show_exit_confirm_modal: false,
+            status_history: vec![StatusHistoryEntry {
+                message: "Initializing App...".to_string(),
+            }],
+            selected_status_history_index: 0,
             bookmark_path_prompt_action: None,
             bookmark_path_draft: String::new(),
             tx: None,
@@ -280,6 +293,82 @@ impl App {
 
     pub fn next_image_feed_page(&self) -> Option<u32> {
         self.image_feed_next_page
+    }
+
+    pub fn current_status_snapshot(&self) -> String {
+        if let Some(error) = self.last_error.as_deref() {
+            format!("{} | ERROR: {}", self.status, error)
+        } else {
+            self.status.clone()
+        }
+    }
+
+    pub fn record_status_snapshot_if_needed(&mut self) {
+        let snapshot = self.current_status_snapshot();
+        if snapshot.trim().is_empty() {
+            return;
+        }
+
+        if self
+            .status_history
+            .first()
+            .map(|entry| entry.message == snapshot)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        self.status_history
+            .insert(0, StatusHistoryEntry { message: snapshot });
+        const STATUS_HISTORY_LIMIT: usize = 200;
+        if self.status_history.len() > STATUS_HISTORY_LIMIT {
+            self.status_history.truncate(STATUS_HISTORY_LIMIT);
+        }
+        self.clamp_selected_status_history_index();
+    }
+
+    pub fn begin_status_history_modal(&mut self) {
+        self.show_status_history_modal = true;
+        self.selected_status_history_index = 0;
+        self.clamp_selected_status_history_index();
+    }
+
+    pub fn close_status_history_modal(&mut self) {
+        self.show_status_history_modal = false;
+    }
+
+    pub fn clamp_selected_status_history_index(&mut self) {
+        if self.status_history.is_empty() {
+            self.selected_status_history_index = 0;
+        } else if self.selected_status_history_index >= self.status_history.len() {
+            self.selected_status_history_index = self.status_history.len() - 1;
+        }
+    }
+
+    pub fn select_next_status_history(&mut self) {
+        if self.selected_status_history_index + 1 < self.status_history.len() {
+            self.selected_status_history_index += 1;
+        }
+    }
+
+    pub fn select_previous_status_history(&mut self) {
+        if self.selected_status_history_index > 0 {
+            self.selected_status_history_index -= 1;
+        }
+    }
+
+    pub fn select_first_status_history(&mut self) {
+        self.selected_status_history_index = 0;
+    }
+
+    pub fn select_last_status_history(&mut self) {
+        if !self.status_history.is_empty() {
+            self.selected_status_history_index = self.status_history.len() - 1;
+        }
+    }
+
+    pub fn selected_status_history_entry(&self) -> Option<&StatusHistoryEntry> {
+        self.status_history.get(self.selected_status_history_index)
     }
 }
 
@@ -347,6 +436,44 @@ mod tests {
 
         assert_eq!(app.visible_image_bookmarks().len(), 1);
         assert_eq!(app.visible_image_bookmarks()[0].id, 10);
+    }
+
+    #[test]
+    fn status_history_records_new_snapshots_without_duplicates() {
+        let mut app = App::new(isolated_config());
+
+        app.status = "Searching models".into();
+        app.record_status_snapshot_if_needed();
+        app.record_status_snapshot_if_needed();
+        app.last_error = Some("network".into());
+        app.record_status_snapshot_if_needed();
+
+        assert_eq!(app.status_history[0].message, "Searching models | ERROR: network");
+        assert_eq!(app.status_history[1].message, "Searching models");
+    }
+
+    #[test]
+    fn status_history_selection_clamps_to_bounds() {
+        let mut app = App::new(isolated_config());
+        app.status_history = vec![
+            StatusHistoryEntry {
+                message: "Newest".into(),
+            },
+            StatusHistoryEntry {
+                message: "Older".into(),
+            },
+        ];
+
+        app.select_next_status_history();
+        app.select_next_status_history();
+        assert_eq!(app.selected_status_history_index, 1);
+
+        app.select_previous_status_history();
+        assert_eq!(app.selected_status_history_index, 0);
+
+        app.selected_status_history_index = 99;
+        app.clamp_selected_status_history_index();
+        assert_eq!(app.selected_status_history_index, 1);
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub async fn run_tui(config: AppConfig) -> Result<()> {
             .await;
     }
     app.status = "Searching default model list...".to_string();
+    app.record_status_snapshot_if_needed();
 
     let mut terminal = ui::setup_terminal().context("setup failed")?;
 

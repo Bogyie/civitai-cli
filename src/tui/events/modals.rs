@@ -7,6 +7,7 @@ use crate::tui::app::{App, WorkerCommand};
 use super::actions::{
     send_image_model_detail_cover_prefetch, send_image_model_detail_cover_priority,
 };
+use super::artifacts::copy_to_clipboard;
 
 pub(super) enum ModalKeyOutcome {
     Consumed,
@@ -17,6 +18,43 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
     if app.show_status_modal {
         if matches!(key.code, KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter) {
             app.show_status_modal = false;
+        }
+        return Some(ModalKeyOutcome::Consumed);
+    }
+
+    if app.show_status_history_modal {
+        match key.code {
+            KeyCode::Char('M') | KeyCode::Esc | KeyCode::Enter => {
+                app.close_status_history_modal();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.select_next_status_history();
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.select_previous_status_history();
+            }
+            KeyCode::Char('g') => {
+                app.select_first_status_history();
+            }
+            KeyCode::Char('G') => {
+                app.select_last_status_history();
+            }
+            KeyCode::Char('y') => {
+                if let Some(message) = app.selected_status_history_entry().map(|entry| entry.message.clone()) {
+                    match copy_to_clipboard(&message) {
+                        Ok(()) => {
+                            app.status = "Copied status history message".into();
+                            app.last_error = None;
+                        }
+                        Err(err) => {
+                            app.last_error = Some(err.to_string());
+                            app.show_status_modal = true;
+                            app.status = "Failed to copy status history message".into();
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         return Some(ModalKeyOutcome::Consumed);
     }

@@ -31,6 +31,25 @@ pub(super) fn compact_cell_text(src: String, width: usize) -> String {
     }
 }
 
+pub(super) fn compact_cell_text_with_ellipsis(src: &str, width: usize) -> String {
+    let value_chars: Vec<char> = src.chars().collect();
+    if width == 0 || value_chars.is_empty() {
+        return String::new();
+    }
+
+    if value_chars.len() <= width {
+        return src.to_string();
+    }
+
+    if width <= 3 {
+        return ".".repeat(width);
+    }
+
+    let mut truncated: String = value_chars.into_iter().take(width - 3).collect();
+    truncated.push_str("...");
+    truncated
+}
+
 pub(super) fn model_key_value_spans<'a>(key: &'a str, value: &'a str) -> Vec<Span<'a>> {
     vec![
         Span::styled(
