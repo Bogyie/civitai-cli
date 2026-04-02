@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::constants::{
@@ -229,6 +229,63 @@ fn is_known_image_key(key: &str) -> bool {
     )
 }
 
+fn deserialize_normalized_value_opt<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    Ok(value.map(normalize_jsonish_value))
+}
+
+fn deserialize_normalized_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: for<'a> Deserialize<'a>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    let Some(value) = value.map(normalize_jsonish_value) else {
+        return Ok(Vec::new());
+    };
+    serde_json::from_value::<Vec<T>>(value).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_normalized_struct_opt<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: for<'a> Deserialize<'a>,
+{
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    let Some(value) = value.map(normalize_jsonish_value) else {
+        return Ok(None);
+    };
+    serde_json::from_value::<T>(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+fn normalize_jsonish_value(value: Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| (key, normalize_jsonish_value(value)))
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(normalize_jsonish_value).collect())
+        }
+        Value::String(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(map)) => {
+                normalize_jsonish_value(Value::Object(map))
+            }
+            Ok(Value::Array(items)) => {
+                normalize_jsonish_value(Value::Array(items))
+            }
+            _ => Value::String(raw),
+        },
+        other => other,
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaUrlOptions {
     /// `original=true` returns the original asset; for videos this keeps the source mp4.
@@ -348,7 +405,7 @@ pub struct SearchImageHit {
     pub hide_meta: Option<bool>,
     #[serde(default)]
     pub user: Option<ImageHitUser>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub stats: Option<Value>,
     #[serde(default)]
     pub tag_names: Vec<Option<String>>,
@@ -362,7 +419,7 @@ pub struct SearchImageHit {
     pub sort_at: Option<String>,
     #[serde(default)]
     pub sort_at_unix: Option<i64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub metadata: Option<Value>,
     #[serde(default)]
     pub generation_process: Option<String>,
@@ -501,15 +558,15 @@ pub struct ImageGenerationData {
     pub on_site: Option<bool>,
     #[serde(default)]
     pub process: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_struct_opt")]
     pub meta: Option<ImageGenerationMeta>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_vec")]
     pub resources: Vec<ImageGenerationResource>,
     #[serde(default)]
     pub tools: Vec<ImageGenerationTool>,
     #[serde(default)]
     pub techniques: Vec<ImageGenerationTechnique>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub external: Option<Value>,
     #[serde(default)]
     pub can_remix: Option<bool>,
@@ -540,15 +597,15 @@ pub struct ImageGenerationMeta {
     pub denoise: Option<f64>,
     #[serde(default, rename = "Model")]
     pub model: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub models: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub upscalers: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub width: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub height: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_struct_opt")]
     pub comfy: Option<ImageGenerationComfy>,
     #[serde(flatten, default)]
     pub extras: Value,
@@ -557,9 +614,9 @@ pub struct ImageGenerationMeta {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageGenerationComfy {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub prompt: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub workflow: Option<Value>,
     #[serde(flatten, default)]
     pub extras: Value,
@@ -572,7 +629,7 @@ pub struct ImageGenerationResource {
     pub image_id: Option<u64>,
     #[serde(default)]
     pub model_version_id: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
     pub strength: Option<Value>,
     #[serde(default)]
     pub model_id: Option<u64>,

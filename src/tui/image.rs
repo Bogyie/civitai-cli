@@ -194,16 +194,8 @@ fn extract_prompt_from_metadata(metadata: &Value) -> Option<String> {
     if let Some(value) = metadata.get("meta").and_then(extract_prompt_from_metadata) {
         return Some(value);
     }
-    if let Some(Value::String(raw)) = metadata.get("meta")
-        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
-        && let Some(value) = extract_prompt_from_metadata(&parsed)
-    {
+    if let Some(value) = metadata.get("comfy").and_then(extract_prompt_from_metadata) {
         return Some(value);
-    }
-    if let Some(Value::String(raw)) = metadata.get("comfy")
-        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
-    {
-        return extract_prompt_from_metadata(&parsed);
     }
     None
 }
@@ -220,15 +212,9 @@ fn extract_negative_prompt_from_metadata(metadata: &Value) -> Option<String> {
     {
         return Some(value);
     }
-    if let Some(Value::String(raw)) = metadata.get("meta")
-        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
-        && let Some(value) = extract_negative_prompt_from_metadata(&parsed)
-    {
-        return Some(value);
-    }
-    if let Some(Value::String(raw)) = metadata.get("comfy")
-        && let Ok(parsed) = serde_json::from_str::<Value>(raw)
-        && let Some(value) = extract_negative_prompt_from_metadata(&parsed)
+    if let Some(value) = metadata
+        .get("comfy")
+        .and_then(extract_negative_prompt_from_metadata)
     {
         return Some(value);
     }
@@ -248,11 +234,6 @@ fn extract_negative_prompt_from_prompt_graph(value: &Value) -> Option<String> {
                 {
                     return Some(text);
                 }
-                if let Some(parsed) = parse_nested_json(nested)
-                    && let Some(value) = extract_negative_prompt_from_prompt_graph(&parsed)
-                {
-                    return Some(value);
-                }
                 if let Some(value) = extract_negative_prompt_from_prompt_graph(nested) {
                     return Some(value);
                 }
@@ -262,70 +243,42 @@ fn extract_negative_prompt_from_prompt_graph(value: &Value) -> Option<String> {
         Value::Array(items) => items
             .iter()
             .find_map(extract_negative_prompt_from_prompt_graph),
-        Value::String(raw) => serde_json::from_str::<Value>(raw)
-            .ok()
-            .and_then(|parsed| extract_negative_prompt_from_prompt_graph(&parsed)),
         _ => None,
     }
 }
 
 fn extract_comfy_workflow(metadata: &Value) -> Option<Value> {
     if let Some(comfy) = metadata.get("comfy") {
-        if let Some(workflow) = comfy.get("workflow") {
-            if is_comfy_like(workflow) {
-                return Some(workflow.clone());
-            }
-            if let Some(parsed) = parse_nested_json(workflow)
-                && is_comfy_like(&parsed)
-            {
-                return Some(parsed);
-            }
+        if let Some(workflow) = comfy.get("workflow")
+            && is_comfy_like(workflow)
+        {
+            return Some(workflow.clone());
         }
-        if let Some(prompt) = comfy.get("prompt") {
-            if is_comfy_like(prompt) {
-                return Some(prompt.clone());
-            }
-            if let Some(parsed) = parse_nested_json(prompt)
-                && is_comfy_like(&parsed)
-            {
-                return Some(parsed);
-            }
+        if let Some(prompt) = comfy.get("prompt")
+            && is_comfy_like(prompt)
+        {
+            return Some(prompt.clone());
         }
     }
 
     for key in ["workflow", "comfy", "nodes"] {
-        if let Some(value) = metadata.get(key) {
-            if is_comfy_like(value) {
-                return Some(value.clone());
-            }
-            if let Some(parsed) = parse_nested_json(value)
-                && is_comfy_like(&parsed)
-            {
-                return Some(parsed);
-            }
-        }
-    }
-
-    if let Some(value) = metadata.get("prompt") {
-        if is_comfy_like(value) {
+        if let Some(value) = metadata.get(key)
+            && is_comfy_like(value)
+        {
             return Some(value.clone());
         }
-        if let Some(parsed) = parse_nested_json(value)
-            && is_comfy_like(&parsed)
-        {
-            return Some(parsed);
-        }
     }
 
-    if let Some(value) = metadata.get("meta") {
-        if let Some(found) = extract_comfy_workflow(value) {
-            return Some(found);
-        }
-        if let Some(parsed) = parse_nested_json(value)
-            && let Some(found) = extract_comfy_workflow(&parsed)
-        {
-            return Some(found);
-        }
+    if let Some(value) = metadata.get("prompt")
+        && is_comfy_like(value)
+    {
+        return Some(value.clone());
+    }
+
+    if let Some(value) = metadata.get("meta")
+        && let Some(found) = extract_comfy_workflow(value)
+    {
+        return Some(found);
     }
 
     is_comfy_like(metadata).then_some(metadata.clone())
@@ -419,21 +372,8 @@ fn structured_generation_resources(
         .as_ref()
         .and_then(|metadata| metadata.get("resources"))
         .cloned()
-        .and_then(parse_generation_resources_value)
+        .and_then(|value| serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(value).ok())
         .unwrap_or_default()
-}
-
-fn parse_generation_resources_value(
-    value: Value,
-) -> Option<Vec<civitai_cli::sdk::ImageGenerationResource>> {
-    match value {
-        Value::String(raw) => serde_json::from_str::<Value>(&raw)
-            .ok()
-            .and_then(parse_generation_resources_value),
-        other => {
-            serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(other).ok()
-        }
-    }
 }
 
 fn push_used_model(
@@ -486,13 +426,6 @@ fn is_supported_generation_resource_type(value: &str) -> bool {
     )
 }
 
-fn parse_nested_json(value: &Value) -> Option<Value> {
-    match value {
-        Value::String(raw) => serde_json::from_str::<Value>(raw).ok(),
-        _ => None,
-    }
-}
-
 fn collect_generation_info(value: &Value, info: &mut ParsedGenerationInfo) {
     match value {
         Value::Object(map) => {
@@ -522,9 +455,6 @@ fn collect_generation_info(value: &Value, info: &mut ParsedGenerationInfo) {
                     _ => {}
                 }
 
-                if let Some(parsed) = parse_nested_json(nested) {
-                    collect_generation_info(&parsed, info);
-                }
                 collect_generation_info(nested, info);
             }
         }
@@ -533,11 +463,55 @@ fn collect_generation_info(value: &Value, info: &mut ParsedGenerationInfo) {
                 collect_generation_info(nested, info);
             }
         }
-        Value::String(raw) => {
-            if let Ok(parsed) = serde_json::from_str::<Value>(raw) {
-                collect_generation_info(&parsed, info);
-            }
-        }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use civitai_cli::sdk::SearchImageHit;
+    use serde_json::json;
+
+    #[test]
+    fn reads_generation_fields_from_stringified_metadata() {
+        let hit: SearchImageHit = serde_json::from_value(json!({
+            "id": 1,
+            "hideMeta": false,
+            "metadata": {
+                "_generationData": "{\"meta\":{\"prompt\":\"sunrise\",\"negativePrompt\":\"noise\",\"cfgScale\":7,\"steps\":20,\"sampler\":\"Euler\",\"seed\":42,\"comfy\":{\"workflow\":\"{\\\"nodes\\\":[{\\\"id\\\":1,\\\"type\\\":\\\"KSampler\\\"}],\\\"links\\\":[]}\"}},\"resources\":\"[{\\\"modelName\\\":\\\"Foo\\\",\\\"modelType\\\":\\\"LORA\\\",\\\"modelId\\\":99,\\\"versionId\\\":77}]\"}"
+            }
+        }))
+        .expect("image hit");
+
+        assert_eq!(image_prompt(&hit).as_deref(), Some("sunrise"));
+        assert_eq!(image_negative_prompt(&hit).as_deref(), Some("noise"));
+        assert_eq!(comfy_workflow_node_count(&hit), Some(1));
+        assert_eq!(image_used_models(&hit), vec!["LORA: Foo".to_string()]);
+
+        let info = image_generation_info(&hit);
+        assert_eq!(info.cfg_scale.as_deref(), Some("7"));
+        assert_eq!(info.steps.as_deref(), Some("20"));
+        assert_eq!(info.sampler.as_deref(), Some("Euler"));
+        assert_eq!(info.seed.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn ignores_malformed_stringified_metadata_and_keeps_fallbacks() {
+        let hit: SearchImageHit = serde_json::from_value(json!({
+            "id": 2,
+            "hideMeta": false,
+            "prompt": "plain prompt",
+            "metadata": {
+                "meta": "{bad",
+                "comfy": "[broken"
+            }
+        }))
+        .expect("image hit");
+
+        assert_eq!(image_prompt(&hit).as_deref(), Some("plain prompt"));
+        assert_eq!(image_negative_prompt(&hit), None);
+        assert_eq!(comfy_workflow_node_count(&hit), None);
+        assert!(image_used_models(&hit).is_empty());
     }
 }
