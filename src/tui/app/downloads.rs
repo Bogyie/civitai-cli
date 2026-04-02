@@ -1,4 +1,5 @@
 use super::*;
+use super::types::DownloadKey;
 
 impl App {
     pub fn set_download_history_file_path(&mut self, path: PathBuf) {
@@ -14,13 +15,13 @@ impl App {
     pub fn collect_interrupt_sessions_from_active(&self) -> Vec<InterruptedDownloadSession> {
         self.active_download_order
             .iter()
-            .filter_map(|model_id| {
+            .filter_map(|download_key| {
                 self.active_downloads
-                    .get(model_id)
-                    .map(|tracker| (*model_id, tracker))
+                    .get(download_key)
+                    .map(|tracker| (download_key, tracker))
             })
-            .map(|(model_id, tracker)| InterruptedDownloadSession {
-                model_id,
+            .map(|(download_key, tracker)| InterruptedDownloadSession {
+                model_id: download_key.model_id,
                 version_id: tracker.version_id,
                 filename: tracker.filename.clone(),
                 model_name: tracker.model_name.clone(),
@@ -58,7 +59,7 @@ impl App {
         }
     }
 
-    pub fn selected_download_id(&mut self) -> Option<u64> {
+    pub fn selected_download_key(&mut self) -> Option<DownloadKey> {
         if self.active_download_order.is_empty() {
             self.selected_download_index = 0;
             return None;
@@ -68,7 +69,7 @@ impl App {
         }
         self.active_download_order
             .get(self.selected_download_index)
-            .copied()
+            .cloned()
     }
 
     pub fn push_download_history(&mut self, entry: NewDownloadHistoryEntry) {
@@ -139,6 +140,7 @@ impl App {
         self.download_history.retain(|existing| {
             !(existing.model_id == entry.model_id
                 && existing.version_id == entry.version_id
+                && existing.filename == entry.filename
                 && matches!(existing.status, DownloadHistoryStatus::Paused))
         });
 
@@ -183,15 +185,39 @@ impl App {
         self.persist_interrupted_downloads();
     }
 
-    pub fn remove_history_for_session(&mut self, model_id: u64, version_id: u64) -> usize {
+    pub fn remove_history_for_session(
+        &mut self,
+        model_id: u64,
+        version_id: u64,
+        filename: &str,
+    ) -> usize {
         let before = self.download_history.len();
-        self.download_history
-            .retain(|entry| !(entry.model_id == model_id && entry.version_id == version_id));
+        self.download_history.retain(|entry| {
+            !(entry.model_id == model_id
+                && entry.version_id == version_id
+                && entry.filename == filename)
+        });
         if before != self.download_history.len() {
             self.persist_download_history();
             self.clamp_selected_history_index();
         }
         before.saturating_sub(self.download_history.len())
+    }
+
+    pub fn active_download_key_for_history_entry(
+        &self,
+        entry: &DownloadHistoryEntry,
+    ) -> Option<DownloadKey> {
+        let key = DownloadKey::new(entry.model_id, entry.version_id, entry.filename.clone());
+        self.active_downloads.contains_key(&key).then_some(key)
+    }
+
+    pub fn active_download_key_for_session(
+        &self,
+        session: &InterruptedDownloadSession,
+    ) -> Option<DownloadKey> {
+        let key = DownloadKey::new(session.model_id, session.version_id, session.filename.clone());
+        self.active_downloads.contains_key(&key).then_some(key)
     }
 
     pub fn persist_interrupted_downloads(&mut self) {

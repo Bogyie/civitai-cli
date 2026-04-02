@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 fn default_model_search_cache_ttl_hours() -> u64 {
@@ -97,8 +98,12 @@ impl AppConfig {
         let content = fs::read_to_string(&config_file)
             .with_context(|| format!("Failed to read config file at {:?}", config_file))?;
 
-        let config: AppConfig = toml::from_str(&content)
+        let mut config: AppConfig = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file at {:?}", config_file))?;
+
+        if let Some(path) = config.comfyui_path.clone() {
+            config.comfyui_path = Some(Self::normalize_comfyui_path(&path)?);
+        }
 
         Ok(config)
     }
@@ -106,17 +111,46 @@ impl AppConfig {
     /// Saves the configuration to disk.
     pub fn save(&self) -> Result<()> {
         let config_file = Self::config_path().context("Unable to determine config directory")?;
+        let mut normalized = self.clone();
+        if let Some(path) = normalized.comfyui_path.clone() {
+            normalized.comfyui_path = Some(Self::normalize_comfyui_path(&path)?);
+        }
 
         if let Some(parent) = config_file.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create config directory at {:?}", parent))?;
         }
 
-        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let content =
+            toml::to_string_pretty(&normalized).context("Failed to serialize config")?;
         fs::write(&config_file, content)
             .with_context(|| format!("Failed to write config file at {:?}", config_file))?;
 
         Ok(())
+    }
+
+    pub fn set_comfyui_path(&mut self, path: Option<impl AsRef<Path>>) -> Result<()> {
+        self.comfyui_path = match path {
+            Some(path) => Some(Self::normalize_comfyui_path(path.as_ref())?),
+            None => None,
+        };
+        Ok(())
+    }
+
+    pub fn normalize_comfyui_path(path: impl AsRef<Path>) -> Result<PathBuf> {
+        let path = path.as_ref();
+        if !path.is_absolute() {
+            anyhow::bail!("ComfyUI path must be an absolute path");
+        }
+        if !path.exists() {
+            anyhow::bail!("ComfyUI path does not exist: {}", path.display());
+        }
+        if !path.is_dir() {
+            anyhow::bail!("ComfyUI path is not a directory: {}", path.display());
+        }
+
+        path.canonicalize()
+            .with_context(|| format!("Failed to resolve ComfyUI path {}", path.display()))
     }
 
     /// Determines the platform-specific configuration path.
@@ -191,5 +225,43 @@ impl Default for AppConfig {
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
             media_quality: default_media_quality(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppConfig;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_dir() -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("civitai-cli-config-{unique}"));
+        fs::create_dir_all(&dir).expect("create dir");
+        dir
+    }
+
+    #[test]
+    fn rejects_relative_comfyui_path() {
+        let err = AppConfig::normalize_comfyui_path("relative/comfy").expect_err("relative path");
+        assert!(err.to_string().contains("absolute"));
+    }
+
+    #[test]
+    fn rejects_missing_comfyui_path() {
+        let path = temp_dir().join("missing");
+        let err = AppConfig::normalize_comfyui_path(&path).expect_err("missing path");
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn normalizes_existing_comfyui_path_to_absolute() {
+        let dir = temp_dir();
+        let normalized = AppConfig::normalize_comfyui_path(&dir).expect("normalize path");
+        assert!(normalized.is_absolute());
+        assert_eq!(normalized, dir.canonicalize().expect("canonicalize"));
     }
 }

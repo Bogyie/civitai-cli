@@ -107,6 +107,15 @@ async fn spawn_server() -> std::io::Result<String> {
                         let _ = socket.write_all(response.as_bytes()).await;
                         let _ = socket.write_all(body).await;
                     }
+                    "/image-noext" => {
+                        let body = b"\x89PNG\r\n\x1a\npng";
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: image/png\r\n\r\n",
+                            body.len()
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                        let _ = socket.write_all(body).await;
+                    }
                     _ => {
                         let body = b"not found";
                         let response = format!(
@@ -198,7 +207,7 @@ fn builds_download_specs_from_hits() {
 
     let image_spec = client.build_media_download_spec(&image_hit).unwrap();
     assert_eq!(image_spec.kind, DownloadKind::Image);
-    assert_eq!(image_spec.file_name.as_deref(), Some("civitai-image-77"));
+    assert_eq!(image_spec.file_name.as_deref(), Some("civitai-image-77.png"));
     assert_eq!(
         image_spec.url,
         "https://media.test/ns/media-token/original=true"
@@ -206,7 +215,7 @@ fn builds_download_specs_from_hits() {
 
     let video_spec = client.build_video_download_spec(&video_hit).unwrap();
     assert_eq!(video_spec.kind, DownloadKind::Video);
-    assert_eq!(video_spec.file_name.as_deref(), Some("civitai-video-77"));
+    assert_eq!(video_spec.file_name.as_deref(), Some("civitai-video-77.mp4"));
 
     let model_spec = client
         .build_model_download_spec(
@@ -333,6 +342,24 @@ async fn downloads_with_query_and_bearer_auth() -> Result<(), Box<dyn std::error
         )
         .await?;
     assert_eq!(tokio::fs::read(&bearer_target).await?, b"auth bearer ok");
+    Ok(())
+}
+
+#[tokio::test]
+async fn infers_extension_for_file_destination_without_one() -> Result<(), Box<dyn std::error::Error>>
+{
+    let base_url = spawn_server().await?;
+    let client = DownloadClient::new()?;
+    let target = temp_path("image-download");
+
+    let spec = DownloadSpec::new(format!("{base_url}/image-noext"), DownloadKind::Image)
+        .with_file_name("civitai-image-77");
+    let result = client
+        .download(&spec, &DownloadOptions::to_file(&target), None, None)
+        .await?;
+
+    assert_eq!(result.path.extension().and_then(|value| value.to_str()), Some("png"));
+    assert_eq!(tokio::fs::read(&result.path).await?, b"\x89PNG\r\n\x1a\npng");
     Ok(())
 }
 

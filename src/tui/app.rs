@@ -5,7 +5,7 @@ mod forms;
 mod images;
 mod models;
 mod storage;
-mod types;
+pub(crate) mod types;
 
 use self::filters::{
     bookmark_matches_base_model, bookmark_matches_period, bookmark_matches_query,
@@ -23,8 +23,9 @@ use self::storage::{
 };
 pub use self::types::{
     AppMessage, AppMode, BookmarkPathAction, DownloadHistoryEntry, DownloadHistoryStatus,
-    DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab, NewDownloadHistoryEntry,
-    SelectedModelCover, SelectedVersionCover, VersionCoverJob, WorkerCommand,
+    DownloadKey, DownloadState, DownloadTracker, InterruptedDownloadSession, MainTab,
+    NewDownloadHistoryEntry, SelectedModelCover, SelectedVersionCover, VersionCoverJob,
+    WorkerCommand,
 };
 use crate::tui::image::{ParsedUsedModel, image_tags, image_used_model_entries, image_used_models};
 use crate::tui::model::{
@@ -106,8 +107,8 @@ pub struct App {
     pub image_model_detail_model: Option<Model>,
     pub image_prompt_scroll: u16,
 
-    pub active_downloads: HashMap<u64, DownloadTracker>,
-    pub active_download_order: Vec<u64>,
+    pub active_downloads: HashMap<DownloadKey, DownloadTracker>,
+    pub active_download_order: Vec<DownloadKey>,
     pub selected_download_index: usize,
     pub selected_history_index: usize,
     pub download_history: Vec<DownloadHistoryEntry>,

@@ -5,7 +5,6 @@ mod images;
 mod media;
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures_util::stream::{self, StreamExt};
@@ -32,8 +31,10 @@ use self::media::{
 };
 use crate::config::AppConfig;
 use crate::tui::app::{AppMessage, MediaRenderRequest, WorkerCommand};
+use crate::tui::app::types::DownloadKey;
 use crate::tui::model::{
-    build_download_file_name, model_name, model_versions, resolve_download_target_dir,
+    build_download_file_name, model_name, model_versions, resolve_model_download_target_dir,
+    resolve_image_download_target_dir,
 };
 use crate::tui::runtime::{debug_fetch_log, render_request_key};
 use civitai_cli::sdk::{
@@ -1171,6 +1172,7 @@ pub async fn spawn_worker(
                 }
                 WorkerCommand::DownloadImage(image_hit) => {
                     let tx_msg_clone = tx_msg.clone();
+                    let config = downloader_config.clone();
                     let download_client = {
                         let builder = if let Some(api_key) = downloader_config.api_key.clone() {
                             SdkClientBuilder::new().api_key(api_key)
@@ -1191,10 +1193,7 @@ pub async fn spawn_worker(
                             return;
                         };
 
-                        let downloads_root = std::env::current_dir()
-                            .unwrap_or_else(|_| PathBuf::from("."))
-                            .join("downloads")
-                            .join("images");
+                        let downloads_root = resolve_image_download_target_dir(&config);
                         let _ = tokio::fs::create_dir_all(&downloads_root).await;
                         let file_name = spec.suggested_file_name();
                         let options = DownloadOptions {
@@ -1241,11 +1240,6 @@ pub async fn spawn_worker(
                         builder.build_download().unwrap()
                     };
                     let (control_tx, control_rx) = mpsc::channel(32);
-                    {
-                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
-                            download_controls.lock().await;
-                        controls.insert(model_hit.id, control_tx.clone());
-                    }
                     let control_map = download_controls.clone();
                     let config = downloader_config.clone();
 
@@ -1271,7 +1265,11 @@ pub async fn spawn_worker(
                             let filename = selected_file
                                 .map(|file| build_download_file_name(&model_hit, &version, file))
                                 .unwrap_or_else(|| model_hit.default_download_file_name());
-                            let target_dir = resolve_download_target_dir(&config, &model_hit);
+                            let target_dir = resolve_model_download_target_dir(
+                                &config,
+                                model_hit.r#type.as_deref(),
+                                version.base_model.as_deref(),
+                            );
                             let target_path = target_dir.join(&filename);
                             let _estimated_size_bytes = selected_file
                                 .and_then(estimated_file_size_bytes)
@@ -1286,6 +1284,13 @@ pub async fn spawn_worker(
                                 });
                             let spec = DownloadSpec::new(download_url, DownloadKind::Model)
                                 .with_file_name(filename.clone());
+                            let download_key =
+                                DownloadKey::new(model_id, version_id, filename.clone());
+                            {
+                                let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                                    control_map.lock().await;
+                                controls.insert(download_key.clone(), control_tx.clone());
+                            }
                             let options = DownloadOptions {
                                 destination: DownloadDestination::File(target_path.clone()),
                                 overwrite: true,
@@ -1297,10 +1302,8 @@ pub async fn spawn_worker(
                             tokio::spawn(forward_download_events(
                                 progress_rx,
                                 tx_msg_clone.clone(),
-                                model_id,
-                                version_id,
+                                download_key.clone(),
                                 model_name(&model_hit),
-                                filename.clone(),
                             ));
                             let _ = tx_msg_clone
                                 .send(AppMessage::StatusUpdate(format!(
@@ -1314,17 +1317,20 @@ pub async fn spawn_worker(
                             match result {
                                 Ok(_) => {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::DownloadCompleted(model_id))
+                                        .send(AppMessage::DownloadCompleted(download_key.clone()))
                                         .await;
                                 }
                                 Err(err) if err.to_string().contains("cancelled") => {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::DownloadCancelled(model_id))
+                                        .send(AppMessage::DownloadCancelled(download_key.clone()))
                                         .await;
                                 }
                                 Err(err) => {
                                     let _ = tx_msg_clone
-                                        .send(AppMessage::DownloadFailed(model_id, err.to_string()))
+                                        .send(AppMessage::DownloadFailed(
+                                            download_key.clone(),
+                                            err.to_string(),
+                                        ))
                                         .await;
                                 }
                             }
@@ -1343,7 +1349,9 @@ pub async fn spawn_worker(
                         {
                             let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
                                 control_map.lock().await;
-                            controls.remove(&model_id);
+                            controls.retain(|key, _| {
+                                !(key.model_id == model_id && key.version_id == version_id)
+                            });
                         }
                     });
                 }
@@ -1364,11 +1372,6 @@ pub async fn spawn_worker(
                         builder.build_download().unwrap()
                     };
                     let (control_tx, control_rx) = mpsc::channel(32);
-                    {
-                        let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
-                            download_controls.lock().await;
-                        controls.insert(model_id, control_tx.clone());
-                    }
                     let control_map = download_controls.clone();
                     let config = downloader_config.clone();
 
@@ -1404,6 +1407,12 @@ pub async fn spawn_worker(
                         };
                         let spec = DownloadSpec::new(download_url, DownloadKind::Model)
                             .with_file_name(filename.clone());
+                        let download_key = DownloadKey::new(model_id, version_id, filename.clone());
+                        {
+                            let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
+                                control_map.lock().await;
+                            controls.insert(download_key.clone(), control_tx.clone());
+                        }
                         let options = DownloadOptions {
                             destination: DownloadDestination::File(target_path.clone()),
                             overwrite: true,
@@ -1415,17 +1424,13 @@ pub async fn spawn_worker(
                         tokio::spawn(forward_download_events(
                             progress_rx,
                             tx_msg_clone.clone(),
-                            model_id,
-                            version_id,
+                            download_key.clone(),
                             format!("Model {}", model_id),
-                            filename.clone(),
                         ));
                         let total_bytes = (resume_total_bytes > 0).then_some(resume_total_bytes);
                         let _ = tx_msg_clone
                             .send(AppMessage::DownloadStarted(
-                                model_id,
-                                filename.clone(),
-                                version_id,
+                                download_key.clone(),
                                 format!("Model {}", model_id),
                                 total_bytes.unwrap_or(0),
                                 Some(target_path.clone()),
@@ -1440,8 +1445,7 @@ pub async fn spawn_worker(
                                 .unwrap_or(0.0);
                             let _ = tx_msg_clone
                                 .send(AppMessage::DownloadProgress(
-                                    model_id,
-                                    filename.clone(),
+                                    download_key.clone(),
                                     percent,
                                     resume_downloaded_bytes,
                                     total_bytes.unwrap_or(0),
@@ -1455,17 +1459,20 @@ pub async fn spawn_worker(
                         match result {
                             Ok(_) => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::DownloadCompleted(model_id))
+                                    .send(AppMessage::DownloadCompleted(download_key.clone()))
                                     .await;
                             }
                             Err(err) if err.to_string().contains("cancelled") => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::DownloadCancelled(model_id))
+                                    .send(AppMessage::DownloadCancelled(download_key.clone()))
                                     .await;
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
-                                    .send(AppMessage::DownloadFailed(model_id, err.to_string()))
+                                    .send(AppMessage::DownloadFailed(
+                                        download_key.clone(),
+                                        err.to_string(),
+                                    ))
                                     .await;
                             }
                         }
@@ -1473,41 +1480,47 @@ pub async fn spawn_worker(
                         {
                             let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
                                 control_map.lock().await;
-                            controls.remove(&model_id);
+                            controls.remove(&download_key);
                         }
                     });
                 }
-                WorkerCommand::PauseDownload(model_id) => {
+                WorkerCommand::PauseDownload(download_key) => {
                     let control = {
                         let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
                             download_controls.lock().await;
-                        controls.get(&model_id).cloned()
+                        controls.get(&download_key).cloned()
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Pause);
-                        let _ = tx_msg.send(AppMessage::DownloadPaused(model_id)).await;
+                        let _ = tx_msg
+                            .send(AppMessage::DownloadPaused(download_key))
+                            .await;
                     }
                 }
-                WorkerCommand::ResumeDownload(model_id) => {
+                WorkerCommand::ResumeDownload(download_key) => {
                     let control = {
                         let controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
                             download_controls.lock().await;
-                        controls.get(&model_id).cloned()
+                        controls.get(&download_key).cloned()
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Resume);
-                        let _ = tx_msg.send(AppMessage::DownloadResumed(model_id)).await;
+                        let _ = tx_msg
+                            .send(AppMessage::DownloadResumed(download_key))
+                            .await;
                     }
                 }
-                WorkerCommand::CancelDownload(model_id) => {
+                WorkerCommand::CancelDownload(download_key) => {
                     let control = {
                         let mut controls: tokio::sync::MutexGuard<'_, DownloadControlMap> =
                             download_controls.lock().await;
-                        controls.remove(&model_id)
+                        controls.remove(&download_key)
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Cancel);
-                        let _ = tx_msg.send(AppMessage::DownloadCancelled(model_id)).await;
+                        let _ = tx_msg
+                            .send(AppMessage::DownloadCancelled(download_key))
+                            .await;
                     }
                 }
                 WorkerCommand::Quit => break,

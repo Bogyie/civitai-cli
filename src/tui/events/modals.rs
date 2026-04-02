@@ -144,7 +144,11 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
                             }
                         }
                     }
-                    let _ = app.remove_history_for_session(session.model_id, session.version_id);
+                    let _ = app.remove_history_for_session(
+                        session.model_id,
+                        session.version_id,
+                        &session.filename,
+                    );
                 }
                 app.clear_interrupted_download_sessions();
                 app.status = "Interrupted downloads removed.".into();
@@ -163,8 +167,10 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 let sessions = app.collect_interrupt_sessions_from_active();
                 for session in &sessions {
-                    if let Some(tx) = &app.tx {
-                        let _ = tx.try_send(WorkerCommand::PauseDownload(session.model_id));
+                    if let Some(download_key) = app.active_download_key_for_session(session)
+                        && let Some(tx) = &app.tx
+                    {
+                        let _ = tx.try_send(WorkerCommand::PauseDownload(download_key));
                     }
                     app.record_interrupted_session_to_history(session);
                 }
@@ -179,13 +185,19 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 let sessions = app.collect_interrupt_sessions_from_active();
                 for session in &sessions {
-                    if let Some(tx) = &app.tx {
-                        let _ = tx.try_send(WorkerCommand::CancelDownload(session.model_id));
+                    if let Some(download_key) = app.active_download_key_for_session(session)
+                        && let Some(tx) = &app.tx
+                    {
+                        let _ = tx.try_send(WorkerCommand::CancelDownload(download_key));
                     }
                     if let Some(path) = session.file_path.clone() {
                         let _ = fs::remove_file(&path);
                     }
-                    app.remove_history_for_session(session.model_id, session.version_id);
+                    app.remove_history_for_session(
+                        session.model_id,
+                        session.version_id,
+                        &session.filename,
+                    );
                 }
                 app.interrupted_download_sessions.clear();
                 app.persist_interrupted_downloads();

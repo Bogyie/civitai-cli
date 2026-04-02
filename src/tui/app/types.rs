@@ -14,6 +14,23 @@ pub type VersionCoverJob = (u64, CoverImageUrl, CoverSourceDimensions);
 pub type SelectedModelCover = (u64, u64, CoverImageUrl, CoverSourceDimensions);
 pub type SelectedVersionCover = (u64, CoverImageUrl, CoverSourceDimensions);
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DownloadKey {
+    pub model_id: u64,
+    pub version_id: u64,
+    pub filename: String,
+}
+
+impl DownloadKey {
+    pub fn new(model_id: u64, version_id: u64, filename: impl Into<String>) -> Self {
+        Self {
+            model_id,
+            version_id,
+            filename: filename.into(),
+        }
+    }
+}
+
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum MainTab {
     Models,
@@ -49,13 +66,13 @@ pub enum AppMessage {
     ModelCoversDecoded(u64, Vec<(StatefulProtocol, Vec<u8>)>, String),
     ModelCoverLoadFailed(u64),
     StatusUpdate(String),
-    DownloadStarted(u64, String, u64, String, u64, Option<PathBuf>),
-    DownloadProgress(u64, String, f64, u64, u64),
-    DownloadPaused(u64),
-    DownloadResumed(u64),
-    DownloadCompleted(u64),
-    DownloadFailed(u64, String),
-    DownloadCancelled(u64),
+    DownloadStarted(DownloadKey, String, u64, Option<PathBuf>),
+    DownloadProgress(DownloadKey, f64, u64, u64),
+    DownloadPaused(DownloadKey),
+    DownloadResumed(DownloadKey),
+    DownloadCompleted(DownloadKey),
+    DownloadFailed(DownloadKey, String),
+    DownloadCancelled(DownloadKey),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -141,9 +158,9 @@ pub enum WorkerCommand {
     PrefetchModelCovers(Vec<VersionCoverJob>, MediaRenderRequest),
     DownloadImage(ImageItem),
     DownloadModel(Model, u64, usize),
-    PauseDownload(u64),
-    ResumeDownload(u64),
-    CancelDownload(u64),
+    PauseDownload(DownloadKey),
+    ResumeDownload(DownloadKey),
+    CancelDownload(DownloadKey),
     ResumeDownloadModel(u64, u64, Option<PathBuf>, u64, u64),
     Quit,
     UpdateConfig(crate::config::AppConfig),

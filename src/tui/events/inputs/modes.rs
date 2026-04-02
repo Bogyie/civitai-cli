@@ -653,13 +653,15 @@ fn handle_settings_edit_mode(app: &mut App, code: KeyCode) {
                     Some(app.settings_form.input_buffer.clone())
                 };
             } else if app.settings_form.focused_field == 1 {
-                app.config.comfyui_path = if app.settings_form.input_buffer.is_empty() {
-                    None
-                } else {
-                    Some(std::path::PathBuf::from(
-                        app.settings_form.input_buffer.clone(),
-                    ))
-                };
+                let input = app.settings_form.input_buffer.trim();
+                if input.is_empty() {
+                    app.config.comfyui_path = None;
+                } else if let Err(err) = app.config.set_comfyui_path(Some(input)) {
+                    app.last_error = Some(err.to_string());
+                    app.show_status_modal = true;
+                    app.status = "Invalid ComfyUI path".into();
+                    return;
+                }
             } else if app.settings_form.focused_field == 3 {
                 app.config.model_search_cache_path = if app.settings_form.input_buffer.is_empty() {
                     None

@@ -55,10 +55,10 @@ pub async fn run_event_loop(
                         let is_ctrl_c_exit = matches!(key.code, KeyCode::Char('c'))
                             && key.modifiers.contains(KeyModifiers::CONTROL);
 
-                        if let Some(control) = handle_tab_switch_key(app, key.code) {
-                            match control {
-                                LoopControl::Continue => continue,
-                                LoopControl::Break => break,
+                        if let Some(outcome) = handle_modal_key(app, key) {
+                            match outcome {
+                                ModalKeyOutcome::Consumed => continue,
+                                ModalKeyOutcome::Break => break,
                             }
                         }
 
@@ -69,10 +69,10 @@ pub async fn run_event_loop(
                             }
                         }
 
-                        if let Some(outcome) = handle_modal_key(app, key) {
-                            match outcome {
-                                ModalKeyOutcome::Consumed => continue,
-                                ModalKeyOutcome::Break => break,
+                        if let Some(control) = handle_tab_switch_key(app, key.code) {
+                            match control {
+                                LoopControl::Continue => continue,
+                                LoopControl::Break => break,
                             }
                         }
 
@@ -125,6 +125,16 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
         || app.show_image_model_detail_modal
         || app.show_bookmark_confirm_modal
         || app.show_exit_confirm_modal
+        || app.show_resume_download_modal
+        || matches!(
+            app.mode,
+            AppMode::SearchForm
+                | AppMode::SearchImages
+                | AppMode::SearchBookmarks
+                | AppMode::SearchImageBookmarks
+                | AppMode::BookmarkPathPrompt
+        )
+        || (app.active_tab == MainTab::Settings && app.settings_form.editing)
     {
         return None;
     }
@@ -181,5 +191,38 @@ fn switch_tab(app: &mut App, target: MainTab) {
             ensure_selected_image_loaded(app);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn isolated_config() -> AppConfig {
+        AppConfig::default()
+    }
+
+    #[test]
+    fn tab_switch_is_blocked_during_search_mode() {
+        let mut app = App::new(isolated_config());
+        app.mode = AppMode::SearchForm;
+
+        let result = handle_tab_switch_key(&mut app, KeyCode::Char('3'));
+
+        assert!(result.is_none());
+        assert_eq!(app.active_tab, MainTab::Models);
+    }
+
+    #[test]
+    fn tab_switch_is_blocked_while_editing_settings() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Settings;
+        app.settings_form.editing = true;
+
+        let result = handle_tab_switch_key(&mut app, KeyCode::Char('2'));
+
+        assert!(result.is_none());
+        assert_eq!(app.active_tab, MainTab::Settings);
     }
 }

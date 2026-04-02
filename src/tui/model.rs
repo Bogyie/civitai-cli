@@ -184,21 +184,38 @@ pub fn build_model_url(hit: &SearchModelHit, version_id: Option<u64>) -> String 
     }
 }
 
-pub fn resolve_download_target_dir(config: &AppConfig, hit: &SearchModelHit) -> PathBuf {
-    let model_type = hit.r#type.as_deref().unwrap_or_default();
+pub fn resolve_model_download_target_dir(
+    config: &AppConfig,
+    model_type: Option<&str>,
+    base_model: Option<&str>,
+) -> PathBuf {
     let target_dir = match config.comfyui_path.as_ref() {
-        Some(base) => {
-            let sub_dir = match model_type {
-                "Checkpoint" => "models/checkpoints",
-                "LORA" => "models/loras",
-                "TextualInversion" => "models/embeddings",
-                "Controlnet" => "models/controlnet",
-                "VAE" => "models/vae",
-                _ => "models/uncategorized",
-            };
-            base.join(sub_dir)
-        }
-        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        Some(base) => base
+            .join("models")
+            .join(normalize_model_type_folder(model_type))
+            .join(normalize_base_model_component(base_model.unwrap_or("unknown-base"))),
+        None => std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("downloads")
+            .join("models")
+            .join(normalize_model_type_folder(model_type))
+            .join(normalize_base_model_component(base_model.unwrap_or("unknown-base"))),
+    };
+
+    if !target_dir.exists() {
+        let _ = std::fs::create_dir_all(&target_dir);
+    }
+
+    target_dir
+}
+
+pub fn resolve_image_download_target_dir(config: &AppConfig) -> PathBuf {
+    let target_dir = match config.comfyui_path.as_ref() {
+        Some(base) => base.join("input").join("civitai-cli"),
+        None => std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("downloads")
+            .join("images"),
     };
 
     if !target_dir.exists() {
@@ -213,27 +230,71 @@ pub fn build_download_file_name(
     version: &ParsedModelVersion,
     file: &ParsedModelFile,
 ) -> String {
-    let original = file.name.trim().to_string();
-    if original.is_empty() {
-        return hit.default_download_file_name();
-    }
+    build_model_download_file_name(
+        hit.name.as_deref(),
+        Some(version.name.as_str()),
+        &file.name,
+        &hit.default_download_file_name(),
+    )
+}
 
-    let base_model = version
-        .base_model
-        .as_deref()
-        .map(|value| value.replace(' ', ""))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Model".to_string());
-    let base_model_tag = format!("[{base_model}]");
-
-    let path = Path::new(&original);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+pub fn build_model_download_file_name(
+    model_name: Option<&str>,
+    version_name: Option<&str>,
+    original_file_name: &str,
+    fallback: &str,
+) -> String {
+    let original = original_file_name.trim();
+    let path = Path::new(original);
     let ext = path.extension().unwrap_or_default().to_string_lossy();
-    if ext.is_empty() {
-        format!("{base_model_tag}_{stem}")
+    let model_part = normalize_path_component(model_name.unwrap_or("unknown-model"));
+    let version_part = normalize_path_component(version_name.unwrap_or("unknown-version"));
+    let safe_stem = if original.is_empty() {
+        sanitize_path_component(fallback)
     } else {
-        format!("{base_model_tag}_{stem}.{ext}")
+        sanitize_path_component(&format!("{model_part}_{version_part}"))
+    };
+    if ext.is_empty() {
+        safe_stem
+    } else {
+        format!("{}.{}", safe_stem, sanitize_path_component(&ext))
     }
+}
+
+pub fn normalize_model_type_folder(model_type: Option<&str>) -> String {
+    match model_type.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "checkpoint" => "checkpoints".to_string(),
+        "lora" => "loras".to_string(),
+        "textualinversion" => "embeddings".to_string(),
+        "controlnet" => "controlnet".to_string(),
+        "vae" => "vae".to_string(),
+        other if !other.is_empty() => sanitize_path_component(other),
+        _ => "uncategorized".to_string(),
+    }
+}
+
+pub fn normalize_path_component(value: &str) -> String {
+    let normalized = sanitize_path_component(value);
+    if normalized.is_empty() {
+        "unknown".to_string()
+    } else {
+        normalized
+    }
+}
+
+pub fn normalize_base_model_component(value: &str) -> String {
+    normalize_path_component(value).to_ascii_lowercase()
+}
+
+pub fn sanitize_path_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => ch,
+        })
+        .collect::<String>();
+    sanitized.trim().trim_matches('.').to_string()
 }
 
 fn push_or_merge_version(versions: &mut Vec<ParsedModelVersion>, incoming: ParsedModelVersion) {
@@ -270,6 +331,7 @@ fn push_or_merge_version(versions: &mut Vec<ParsedModelVersion>, incoming: Parse
         versions.push(incoming);
     }
 }
+
 
 fn parse_version(value: &Value) -> Option<ParsedModelVersion> {
     let id = value_u64(value.get("id"))?;
@@ -512,5 +574,36 @@ fn value_f64(value: Option<&Value>) -> Option<f64> {
         Value::String(text) => text.trim().parse::<f64>().ok(),
         Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    #[test]
+    fn lowercases_base_model_folder_for_model_downloads() {
+        let root = std::env::temp_dir().join("civitai-cli-model-path-test");
+        let config = AppConfig {
+            comfyui_path: Some(root.clone()),
+            ..AppConfig::default()
+        };
+
+        let path = resolve_model_download_target_dir(&config, Some("LORA"), Some("Flux.1 Dev"));
+
+        assert_eq!(path, root.join("models").join("loras").join("flux.1 dev"));
+    }
+
+    #[test]
+    fn builds_model_file_name_from_model_and_version_names() {
+        let name = build_model_download_file_name(
+            Some("My Model"),
+            Some("v1.0 release"),
+            "weights.safetensors",
+            "fallback.bin",
+        );
+
+        assert_eq!(name, "My Model_v1.0 release.safetensors");
     }
 }

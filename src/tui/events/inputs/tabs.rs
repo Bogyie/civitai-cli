@@ -573,9 +573,12 @@ fn handle_up(app: &mut App) {
 fn handle_download_or_delete(app: &mut App) {
     if app.active_tab == MainTab::Downloads {
         if let Some(removed) = app.remove_selected_history() {
-            let was_active = app.active_downloads.contains_key(&removed.model_id);
-            if was_active && let Some(tx) = &app.tx {
-                let _ = tx.try_send(WorkerCommand::CancelDownload(removed.model_id));
+            let active_key = app.active_download_key_for_history_entry(&removed);
+            let was_active = active_key.is_some();
+            if let Some(download_key) = active_key
+                && let Some(tx) = &app.tx
+            {
+                let _ = tx.try_send(WorkerCommand::CancelDownload(download_key));
             }
             app.status = if was_active {
                 format!(
@@ -596,9 +599,12 @@ fn handle_download_or_delete(app: &mut App) {
 fn handle_delete_with_file(app: &mut App) {
     if app.active_tab == MainTab::Downloads {
         if let Some(removed) = app.remove_selected_history() {
-            let was_active = app.active_downloads.contains_key(&removed.model_id);
-            if let Some(tx) = &app.tx {
-                let _ = tx.try_send(WorkerCommand::CancelDownload(removed.model_id));
+            let active_key = app.active_download_key_for_history_entry(&removed);
+            let was_active = active_key.is_some();
+            if let Some(download_key) = active_key
+                && let Some(tx) = &app.tx
+            {
+                let _ = tx.try_send(WorkerCommand::CancelDownload(download_key));
             }
 
             match removed.file_path {
@@ -636,15 +642,15 @@ fn handle_delete_with_file(app: &mut App) {
 
 fn handle_pause_or_download(app: &mut App) {
     if app.active_tab == MainTab::Downloads {
-        if let Some(download_id) = app.selected_download_id()
-            && let Some(tracker) = app.active_downloads.get(&download_id)
+        if let Some(download_key) = app.selected_download_key()
+            && let Some(tracker) = app.active_downloads.get(&download_key)
         {
             if tracker.state == DownloadState::Running {
                 if let Some(tx) = &app.tx {
-                    let _ = tx.try_send(WorkerCommand::PauseDownload(download_id));
+                    let _ = tx.try_send(WorkerCommand::PauseDownload(download_key));
                 }
             } else if let Some(tx) = &app.tx {
-                let _ = tx.try_send(WorkerCommand::ResumeDownload(download_id));
+                let _ = tx.try_send(WorkerCommand::ResumeDownload(download_key));
             }
         }
     } else {
@@ -674,10 +680,10 @@ fn handle_c_action(app: &mut App) {
             app.status = "No Comfy workflow metadata for current image".into();
         }
     } else if app.active_tab == MainTab::Downloads
-        && let Some(download_id) = app.selected_download_id()
+        && let Some(download_key) = app.selected_download_key()
         && let Some(tx) = &app.tx
     {
-        let _ = tx.try_send(WorkerCommand::CancelDownload(download_id));
+        let _ = tx.try_send(WorkerCommand::CancelDownload(download_key));
     }
 }
 
@@ -751,7 +757,7 @@ fn handle_refresh_or_resume(app: &mut App) {
                 app.status = "Selected item already complete.".into();
                 return;
             }
-            if app.active_downloads.contains_key(&entry.model_id) {
+            if app.active_download_key_for_history_entry(&entry).is_some() {
                 app.status = "Download already active for selected model.".into();
                 return;
             }
@@ -774,7 +780,7 @@ fn handle_refresh_or_resume(app: &mut App) {
                     entry.downloaded_bytes,
                     entry.total_bytes,
                 ));
-                app.remove_history_for_session(entry.model_id, entry.version_id);
+                app.remove_history_for_session(entry.model_id, entry.version_id, &entry.filename);
                 app.status = format!("Resuming {} (v{})...", entry.model_name, entry.version_id);
             }
         } else {

@@ -1,10 +1,11 @@
 use crate::tui::app::AppMessage;
+use crate::tui::app::types::DownloadKey;
 use crate::tui::model::ParsedModelFile;
 use civitai_cli::sdk::{DownloadControl, DownloadEvent};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 
-pub(super) type DownloadControlMap = HashMap<u64, mpsc::Sender<DownloadControl>>;
+pub(super) type DownloadControlMap = HashMap<DownloadKey, mpsc::Sender<DownloadControl>>;
 
 pub(super) fn estimated_file_size_bytes(file: &ParsedModelFile) -> Option<u64> {
     file.size_kb.and_then(|size_kb| {
@@ -19,10 +20,8 @@ pub(super) fn estimated_file_size_bytes(file: &ParsedModelFile) -> Option<u64> {
 pub(super) async fn forward_download_events(
     mut progress_rx: mpsc::Receiver<DownloadEvent>,
     tx_msg: mpsc::Sender<AppMessage>,
-    model_id: u64,
-    version_id: u64,
+    download_key: DownloadKey,
     model_name: String,
-    filename: String,
 ) {
     while let Some(event) = progress_rx.recv().await {
         match event {
@@ -31,9 +30,7 @@ pub(super) async fn forward_download_events(
             } => {
                 let _ = tx_msg
                     .send(AppMessage::DownloadStarted(
-                        model_id,
-                        filename.clone(),
-                        version_id,
+                        download_key.clone(),
                         model_name.clone(),
                         total_bytes.unwrap_or(0),
                         Some(path),
@@ -47,8 +44,7 @@ pub(super) async fn forward_download_events(
             } => {
                 let _ = tx_msg
                     .send(AppMessage::DownloadProgress(
-                        model_id,
-                        filename.clone(),
+                        download_key.clone(),
                         percent.unwrap_or(0.0),
                         downloaded_bytes,
                         total_bytes.unwrap_or(0),
@@ -65,14 +61,15 @@ pub(super) async fn forward_download_events(
                     .unwrap_or(0.0);
                 let _ = tx_msg
                     .send(AppMessage::DownloadProgress(
-                        model_id,
-                        filename.clone(),
+                        download_key.clone(),
                         percent,
                         downloaded_bytes,
                         total_bytes.unwrap_or(0),
                     ))
                     .await;
-                let _ = tx_msg.send(AppMessage::DownloadPaused(model_id)).await;
+                let _ = tx_msg
+                    .send(AppMessage::DownloadPaused(download_key.clone()))
+                    .await;
             }
             DownloadEvent::Resumed {
                 downloaded_bytes,
@@ -84,14 +81,15 @@ pub(super) async fn forward_download_events(
                     .unwrap_or(0.0);
                 let _ = tx_msg
                     .send(AppMessage::DownloadProgress(
-                        model_id,
-                        filename.clone(),
+                        download_key.clone(),
                         percent,
                         downloaded_bytes,
                         total_bytes.unwrap_or(0),
                     ))
                     .await;
-                let _ = tx_msg.send(AppMessage::DownloadResumed(model_id)).await;
+                let _ = tx_msg
+                    .send(AppMessage::DownloadResumed(download_key.clone()))
+                    .await;
             }
             DownloadEvent::Completed {
                 downloaded_bytes,
@@ -109,8 +107,7 @@ pub(super) async fn forward_download_events(
                     .unwrap_or(0.0);
                 let _ = tx_msg
                     .send(AppMessage::DownloadProgress(
-                        model_id,
-                        filename.clone(),
+                        download_key.clone(),
                         percent,
                         downloaded_bytes,
                         total_bytes.unwrap_or(0),

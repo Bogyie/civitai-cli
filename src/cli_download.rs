@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::config::AppConfig;
+use crate::tui::model::{
+    build_model_download_file_name, normalize_base_model_component, normalize_model_type_folder,
+};
 use civitai_cli::sdk::{
     ApiClient, ApiModel as Model, ApiModelVersion as ModelVersion, DownloadClient,
     DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec, ModelDownloadAuth,
@@ -70,9 +73,13 @@ async fn download_model_version(
         .or_else(|| version.files.first())
         .context("No files found across this model version")?;
 
-    let target_dir = resolve_comfy_path(config, model)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let target_path = target_dir.join(generate_smart_filename(version, &file.name));
+    let target_dir = resolve_model_target_dir(config, model, version);
+    let target_path = target_dir.join(build_model_download_file_name(
+        Some(model.name.as_str()),
+        Some(version.name.as_str()),
+        &file.name,
+        &format!("{}-{}", model.name, version.id),
+    ));
 
     let auth = config
         .api_key
@@ -105,36 +112,21 @@ async fn download_model_version(
     Ok(result.path)
 }
 
-fn resolve_comfy_path(config: &AppConfig, model: &Model) -> Option<PathBuf> {
-    let base = config.comfyui_path.as_ref()?;
-
-    let sub_dir = match model.r#type.as_str() {
-        "Checkpoint" => "models/checkpoints",
-        "LORA" => "models/loras",
-        "TextualInversion" => "models/embeddings",
-        "Controlnet" => "models/controlnet",
-        "VAE" => "models/vae",
-        _ => "models/uncategorized",
+fn resolve_model_target_dir(config: &AppConfig, model: &Model, version: &ModelVersion) -> PathBuf {
+    let target_dir = match config.comfyui_path.as_ref() {
+        Some(base) => base
+            .join("models")
+            .join(normalize_model_type_folder(Some(model.r#type.as_str())))
+            .join(normalize_base_model_component(&version.base_model)),
+        None => std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("downloads")
+            .join("models")
+            .join(normalize_model_type_folder(Some(model.r#type.as_str())))
+            .join(normalize_base_model_component(&version.base_model)),
     };
-
-    let target_dir = base.join(sub_dir);
     if !target_dir.exists() {
         let _ = fs::create_dir_all(&target_dir);
     }
-
-    Some(target_dir)
-}
-
-fn generate_smart_filename(version: &ModelVersion, original_filename: &str) -> String {
-    let base_model_tag = format!("[{}]", version.base_model.replace(' ', ""));
-
-    let path = Path::new(original_filename);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let ext = path.extension().unwrap_or_default().to_string_lossy();
-
-    if ext.is_empty() {
-        format!("{}_{}", base_model_tag, stem)
-    } else {
-        format!("{}_{}.{}", base_model_tag, stem, ext)
-    }
+    target_dir
 }

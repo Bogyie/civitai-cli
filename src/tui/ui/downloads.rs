@@ -104,11 +104,10 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(&block, area);
     let inner_area = block.inner(area);
 
-    let mut tracked_rows = Vec::<(u64, &str, &str, u64, f64, u64, u64, DownloadState)>::new();
-    for model_id in &app.active_download_order {
-        if let Some(tracker) = app.active_downloads.get(model_id) {
+    let mut tracked_rows = Vec::<(&str, &str, u64, f64, u64, u64, DownloadState)>::new();
+    for download_key in &app.active_download_order {
+        if let Some(tracker) = app.active_downloads.get(download_key) {
             tracked_rows.push((
-                *model_id,
                 &tracker.model_name,
                 &tracker.filename,
                 tracker.version_id,
@@ -159,7 +158,6 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     for (
         i,
         (
-            _model_id,
             model_name,
             filename,
             version_id,

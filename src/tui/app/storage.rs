@@ -2,7 +2,7 @@ use civitai_cli::sdk::{SearchImageHit as ImageItem, SearchModelHit as Model};
 use serde_json;
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::tui::app::{DownloadHistoryEntry, DownloadHistoryStatus, InterruptedDownloadSession};
 
@@ -161,10 +161,17 @@ pub(super) fn collect_paused_sessions_from_history(
             continue;
         }
 
-        if seen.contains(&(entry.model_id, entry.version_id)) {
+        let session_key = (
+            entry.model_id,
+            entry.version_id,
+            entry.file_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(entry.filename.clone())),
+        );
+        if seen.contains(&session_key) {
             continue;
         }
-        seen.insert((entry.model_id, entry.version_id));
+        seen.insert(session_key);
 
         sessions.push(InterruptedDownloadSession {
             model_id: entry.model_id,

@@ -6,7 +6,6 @@ mod tui;
 use anyhow::{Context, Result};
 use civitai_cli::sdk::{ApiClient, SdkClientBuilder};
 use clap::Parser;
-use std::path::PathBuf;
 
 use cli::{Cli, Commands};
 use cli_download::run_download_command;
@@ -37,8 +36,17 @@ async fn main() -> Result<()> {
                 println!("API key updated.");
             }
             if let Some(path) = comfyui_path {
-                app_config.comfyui_path = Some(PathBuf::from(path));
-                println!("ComfyUI path updated to {:?}", path);
+                app_config
+                    .set_comfyui_path(Some(path))
+                    .context("Invalid ComfyUI path")?;
+                println!(
+                    "ComfyUI path updated to {}",
+                    app_config
+                        .comfyui_path
+                        .as_ref()
+                        .map(|value| value.display().to_string())
+                        .unwrap_or_default()
+                );
             }
             app_config.save().context("Failed to save config")?;
         }

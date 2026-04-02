@@ -17,8 +17,8 @@ use super::constants::{
 };
 use super::download::{
     DownloadControl, DownloadDestination, DownloadEvent, DownloadKind, DownloadOptions,
-    DownloadResult, DownloadSpec, authorization_header_value, content_disposition_file_name,
-    content_range_total, emit_event, ensure_parent_dir,
+    DownloadResult, DownloadSpec, authorization_header_value, content_range_total, emit_event,
+    ensure_parent_dir, resolved_download_path,
 };
 use super::image_search::{
     ImageGenerationData, ImageSearchState, MediaUrlOptions, SearchImageHit, SearchImageResponse,
@@ -672,19 +672,13 @@ impl DownloadClient {
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(str::to_string);
-        let actual_target_path = match &options.destination {
-            DownloadDestination::File(_) => provisional_path,
-            DownloadDestination::Directory(path) => {
-                let file_name = content_disposition_file_name(&headers)
-                    .or_else(|| {
-                        provisional_path
-                            .file_name()
-                            .map(|value| value.to_string_lossy().to_string())
-                    })
-                    .unwrap_or_else(|| spec.suggested_file_name());
-                path.join(file_name)
-            }
-        };
+        let actual_target_path = resolved_download_path(
+            &options.destination,
+            &provisional_path,
+            &spec.suggested_file_name(),
+            &headers,
+            content_type.as_deref(),
+        );
 
         if options.create_parent_dirs {
             ensure_parent_dir(&actual_target_path).await?;

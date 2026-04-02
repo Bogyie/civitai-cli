@@ -146,63 +146,62 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
             }
         }
         AppMessage::DownloadProgress(
-            model_id,
-            filename,
+            download_key,
             progress,
             downloaded_bytes,
             total_bytes,
         ) => {
-            if let Some(existing) = app.active_downloads.get_mut(&model_id) {
-                existing.filename = filename;
+            if let Some(existing) = app.active_downloads.get_mut(&download_key) {
                 existing.progress = progress;
                 existing.downloaded_bytes = downloaded_bytes;
                 existing.total_bytes = total_bytes;
             }
         }
         AppMessage::DownloadStarted(
-            model_id,
-            filename,
-            version_id,
+            download_key,
             model_name,
             total_bytes,
             file_path,
         ) => {
-            if !app.active_download_order.contains(&model_id) {
-                app.active_download_order.push(model_id);
+            if !app.active_download_order.contains(&download_key) {
+                app.active_download_order.push(download_key.clone());
             }
 
             app.active_downloads.insert(
-                model_id,
+                download_key.clone(),
                 crate::tui::app::DownloadTracker {
-                    filename,
+                    filename: download_key.filename.clone(),
                     progress: 0.0,
                     downloaded_bytes: 0,
                     total_bytes,
                     file_path,
                     model_name,
-                    version_id,
+                    version_id: download_key.version_id,
                     state: DownloadState::Running,
                 },
             );
-            app.status = format!("Download started for model {} ({})", model_id, version_id);
+            app.status = format!(
+                "Download started for model {} ({})",
+                download_key.model_id, download_key.version_id
+            );
         }
-        AppMessage::DownloadPaused(model_id) => {
-            if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+        AppMessage::DownloadPaused(download_key) => {
+            if let Some(tracker) = app.active_downloads.get_mut(&download_key) {
                 tracker.state = DownloadState::Paused;
                 app.status = format!("Download paused: {}", tracker.filename);
             }
         }
-        AppMessage::DownloadResumed(model_id) => {
-            if let Some(tracker) = app.active_downloads.get_mut(&model_id) {
+        AppMessage::DownloadResumed(download_key) => {
+            if let Some(tracker) = app.active_downloads.get_mut(&download_key) {
                 tracker.state = DownloadState::Running;
                 app.status = format!("Download resumed: {}", tracker.filename);
             }
         }
-        AppMessage::DownloadCompleted(model_id) => {
+        AppMessage::DownloadCompleted(download_key) => {
             app.last_error = None;
-            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+            if let Some(tracker) = app.active_downloads.remove(&download_key) {
                 app.push_download_history(NewDownloadHistoryEntry {
-                    model_id,
+                    model_id: download_key.model_id,
                     version_id: tracker.version_id,
                     filename: tracker.filename,
                     model_name: tracker.model_name,
@@ -213,15 +212,15 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                     progress: tracker.progress,
                 });
             }
-            app.active_download_order.retain(|id| *id != model_id);
+            app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
-            app.status = format!("Download complete: {}", model_id);
+            app.status = format!("Download complete: {}", download_key.filename);
         }
-        AppMessage::DownloadFailed(model_id, reason) => {
-            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+        AppMessage::DownloadFailed(download_key, reason) => {
+            if let Some(tracker) = app.active_downloads.remove(&download_key) {
                 app.push_download_history(NewDownloadHistoryEntry {
-                    model_id,
+                    model_id: download_key.model_id,
                     version_id: tracker.version_id,
                     filename: tracker.filename,
                     model_name: tracker.model_name,
@@ -232,17 +231,17 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                     progress: tracker.progress,
                 });
             }
-            app.active_download_order.retain(|id| *id != model_id);
+            app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
             app.last_error = Some(reason.clone());
             app.show_status_modal = true;
             app.status = format!("Download failed: {}", reason);
         }
-        AppMessage::DownloadCancelled(model_id) => {
-            if let Some(tracker) = app.active_downloads.remove(&model_id) {
+        AppMessage::DownloadCancelled(download_key) => {
+            if let Some(tracker) = app.active_downloads.remove(&download_key) {
                 app.push_download_history(NewDownloadHistoryEntry {
-                    model_id,
+                    model_id: download_key.model_id,
                     version_id: tracker.version_id,
                     filename: tracker.filename,
                     model_name: tracker.model_name,
@@ -253,10 +252,10 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                     progress: tracker.progress,
                 });
             }
-            app.active_download_order.retain(|id| *id != model_id);
+            app.active_download_order.retain(|key| *key != download_key);
             app.clamp_selected_download_index();
             app.clamp_selected_history_index();
-            app.status = format!("Download cancelled: {}", model_id);
+            app.status = format!("Download cancelled: {}", download_key.filename);
         }
     }
 }

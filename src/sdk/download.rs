@@ -156,8 +156,8 @@ impl SearchImageHit {
 
     pub fn default_download_file_name(&self) -> String {
         match self.download_kind() {
-            DownloadKind::Video => format!("civitai-video-{}", self.id),
-            _ => format!("civitai-image-{}", self.id),
+            DownloadKind::Video => format!("civitai-video-{}.mp4", self.id),
+            _ => format!("civitai-image-{}.png", self.id),
         }
     }
 }
@@ -246,4 +246,58 @@ pub(crate) fn content_disposition_file_name(
 
 pub(crate) fn content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     range_total_from_header(headers.get(CONTENT_RANGE))
+}
+
+pub(crate) fn extension_from_content_type(content_type: Option<&str>) -> Option<&'static str> {
+    let mime = content_type?.split(';').next()?.trim().to_ascii_lowercase();
+    match mime.as_str() {
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        "image/bmp" => Some("bmp"),
+        "image/tiff" => Some("tif"),
+        "image/svg+xml" => Some("svg"),
+        "video/mp4" => Some("mp4"),
+        "video/webm" => Some("webm"),
+        "video/quicktime" => Some("mov"),
+        _ => None,
+    }
+}
+
+pub(crate) fn resolved_download_path(
+    destination: &DownloadDestination,
+    provisional_path: &Path,
+    suggested_file_name: &str,
+    headers: &reqwest::header::HeaderMap,
+    content_type: Option<&str>,
+) -> PathBuf {
+    let server_file_name = content_disposition_file_name(headers);
+    match destination {
+        DownloadDestination::File(_) => {
+            let mut path = provisional_path.to_path_buf();
+            let missing_extension = path.extension().is_none_or(|value| value.is_empty());
+            if missing_extension {
+                if let Some(server_name) = server_file_name.as_deref()
+                    && let Some(ext) = Path::new(server_name).extension()
+                {
+                    path.set_extension(ext);
+                    return path;
+                }
+                if let Some(ext) = extension_from_content_type(content_type) {
+                    path.set_extension(ext);
+                }
+            }
+            path
+        }
+        DownloadDestination::Directory(path) => {
+            let file_name = server_file_name.unwrap_or_else(|| {
+                provisional_path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|| suggested_file_name.to_string())
+            });
+            path.join(file_name)
+        }
+    }
 }
