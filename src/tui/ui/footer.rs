@@ -38,10 +38,10 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
             "[?] Help  [M] Status Log  [↑/↓ or j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove"
         }
         MainTab::Images => {
-            "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+            "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [:] Jump  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
         MainTab::LikedImages => {
-            "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
+            "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [:] Jump  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
         MainTab::Downloads => {
             "[?] Help  [M] Status Log  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove"

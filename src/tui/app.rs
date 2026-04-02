@@ -124,6 +124,9 @@ pub struct App {
     pub image_tag_modal_selected_index: usize,
     pub image_tag_modal_include_pending: HashSet<String>,
     pub image_tag_modal_exclude_pending: HashSet<String>,
+    pub show_image_jump_modal: bool,
+    pub image_jump_input: String,
+    pub pending_image_jump_target: Option<usize>,
 
     pub active_downloads: HashMap<DownloadKey, DownloadTracker>,
     pub active_download_order: Vec<DownloadKey>,
@@ -271,6 +274,9 @@ impl App {
             image_tag_modal_selected_index: 0,
             image_tag_modal_include_pending: HashSet::new(),
             image_tag_modal_exclude_pending: HashSet::new(),
+            show_image_jump_modal: false,
+            image_jump_input: String::new(),
+            pending_image_jump_target: None,
             active_downloads: HashMap::new(),
             active_download_order: Vec::new(),
             selected_download_index: 0,
@@ -301,16 +307,11 @@ impl App {
         app.search_form.apply_persisted_state(&model_filter_state);
         app.image_search_form
             .apply_persisted_state(&image_filter_state);
-        app.selected_index = app.config.image_selection_index;
-        app.selected_liked_image_index = app.config.liked_image_selection_index;
 
         app.rebuild_parsed_model_cache();
         app.refresh_visible_liked_models_cache();
         app.refresh_visible_liked_images_cache();
         app.clamp_liked_image_selection();
-        if !app.images.is_empty() && app.selected_index >= app.images.len() {
-            app.selected_index = app.images.len() - 1;
-        }
 
         if !interrupted_download_sessions.is_empty() {
             for session in &interrupted_download_sessions {
@@ -331,8 +332,6 @@ impl App {
     pub fn sync_filter_state_to_config(&mut self) {
         self.config.model_filter_state = self.search_form.persisted_state();
         self.config.image_filter_state = self.image_search_form.persisted_state();
-        self.config.image_selection_index = self.selected_index;
-        self.config.liked_image_selection_index = self.selected_liked_image_index;
     }
 
     pub fn set_worker_tx(&mut self, tx: mpsc::Sender<WorkerCommand>) {
@@ -638,42 +637,5 @@ mod tests {
         assert_eq!(app.visible_liked_images().len(), 1);
         assert_eq!(app.selected_liked_image_index, 0);
         assert_eq!(app.liked_image_list_state.selected(), Some(0));
-    }
-
-    #[test]
-    fn image_selection_indices_round_trip_through_config_and_clamp() {
-        let mut config = isolated_config();
-        config.image_selection_index = 5;
-        config.liked_image_selection_index = 7;
-        let liked_image_path = config
-            .liked_image_file_path
-            .clone()
-            .expect("liked image path");
-        let liked_images = vec![
-            image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
-            image(json!({ "id": 20, "baseModel": "Flux.1 D" })),
-            image(json!({ "id": 30, "baseModel": "Flux.1 D" })),
-        ];
-        save_liked_images_to_file(&liked_image_path, &liked_images).expect("save liked images");
-
-        let mut app = App::new(config);
-        app.images = vec![
-            image(json!({ "id": 1, "baseModel": "Flux.1 D" })),
-            image(json!({ "id": 2, "baseModel": "Flux.1 D" })),
-        ];
-        if app.selected_index >= app.images.len() {
-            app.selected_index = app.images.len() - 1;
-        }
-
-        assert_eq!(app.selected_index, 1);
-        assert_eq!(app.selected_liked_image_index, 2);
-        assert_eq!(app.liked_image_list_state.selected(), Some(2));
-
-        app.selected_index = 1;
-        app.selected_liked_image_index = 2;
-        app.sync_filter_state_to_config();
-
-        assert_eq!(app.config.image_selection_index, 1);
-        assert_eq!(app.config.liked_image_selection_index, 2);
     }
 }

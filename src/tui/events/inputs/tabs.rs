@@ -187,6 +187,12 @@ pub(super) fn handle_tab_key(
             }
             return Some(LoopControl::Continue);
         }
+        KeyCode::Char(':') => {
+            if matches!(app.active_tab, MainTab::Images | MainTab::LikedImages) {
+                app.open_image_jump_modal();
+            }
+            return Some(LoopControl::Continue);
+        }
         KeyCode::Char('M') => {
             app.begin_status_history_modal();
             app.status = "Status history opened".into();
@@ -311,14 +317,7 @@ fn handle_enter(app: &mut App) {
                 app.image_search_form
                     .set_linked_model_version(Some(version_id));
                 app.active_tab = MainTab::Images;
-                app.images.clear();
-                app.image_cache.clear();
-                app.image_bytes_cache.clear();
-                app.selected_index = 0;
-                app.image_feed_loaded = false;
-                app.image_feed_loading = false;
-                app.image_feed_next_page = None;
-                app.image_feed_has_more = true;
+                app.reset_image_feed_for_search();
                 if let Some(tx) = &app.tx {
                     let _ = tx.try_send(WorkerCommand::FetchImages(
                         app.image_search_form.build_options(),

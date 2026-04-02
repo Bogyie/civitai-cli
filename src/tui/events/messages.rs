@@ -32,7 +32,18 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
             if app.status.is_empty() && app.active_tab == crate::tui::app::MainTab::Images {
                 app.set_status(format!("Loaded {} images", app.images.len()));
             }
-            if loaded_count == 0 {
+            if app.pending_image_jump_target.is_some() {
+                let completed = app.resolve_pending_image_jump();
+                if completed {
+                    super::actions::reload_selected_image(app);
+                } else {
+                    let jump_status = app.pending_image_jump_status();
+                    request_image_feed_if_needed(app, app.pending_image_jump_request());
+                    if let Some(status) = jump_status {
+                        app.set_status(status);
+                    }
+                }
+            } else if loaded_count == 0 {
                 if let Some(next_page) = app.next_image_feed_page() {
                     request_image_feed_if_needed(app, Some(next_page));
                 }

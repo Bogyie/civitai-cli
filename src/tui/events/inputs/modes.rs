@@ -502,14 +502,7 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => {
             app.mode = AppMode::Browsing;
-            app.images.clear();
-            app.image_cache.clear();
-            app.image_bytes_cache.clear();
-            app.selected_index = 0;
-            app.image_feed_loaded = false;
-            app.image_feed_loading = false;
-            app.image_feed_next_page = None;
-            app.image_feed_has_more = true;
+            app.reset_image_feed_for_search();
             if let Some(tx) = &app.tx {
                 let _ = tx.try_send(WorkerCommand::FetchImages(
                     app.image_search_form.build_options(),
@@ -670,14 +663,7 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
         }
         KeyCode::Enter => {
             app.mode = AppMode::Browsing;
-            app.images.clear();
-            app.image_cache.clear();
-            app.image_bytes_cache.clear();
-            app.selected_index = 0;
-            app.image_feed_loaded = false;
-            app.image_feed_loading = false;
-            app.image_feed_next_page = None;
-            app.image_feed_has_more = true;
+            app.reset_image_feed_for_search();
             if let Some(tx) = &app.tx {
                 let _ = tx.try_send(WorkerCommand::FetchImages(
                     app.image_search_form.build_options(),

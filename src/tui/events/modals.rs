@@ -38,6 +38,41 @@ fn close_image_tags_modal(app: &mut App) {
 }
 
 pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyOutcome> {
+    if app.show_image_jump_modal {
+        match key.code {
+            KeyCode::Esc => {
+                app.close_image_jump_modal();
+                app.set_status("Image jump cancelled.");
+            }
+            KeyCode::Enter => {
+                let should_refresh = app.apply_image_jump();
+                let pending_jump = app.pending_image_jump_target.is_some();
+                if should_refresh {
+                    app.close_image_jump_modal();
+                    reload_selected_image(app);
+                } else if pending_jump {
+                    let jump_status = app.pending_image_jump_status();
+                    app.close_image_jump_modal();
+                    super::actions::request_image_feed_if_needed(
+                        app,
+                        app.pending_image_jump_request(),
+                    );
+                    if let Some(status) = jump_status {
+                        app.set_status(status);
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                app.backspace_image_jump_input();
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                app.append_image_jump_digit(c);
+            }
+            _ => {}
+        }
+        return Some(ModalKeyOutcome::Consumed);
+    }
+
     if app.show_status_modal {
         if matches!(key.code, KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter) {
             close_modal_and_refresh_image(app, |app| {

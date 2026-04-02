@@ -1,5 +1,7 @@
 use super::*;
 
+const IMAGE_FEED_PAGE_SIZE: usize = 50;
+
 impl App {
     fn image_tag_modal_selectable_indices(&self) -> Vec<usize> {
         let tags = self.selected_image_tag_list();
@@ -197,6 +199,142 @@ impl App {
             MainTab::LikedImages => self.selected_liked_image_index,
             _ => 0,
         }
+    }
+
+    pub fn open_image_jump_modal(&mut self) {
+        self.show_image_jump_modal = true;
+        self.image_jump_input.clear();
+        self.set_status("Jump to image index. Type a number, Enter apply, Esc cancel.");
+    }
+
+    pub fn close_image_jump_modal(&mut self) {
+        self.show_image_jump_modal = false;
+        self.image_jump_input.clear();
+    }
+
+    pub fn append_image_jump_digit(&mut self, c: char) {
+        if c.is_ascii_digit() {
+            self.image_jump_input.push(c);
+        }
+    }
+
+    pub fn backspace_image_jump_input(&mut self) {
+        self.image_jump_input.pop();
+    }
+
+    fn normalized_jump_target(&self) -> Option<usize> {
+        let raw = self.image_jump_input.trim().parse::<usize>().ok()?;
+        Some(raw.saturating_sub(1))
+    }
+
+    pub fn apply_image_jump(&mut self) -> bool {
+        let Some(mut target) = self.normalized_jump_target() else {
+            self.set_warn("Enter an image index to jump to.");
+            return false;
+        };
+
+        match self.active_tab {
+            MainTab::LikedImages => {
+                let visible_len = self.visible_liked_images().len();
+                if visible_len == 0 {
+                    self.set_warn("No liked images available to jump to.");
+                    return false;
+                }
+
+                target = target.min(visible_len.saturating_sub(1));
+                self.selected_liked_image_index = target;
+                self.liked_image_list_state.select(Some(target));
+                self.set_status(format!("Jumped to liked image {}", target + 1));
+                true
+            }
+            MainTab::Images => {
+                if let Some(total_hits) = self.image_feed_total_hits
+                    && total_hits > 0
+                {
+                    target = target.min(total_hits.saturating_sub(1) as usize);
+                }
+
+                self.pending_image_jump_target = Some(target);
+                let completed = self.resolve_pending_image_jump();
+                if !completed {
+                    let page = target / IMAGE_FEED_PAGE_SIZE + 1;
+                    self.set_status(format!(
+                        "Jumping to image {}... loading page {}",
+                        target + 1,
+                        page
+                    ));
+                }
+                completed
+            }
+            _ => false,
+        }
+    }
+
+    pub fn resolve_pending_image_jump(&mut self) -> bool {
+        let Some(mut target) = self.pending_image_jump_target else {
+            return false;
+        };
+
+        if let Some(total_hits) = self.image_feed_total_hits
+            && total_hits > 0
+        {
+            target = target.min(total_hits.saturating_sub(1) as usize);
+            self.pending_image_jump_target = Some(target);
+        }
+
+        if target < self.images.len() {
+            self.selected_index = target;
+            self.pending_image_jump_target = None;
+            self.set_status(format!("Jumped to image {}", target + 1));
+            return true;
+        }
+
+        if !self.image_feed_has_more {
+            self.pending_image_jump_target = None;
+            if self.images.is_empty() {
+                self.selected_index = 0;
+                self.set_warn("No images available to jump to.");
+                return false;
+            }
+
+            self.selected_index = self.images.len().saturating_sub(1);
+            self.set_status(format!(
+                "Jumped to last available image ({})",
+                self.selected_index + 1
+            ));
+            return true;
+        }
+
+        false
+    }
+
+    pub fn pending_image_jump_request(&self) -> Option<u32> {
+        self.pending_image_jump_target?;
+        self.image_feed_next_page
+    }
+
+    pub fn pending_image_jump_status(&self) -> Option<String> {
+        let target = self.pending_image_jump_target?;
+        let page = target / IMAGE_FEED_PAGE_SIZE + 1;
+        Some(format!(
+            "Jumping to image {}... loading page {}",
+            target + 1,
+            page
+        ))
+    }
+
+    pub fn reset_image_feed_for_search(&mut self) {
+        self.images.clear();
+        self.image_cache.clear();
+        self.image_bytes_cache.clear();
+        self.selected_index = 0;
+        self.image_feed_loaded = false;
+        self.image_feed_loading = false;
+        self.image_feed_next_page = None;
+        self.image_feed_total_hits = None;
+        self.image_feed_has_more = true;
+        self.pending_image_jump_target = None;
+        self.close_image_jump_modal();
     }
 
     pub fn set_image_feed_results(
@@ -754,6 +892,22 @@ impl App {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn isolated_config() -> AppConfig {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("civitai-cli-image-tests-{unique}"));
+        AppConfig {
+            liked_model_file_path: Some(root.join("liked_models.json")),
+            liked_image_file_path: Some(root.join("liked_images.json")),
+            download_history_file_path: Some(root.join("download_history.json")),
+            interrupted_download_file_path: Some(root.join("interrupted_downloads.json")),
+            ..AppConfig::default()
+        }
+    }
 
     fn sample_image_with_tags(tags: &[&str]) -> ImageItem {
         ImageItem {
@@ -785,7 +939,7 @@ mod tests {
 
     #[test]
     fn image_tag_modal_syncs_selected_image_tags_back_to_filters() {
-        let mut app = App::new(AppConfig::default());
+        let mut app = App::new(isolated_config());
         app.active_tab = MainTab::Images;
         app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
         app.image_search_form.tag_query = "foo, keep".into();
@@ -810,7 +964,7 @@ mod tests {
 
     #[test]
     fn image_tag_modal_adds_new_include_without_touching_other_filters() {
-        let mut app = App::new(AppConfig::default());
+        let mut app = App::new(isolated_config());
         app.active_tab = MainTab::Images;
         app.images = vec![sample_image_with_tags(&["foo", "bar"])];
         app.image_search_form.tag_query = "keep".into();
@@ -828,7 +982,7 @@ mod tests {
 
     #[test]
     fn image_tag_modal_keeps_focus_in_current_column_when_adding() {
-        let mut app = App::new(AppConfig::default());
+        let mut app = App::new(isolated_config());
         app.active_tab = MainTab::Images;
         app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
 
@@ -845,7 +999,7 @@ mod tests {
 
     #[test]
     fn image_tag_modal_moves_only_across_tags_present_in_focused_column() {
-        let mut app = App::new(AppConfig::default());
+        let mut app = App::new(isolated_config());
         app.active_tab = MainTab::Images;
         app.images = vec![sample_image_with_tags(&["foo", "bar", "baz"])];
 
@@ -867,7 +1021,7 @@ mod tests {
 
     #[test]
     fn image_tag_modal_opposite_direction_cancels_before_switching_sides() {
-        let mut app = App::new(AppConfig::default());
+        let mut app = App::new(isolated_config());
         app.active_tab = MainTab::Images;
         app.images = vec![sample_image_with_tags(&["foo"])];
 
@@ -887,5 +1041,131 @@ mod tests {
         app.toggle_image_tag_modal_left();
         assert!(!app.image_tag_modal_include_pending.contains("foo"));
         assert!(!app.image_tag_modal_exclude_pending.contains("foo"));
+    }
+
+    fn sample_feed_image(id: u64) -> ImageItem {
+        ImageItem {
+            id,
+            ..sample_image_with_tags(&[])
+        }
+    }
+
+    #[test]
+    fn image_jump_digits_and_backspace_edit_modal_input() {
+        let mut app = App::new(isolated_config());
+
+        app.open_image_jump_modal();
+        app.append_image_jump_digit('1');
+        app.append_image_jump_digit('2');
+        app.append_image_jump_digit('a');
+        app.backspace_image_jump_input();
+
+        assert!(app.show_image_jump_modal);
+        assert_eq!(app.image_jump_input, "1");
+    }
+
+    #[test]
+    fn image_jump_within_loaded_images_selects_immediately() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Images;
+        app.images = vec![
+            sample_feed_image(1),
+            sample_feed_image(2),
+            sample_feed_image(3),
+        ];
+        app.image_feed_loaded = true;
+        app.image_feed_has_more = true;
+        app.image_jump_input = "2".into();
+
+        let completed = app.apply_image_jump();
+
+        assert!(completed);
+        assert_eq!(app.selected_index, 1);
+        assert_eq!(app.pending_image_jump_target, None);
+    }
+
+    #[test]
+    fn image_jump_beyond_loaded_images_sets_pending_target() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_feed_image(1), sample_feed_image(2)];
+        app.image_feed_loaded = true;
+        app.image_feed_has_more = true;
+        app.image_feed_next_page = Some(2);
+        app.image_jump_input = "55".into();
+
+        let completed = app.apply_image_jump();
+
+        assert!(!completed);
+        assert_eq!(app.pending_image_jump_target, Some(54));
+        assert_eq!(app.pending_image_jump_request(), Some(2));
+    }
+
+    #[test]
+    fn image_jump_clamps_to_known_total_hits() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Images;
+        app.images = vec![sample_feed_image(1), sample_feed_image(2)];
+        app.image_feed_loaded = true;
+        app.image_feed_has_more = true;
+        app.image_feed_next_page = Some(2);
+        app.image_feed_total_hits = Some(4);
+        app.image_jump_input = "99".into();
+
+        let completed = app.apply_image_jump();
+
+        assert!(!completed);
+        assert_eq!(app.pending_image_jump_target, Some(3));
+    }
+
+    #[test]
+    fn image_jump_resolves_to_last_loaded_when_feed_exhausted() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::Images;
+        app.images = vec![
+            sample_feed_image(1),
+            sample_feed_image(2),
+            sample_feed_image(3),
+        ];
+        app.image_feed_loaded = true;
+        app.image_feed_has_more = false;
+        app.pending_image_jump_target = Some(99);
+
+        let completed = app.resolve_pending_image_jump();
+
+        assert!(completed);
+        assert_eq!(app.selected_index, 2);
+        assert_eq!(app.pending_image_jump_target, None);
+    }
+
+    #[test]
+    fn liked_image_jump_clamps_to_visible_results() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::LikedImages;
+        app.liked_images = vec![
+            sample_feed_image(10),
+            sample_feed_image(20),
+            sample_feed_image(30),
+        ];
+        app.refresh_visible_liked_images_cache();
+        app.image_jump_input = "99".into();
+
+        let completed = app.apply_image_jump();
+
+        assert!(completed);
+        assert_eq!(app.selected_liked_image_index, 2);
+        assert_eq!(app.liked_image_list_state.selected(), Some(2));
+    }
+
+    #[test]
+    fn liked_image_jump_warns_when_no_visible_results() {
+        let mut app = App::new(isolated_config());
+        app.active_tab = MainTab::LikedImages;
+        app.image_jump_input = "1".into();
+
+        let completed = app.apply_image_jump();
+
+        assert!(!completed);
+        assert_eq!(app.selected_liked_image_index, 0);
     }
 }

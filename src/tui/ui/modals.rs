@@ -39,6 +39,10 @@ pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
         draw_image_tags_modal(f, app);
     }
 
+    if app.show_image_jump_modal {
+        draw_image_jump_modal(f, app);
+    }
+
     if app.show_image_model_detail_modal {
         draw_image_model_detail_modal(f, app);
     }
@@ -297,6 +301,43 @@ fn draw_image_tags_modal(f: &mut Frame, app: &App) {
     f.render_widget(help, sections[2]);
 }
 
+fn draw_image_jump_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(38, 18, f.area());
+    f.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Jump To Image ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let prompt = Paragraph::new("Enter image index (1-based):")
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true });
+    f.render_widget(prompt, sections[0]);
+
+    let input = Paragraph::new(format!(":{}█", app.image_jump_input))
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).title(" Index "));
+    f.render_widget(input, sections[1]);
+
+    let help = Paragraph::new(Line::from(Span::styled(
+        " [0-9] Type  [Backspace] Delete  [Enter] Jump  [Esc] Cancel ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(help, sections[2]);
+}
+
 fn draw_image_model_detail_modal(f: &mut Frame, app: &mut App) {
     let area = centered_rect(84, 86, f.area());
     f.render_widget(Clear, area);
@@ -494,6 +535,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         MainTab::Models | MainTab::LikedModels | MainTab::Images | MainTab::LikedImages => vec![
             Line::from(" [/] Quick search"),
             Line::from(" [f] Open filter builder"),
+            Line::from(" [:] Jump to image index (Images / Liked Images)"),
             Line::from(" [Enter] Apply search / run selected action"),
             Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle  [T] templates"),
             Line::from(" Text sections accept typing directly"),

@@ -230,14 +230,7 @@ impl App {
     }
 
     pub fn execute_image_search(&mut self) {
-        self.images.clear();
-        self.image_cache.clear();
-        self.image_bytes_cache.clear();
-        self.selected_index = 0;
-        self.image_feed_loaded = false;
-        self.image_feed_loading = false;
-        self.image_feed_next_page = None;
-        self.image_feed_has_more = true;
+        self.reset_image_feed_for_search();
         if let Some(tx) = &self.tx {
             let _ = tx.try_send(WorkerCommand::FetchImages(
                 self.image_search_form.build_options(),

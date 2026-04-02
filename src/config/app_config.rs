@@ -30,10 +30,6 @@ fn default_debug_logging() -> bool {
     false
 }
 
-fn default_image_selection_index() -> usize {
-    0
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
 pub struct PersistedModelFilterState {
     #[serde(default)]
@@ -160,10 +156,6 @@ pub struct AppConfig {
     pub model_filter_state: PersistedModelFilterState,
     #[serde(default = "default_image_filter_state")]
     pub image_filter_state: PersistedImageFilterState,
-    #[serde(default = "default_image_selection_index")]
-    pub image_selection_index: usize,
-    #[serde(default = "default_image_selection_index")]
-    pub liked_image_selection_index: usize,
 }
 
 impl AppConfig {
@@ -330,8 +322,6 @@ impl Default for AppConfig {
             debug_logging: default_debug_logging(),
             model_filter_state: default_model_filter_state(),
             image_filter_state: default_image_filter_state(),
-            image_selection_index: default_image_selection_index(),
-            liked_image_selection_index: default_image_selection_index(),
         }
     }
 }
