@@ -1,9 +1,9 @@
 use civitai_cli::sdk::{
-    DownloadClient, ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy,
-    ImageSearchState, ImageTechnique, ImageTool, ModelBaseModel, ModelCategory,
-    ModelCheckpointType, ModelDownloadAuth, ModelFileFormat, ModelSearchSortBy, ModelSearchState,
-    ModelType, SearchImageHit, SearchModelHit, SearchModelVersion, SearchSdkConfig,
-    WebSearchClient,
+    ApiModel, ApiModelFile, ApiModelStats, ApiModelTag, ApiModelVersion, DownloadClient,
+    ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageSearchState,
+    ImageTechnique, ImageTool, ModelBaseModel, ModelCategory, ModelCheckpointType,
+    ModelDownloadAuth, ModelFileFormat, ModelSearchSortBy, ModelSearchState, ModelType,
+    SearchImageHit, SearchModelHit, SearchModelVersion, SearchSdkConfig, WebSearchClient,
     build_model_download_url, build_model_download_url_with_base,
     build_model_download_url_with_token, build_model_download_url_with_token_and_base,
 };
@@ -521,6 +521,77 @@ mod model_hit_tests {
         assert_eq!(hit.versions[0].files[0].size_kb, Some(2048.0));
         assert_eq!(hit.images[0].model_version_id, Some(111));
         assert_eq!(hit.images[0].nsfw.as_deref(), Some("false"));
+    }
+
+    #[test]
+    fn converts_api_model_versions_with_file_sizes() {
+        let hit: SearchModelHit = ApiModel {
+            id: 77,
+            name: "Detailed model".to_string(),
+            description: Some("from api".to_string()),
+            r#type: "Checkpoint".to_string(),
+            nsfw: false,
+            tags: vec![ApiModelTag::NameOnly("anime".to_string())],
+            stats: Some(ApiModelStats {
+                download_count: 5,
+                thumbs_up_count: 3,
+                thumbs_down_count: 0,
+                favorite_count: 2,
+                comment_count: 1,
+                comment_count_all: 1,
+                rating_count: 1,
+                rating: 4.0,
+                comment_count_weekly: 0,
+            }),
+            mode: None,
+            creator: None,
+            allow_no_credit: None,
+            allow_commercial_use: None,
+            allow_derivatives: None,
+            allow_different_license: None,
+            supports_generation: Some(false),
+            poi: None,
+            updated_at: Some("2026-01-01T00:00:00Z".to_string()),
+            model_versions: vec![ApiModelVersion {
+                id: 9001,
+                model_id: Some(77),
+                name: "v1".to_string(),
+                base_model: "SDXL".to_string(),
+                download_url: None,
+                created_at: None,
+                updated_at: None,
+                early_access_time_frame: None,
+                trained_words: None,
+                description: None,
+                stats: None,
+                images: vec![],
+                files: vec![ApiModelFile {
+                    id: 10,
+                    name: "weights.safetensors".to_string(),
+                    file_type: Some("Model".to_string()),
+                    primary: true,
+                    size_kb: 3145728.0,
+                    metadata: None,
+                    hashes: None,
+                    pickle_scan_result: None,
+                    pickle_scan_message: None,
+                    virus_scan_result: None,
+                    scanned_at: None,
+                    download_url: "https://example.test/file".to_string(),
+                }],
+            }],
+        }
+        .into();
+
+        assert_eq!(hit.version.as_ref().map(|value| value.id), Some(9001));
+        assert_eq!(hit.version.as_ref().map(|value| value.files.len()), Some(1));
+        assert_eq!(
+            hit.version
+                .as_ref()
+                .and_then(|value| value.files.first())
+                .and_then(|file| file.size_kb),
+            Some(3145728.0)
+        );
     }
 
     #[test]

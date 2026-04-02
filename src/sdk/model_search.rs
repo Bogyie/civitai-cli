@@ -4,6 +4,11 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use super::constants::{CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL};
+use super::api_types::{
+    Model as ApiModel, ModelCreator as ApiModelCreator, ModelFile as ApiModelFile,
+    ModelImage as ApiModelImage, ModelStats as ApiModelStats, ModelTag as ApiModelTag,
+    ModelVersion as ApiModelVersion, NsfwValue as ApiNsfwValue, VersionStats as ApiVersionStats,
+};
 use super::image_search::ImageHitUser;
 use super::model_search_types::{
     ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,
@@ -597,4 +602,162 @@ pub struct SearchModelResponse {
     pub offset: Option<u32>,
     #[serde(flatten, default)]
     pub extras: Value,
+}
+
+impl From<ApiModel> for SearchModelHit {
+    fn from(value: ApiModel) -> Self {
+        let version = value.model_versions.first().cloned().map(Into::into);
+        let versions: Vec<SearchModelVersion> =
+            value.model_versions.into_iter().map(Into::into).collect();
+        let file_formats = versions
+            .iter()
+            .flat_map(|version| version.files.iter())
+            .filter_map(|file| {
+                file.metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.format.clone())
+                    .or_else(|| file.file_type.clone())
+            })
+            .collect::<Vec<_>>();
+        let images = versions
+            .iter()
+            .flat_map(|version| version.images.iter().cloned())
+            .collect::<Vec<_>>();
+
+        Self {
+            id: value.id,
+            name: Some(value.name),
+            r#type: Some(value.r#type),
+            created_at: None,
+            last_version_at: value.updated_at.clone(),
+            last_version_at_unix: None,
+            checkpoint_type: None,
+            availability: None,
+            file_formats,
+            hashes: Vec::new(),
+            tags: value.tags.into_iter().map(Into::into).collect(),
+            category: None,
+            permissions: None,
+            metrics: value.stats.map(Into::into),
+            rank: None,
+            user: value.creator.map(Into::into),
+            version,
+            versions,
+            images,
+            can_generate: value.supports_generation,
+            nsfw: Some(value.nsfw),
+            nsfw_level: None,
+            extras: serde_json::json!({
+                "description": value.description,
+            }),
+        }
+    }
+}
+
+impl From<ApiModelTag> for SearchModelTag {
+    fn from(value: ApiModelTag) -> Self {
+        match value {
+            ApiModelTag::Name { name } => Self::Name { name },
+            ApiModelTag::NameOnly(name) => Self::NameOnly(name),
+        }
+    }
+}
+
+impl From<ApiModelCreator> for ImageHitUser {
+    fn from(value: ApiModelCreator) -> Self {
+        Self {
+            username: Some(value.username),
+        }
+    }
+}
+
+impl From<ApiModelStats> for SearchModelMetrics {
+    fn from(value: ApiModelStats) -> Self {
+        Self {
+            download_count: value.download_count,
+            thumbs_up_count: value.thumbs_up_count,
+            favorite_count: value.favorite_count,
+            comment_count: value.comment_count,
+            collected_count: 0,
+            tipped_amount_count: 0,
+            rating_count: value.rating_count,
+            rating: value.rating,
+        }
+    }
+}
+
+impl From<ApiVersionStats> for SearchModelMetrics {
+    fn from(value: ApiVersionStats) -> Self {
+        Self {
+            download_count: value.download_count,
+            thumbs_up_count: value.thumbs_up_count,
+            favorite_count: value.favorite_count,
+            comment_count: value.comment_count,
+            collected_count: 0,
+            tipped_amount_count: 0,
+            rating_count: value.rating_count,
+            rating: value.rating,
+        }
+    }
+}
+
+impl From<ApiModelVersion> for SearchModelVersion {
+    fn from(value: ApiModelVersion) -> Self {
+        Self {
+            id: value.id,
+            name: Some(value.name),
+            base_model: normalize_optional_string(Some(value.base_model)),
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+            early_access_time_frame: value.early_access_time_frame,
+            description: value.description,
+            stats: value.stats.map(Into::into),
+            files: value.files.into_iter().map(Into::into).collect(),
+            images: value.images.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<ApiModelFile> for SearchModelFile {
+    fn from(value: ApiModelFile) -> Self {
+        Self {
+            id: Some(value.id),
+            name: normalize_optional_string(Some(value.name)),
+            file_type: value.file_type,
+            size_kb: (value.size_kb > 0.0).then_some(value.size_kb),
+            metadata: value.metadata.map(Into::into),
+            primary: value.primary,
+            download_url: normalize_optional_string(Some(value.download_url)),
+            pickle_scan_result: value.pickle_scan_result,
+            virus_scan_result: value.virus_scan_result,
+        }
+    }
+}
+
+impl From<super::api_types::FileMetadata> for SearchModelFileMetadata {
+    fn from(value: super::api_types::FileMetadata) -> Self {
+        Self {
+            format: value.format,
+            size: value.size,
+            fp: value.fp,
+        }
+    }
+}
+
+impl From<ApiModelImage> for SearchModelImage {
+    fn from(value: ApiModelImage) -> Self {
+        Self {
+            id: value.id,
+            url: value.url,
+            nsfw: value.nsfw.map(|value| match value {
+                ApiNsfwValue::Bool(value) => value.to_string(),
+                ApiNsfwValue::Text(value) => value,
+                ApiNsfwValue::Unknown => "unknown".to_string(),
+            }),
+            width: value.width,
+            height: value.height,
+            model_version_id: None,
+            meta: value.meta,
+        }
+    }
 }

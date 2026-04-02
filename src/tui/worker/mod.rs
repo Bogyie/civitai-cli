@@ -39,7 +39,7 @@ use crate::tui::model::{
 use crate::tui::runtime::{debug_fetch_log, render_request_key};
 use civitai_cli::sdk::{
     DownloadControl, DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec,
-    ModelDownloadAuth, ModelSearchState, SdkClientBuilder, SearchModelHit as Model,
+    ModelDownloadAuth, SdkClientBuilder, SearchModelHit as Model,
 };
 
 fn build_model_url(model: &Model, version_id: u64) -> String {
@@ -911,7 +911,7 @@ pub async fn spawn_worker(
                         }
                     });
                 }
-                WorkerCommand::FetchModelDetail(model_id, preferred_version_id, model_query) => {
+                WorkerCommand::FetchModelDetail(model_id, preferred_version_id, _model_query) => {
                     let tx_msg_clone = tx_msg.clone();
                     let sdk_clone = {
                         let builder = if let Some(api_key) = downloader_config.api_key.clone() {
@@ -919,7 +919,7 @@ pub async fn spawn_worker(
                         } else {
                             SdkClientBuilder::new()
                         };
-                        builder.build_web().unwrap()
+                        builder.build_api().unwrap()
                     };
 
                     tokio::spawn(async move {
@@ -930,31 +930,14 @@ pub async fn spawn_worker(
                             )))
                             .await;
 
-                        let state = ModelSearchState {
-                            query: Some(model_query.clone()),
-                            limit: Some(50),
-                            ..Default::default()
-                        };
-
-                        match sdk_clone.search_models(&state).await {
-                            Ok(response) => {
-                                if let Some(model) =
-                                    response.hits.into_iter().find(|hit| hit.id == model_id)
-                                {
-                                    let _ = tx_msg_clone
-                                        .send(AppMessage::ModelDetailLoaded(
-                                            Box::new(model),
-                                            preferred_version_id,
-                                        ))
-                                        .await;
-                                } else {
-                                    let _ = tx_msg_clone
-                                        .send(AppMessage::StatusUpdate(format!(
-                                            "Model details not found for {}.",
-                                            model_query
-                                        )))
-                                        .await;
-                                }
+                        match sdk_clone.get_model(model_id).await {
+                            Ok(model) => {
+                                let _ = tx_msg_clone
+                                    .send(AppMessage::ModelDetailLoaded(
+                                        Box::new(model.into()),
+                                        preferred_version_id,
+                                    ))
+                                    .await;
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
