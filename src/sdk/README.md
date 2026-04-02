@@ -247,6 +247,12 @@ if let Some(spec) = download.build_model_download_spec(
 }
 ```
 
+검색 응답 타입은 가능한 필드를 구조적으로 역직렬화합니다.
+
+- `SearchModelHit`의 `tags`, `category`, `metrics`, `version`, `versions`, `images` 는 typed field입니다.
+- `SearchImageHit::stats` 는 typed stats struct입니다.
+- 이미지 metadata / generation data 안에 stringified JSON object/array가 오면 SDK가 먼저 정규화한 뒤 TUI/호출부로 넘깁니다.
+
 지원 범위:
 
 - 모델 다운로드 URL 생성

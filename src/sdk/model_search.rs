@@ -9,6 +9,11 @@ use super::model_search_types::{
     ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,
     ModelType,
 };
+use super::serde_utils::{
+    deserialize_boolish, deserialize_f64ish, deserialize_option_f64ish,
+    deserialize_option_u64ish, deserialize_stringish_opt, deserialize_u64ish,
+    normalize_optional_string,
+};
 use super::shared::{append_csv_pair, normalize_search_url, parse_query_map, split_multi_keys};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -570,90 +575,11 @@ pub struct SearchModelImage {
     pub meta: Option<Value>,
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
-    })
-}
-
 fn deserialize_option_stringish<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    Ok(match value {
-        Some(Value::String(text)) => normalize_optional_string(Some(text)),
-        Some(Value::Number(number)) => Some(number.to_string()),
-        Some(Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
-    })
-}
-
-fn deserialize_u64ish<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(deserialize_option_u64ish(deserializer)?.unwrap_or(0))
-}
-
-fn deserialize_option_u64ish<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    Ok(match value {
-        Some(Value::Number(number)) => number
-            .as_u64()
-            .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok())),
-        Some(Value::String(text)) => text.trim().parse::<f64>().ok().and_then(|value| {
-            (value.is_finite() && value >= 0.0).then_some(value.round() as u64)
-        }),
-        Some(Value::Bool(value)) => Some(if value { 1 } else { 0 }),
-        _ => None,
-    })
-}
-
-fn deserialize_f64ish<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(deserialize_option_f64ish(deserializer)?.unwrap_or(0.0))
-}
-
-fn deserialize_option_f64ish<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    Ok(match value {
-        Some(Value::Number(number)) => number.as_f64(),
-        Some(Value::String(text)) => text.trim().parse::<f64>().ok(),
-        Some(Value::Bool(value)) => {
-            if value {
-                Some(1.0)
-            } else {
-                Some(0.0)
-            }
-        }
-        _ => None,
-    })
-}
-
-fn deserialize_boolish<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    Ok(match value {
-        Some(Value::Bool(value)) => value,
-        Some(Value::Number(number)) => number.as_u64().unwrap_or(0) != 0,
-        Some(Value::String(text)) => matches!(
-            text.trim().to_ascii_lowercase().as_str(),
-            "true" | "1" | "yes"
-        ),
-        _ => false,
-    })
+    deserialize_stringish_opt(deserializer)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,84 +1,10 @@
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-fn as_string_from_serde<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    let value = match value {
-        Some(value) => value,
-        None => return Ok(None),
-    };
-
-    Ok(Some(match value {
-        Value::String(s) => s,
-        Value::Number(num) => num.to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Null => return Ok(None),
-        _ => value.to_string(),
-    }))
-}
-
-fn as_u64_from_serde<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    let value = match value {
-        Some(value) => value,
-        None => return Ok(0),
-    };
-
-    Ok(match value {
-        Value::Null => 0,
-        Value::Bool(value) => {
-            if value {
-                1
-            } else {
-                0
-            }
-        }
-        Value::Number(num) => num
-            .as_u64()
-            .or_else(|| num.as_i64().and_then(|v| u64::try_from(v).ok()))
-            .unwrap_or(0),
-        Value::String(value) => value.parse::<f64>().ok().map_or(0, |num| {
-            if num.is_finite() && num >= 0.0 {
-                num.round() as u64
-            } else {
-                0
-            }
-        }),
-        _ => 0,
-    })
-}
-
-fn as_f64_from_serde<'de, D>(deserializer: D) -> Result<f64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    let value = match value {
-        Some(value) => value,
-        None => return Ok(0.0),
-    };
-
-    Ok(match value {
-        Value::Null => 0.0,
-        Value::Bool(value) => {
-            if value {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        Value::Number(num) => num.as_f64().unwrap_or(0.0),
-        Value::String(value) => value.parse::<f64>().unwrap_or(0.0),
-        _ => 0.0,
-    })
-}
+use super::serde_utils::{
+    deserialize_f64ish as as_f64_from_serde, deserialize_stringish_opt as as_string_from_serde,
+    deserialize_u64ish as as_u64_from_serde,
+};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

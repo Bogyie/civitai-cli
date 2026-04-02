@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Url;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::constants::{
@@ -8,6 +8,10 @@ use super::constants::{
 };
 use super::image_search_types::{
     ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageTechnique, ImageTool,
+};
+use super::serde_utils::{
+    deserialize_normalized_struct_opt, deserialize_normalized_value_opt,
+    deserialize_normalized_vec, deserialize_u64ish,
 };
 use super::shared::{
     append_csv_pair, normalize_search_url, parse_query_map, split_multi, split_multi_keys,
@@ -229,63 +233,6 @@ fn is_known_image_key(key: &str) -> bool {
     )
 }
 
-fn deserialize_normalized_value_opt<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    Ok(value.map(normalize_jsonish_value))
-}
-
-fn deserialize_normalized_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: for<'a> Deserialize<'a>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    let Some(value) = value.map(normalize_jsonish_value) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value::<Vec<T>>(value).map_err(serde::de::Error::custom)
-}
-
-fn deserialize_normalized_struct_opt<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: for<'a> Deserialize<'a>,
-{
-    let value: Option<Value> = Option::deserialize(deserializer)?;
-    let Some(value) = value.map(normalize_jsonish_value) else {
-        return Ok(None);
-    };
-    serde_json::from_value::<T>(value)
-        .map(Some)
-        .map_err(serde::de::Error::custom)
-}
-
-fn normalize_jsonish_value(value: Value) -> Value {
-    match value {
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| (key, normalize_jsonish_value(value)))
-                .collect(),
-        ),
-        Value::Array(items) => {
-            Value::Array(items.into_iter().map(normalize_jsonish_value).collect())
-        }
-        Value::String(raw) => match serde_json::from_str::<Value>(&raw) {
-            Ok(Value::Object(map)) => {
-                normalize_jsonish_value(Value::Object(map))
-            }
-            Ok(Value::Array(items)) => {
-                normalize_jsonish_value(Value::Array(items))
-            }
-            _ => Value::String(raw),
-        },
-        other => other,
-    }
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MediaUrlOptions {
     /// `original=true` returns the original asset; for videos this keeps the source mp4.
@@ -405,8 +352,8 @@ pub struct SearchImageHit {
     pub hide_meta: Option<bool>,
     #[serde(default)]
     pub user: Option<ImageHitUser>,
-    #[serde(default, deserialize_with = "deserialize_normalized_value_opt")]
-    pub stats: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_normalized_struct_opt")]
+    pub stats: Option<SearchImageStats>,
     #[serde(default)]
     pub tag_names: Vec<Option<String>>,
     #[serde(default)]
@@ -429,6 +376,23 @@ pub struct SearchImageHit {
     pub combined_nsfw_level: Option<u64>,
     #[serde(default)]
     pub thumbnail_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchImageStats {
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub reaction_count_all_time: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub comment_count_all_time: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub collected_count_all_time: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub tipped_amount_count_all_time: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub like_count_all_time: u64,
+    #[serde(default, deserialize_with = "deserialize_u64ish")]
+    pub heart_count_all_time: u64,
 }
 
 impl SearchImageHit {

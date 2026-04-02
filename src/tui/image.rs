@@ -75,12 +75,12 @@ pub fn image_negative_prompt(hit: &SearchImageHit) -> Option<String> {
 pub fn image_stats(hit: &SearchImageHit) -> ParsedImageStats {
     let stats = hit.stats.as_ref();
     ParsedImageStats {
-        reactions: value_u64(stats.and_then(|value| value.get("reactionCountAllTime"))),
-        comments: value_u64(stats.and_then(|value| value.get("commentCountAllTime"))),
-        collected: value_u64(stats.and_then(|value| value.get("collectedCountAllTime"))),
-        buzz: value_u64(stats.and_then(|value| value.get("tippedAmountCountAllTime"))),
-        likes: value_u64(stats.and_then(|value| value.get("likeCountAllTime"))),
-        hearts: value_u64(stats.and_then(|value| value.get("heartCountAllTime"))),
+        reactions: stats.map(|value| value.reaction_count_all_time).unwrap_or(0),
+        comments: stats.map(|value| value.comment_count_all_time).unwrap_or(0),
+        collected: stats.map(|value| value.collected_count_all_time).unwrap_or(0),
+        buzz: stats.map(|value| value.tipped_amount_count_all_time).unwrap_or(0),
+        likes: stats.map(|value| value.like_count_all_time).unwrap_or(0),
+        hearts: stats.map(|value| value.heart_count_all_time).unwrap_or(0),
     }
 }
 
@@ -340,14 +340,6 @@ fn value_string(value: &Value) -> Option<String> {
         Value::Number(raw) => Some(raw.to_string()),
         Value::Bool(raw) => Some(raw.to_string()),
         _ => None,
-    }
-}
-
-fn value_u64(value: Option<&Value>) -> u64 {
-    match value {
-        Some(Value::Number(raw)) => raw.as_u64().unwrap_or_default(),
-        Some(Value::String(raw)) => raw.parse::<u64>().unwrap_or_default(),
-        _ => 0,
     }
 }
 
