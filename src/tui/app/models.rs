@@ -11,7 +11,7 @@ impl App {
         if let Some(tx) = &self.tx {
             let _ = tx.try_send(WorkerCommand::FetchModelDetail(
                 model.id,
-                self.selected_model_version().map(|(_, version_id)| version_id),
+                None,
                 model_name(&model),
             ));
         }
