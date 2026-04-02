@@ -276,6 +276,26 @@ impl AppConfig {
             Self::config_dir().map(|config_dir| config_dir.join("interrupted_downloads.json"))
         })
     }
+
+    pub fn apply_runtime_env_overrides(&mut self) {
+        let disable_cache = std::env::var("CIVITAI_DISABLE_CACHE")
+            .ok()
+            .map(|value| {
+                let normalized = value.trim();
+                normalized == "1"
+                    || normalized.eq_ignore_ascii_case("true")
+                    || normalized.eq_ignore_ascii_case("yes")
+                    || normalized.eq_ignore_ascii_case("on")
+            })
+            .unwrap_or(false);
+
+        if disable_cache {
+            self.model_search_cache_ttl_hours = 0;
+            self.image_search_cache_ttl_minutes = 0;
+            self.image_detail_cache_ttl_minutes = 0;
+            self.image_cache_ttl_minutes = 0;
+        }
+    }
 }
 
 impl Default for AppConfig {
@@ -306,7 +326,13 @@ impl Default for AppConfig {
 mod tests {
     use super::AppConfig;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn temp_dir() -> std::path::PathBuf {
         let unique = SystemTime::now()
@@ -337,5 +363,31 @@ mod tests {
         let normalized = AppConfig::normalize_comfyui_path(&dir).expect("normalize path");
         assert!(normalized.is_absolute());
         assert_eq!(normalized, dir.canonicalize().expect("canonicalize"));
+    }
+
+    #[test]
+    fn disables_all_cache_ttls_when_runtime_env_requests_it() {
+        let _guard = env_lock().lock().expect("env lock");
+        let previous = std::env::var("CIVITAI_DISABLE_CACHE").ok();
+        // SAFETY: tests serialize access to process env with a global mutex.
+        unsafe {
+            std::env::set_var("CIVITAI_DISABLE_CACHE", "1");
+        }
+
+        let mut config = AppConfig::default();
+        config.apply_runtime_env_overrides();
+
+        assert_eq!(config.model_search_cache_ttl_hours, 0);
+        assert_eq!(config.image_search_cache_ttl_minutes, 0);
+        assert_eq!(config.image_detail_cache_ttl_minutes, 0);
+        assert_eq!(config.image_cache_ttl_minutes, 0);
+
+        // SAFETY: tests serialize access to process env with a global mutex.
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("CIVITAI_DISABLE_CACHE", value),
+                None => std::env::remove_var("CIVITAI_DISABLE_CACHE"),
+            }
+        }
     }
 }

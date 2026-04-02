@@ -285,24 +285,26 @@ pub async fn spawn_worker(
                         };
 
                         let fetch_result = if let Some(entry) = cached_response {
-                            Ok((entry.items, request_state.page))
+                            Ok((entry.items, request_state.page, None))
                         } else {
                             sdk_clone
                                 .search_images(&request_state)
                                 .await
                                 .map(|response| {
+                                    let total_hits =
+                                        response.total_hits.or(response.estimated_total_hits);
                                     let next_page = match (response.page, response.total_pages) {
                                         (Some(page), Some(total_pages)) if page < total_pages => {
                                             Some(page + 1)
                                         }
                                         _ => None,
                                     };
-                                    (response.hits, next_page)
+                                    (response.hits, next_page, total_hits)
                                 })
                         };
 
-                        let (visible_items, final_next_page) = match fetch_result {
-                            Ok((items, next_page)) => {
+                        let (visible_items, final_next_page, total_hits) = match fetch_result {
+                            Ok((items, next_page, total_hits)) => {
                                 let total_items = items.len();
                                 let mut visible_items = items;
                                 visible_items
@@ -345,7 +347,7 @@ pub async fn spawn_worker(
                                     }
                                 }
 
-                                (visible_items, next_page)
+                                (visible_items, next_page, total_hits)
                             }
                             Err(e) => {
                                 debug_fetch_log(
@@ -376,6 +378,7 @@ pub async fn spawn_worker(
                                 visible_items.clone(),
                                 is_append,
                                 final_next_page,
+                                total_hits,
                             ))
                             .await;
 

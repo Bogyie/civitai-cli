@@ -10,12 +10,12 @@ use super::actions::{
 
 pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
     match msg {
-        AppMessage::ImagesLoaded(new_images, append, next_page) => {
+        AppMessage::ImagesLoaded(new_images, append, next_page, total_hits) => {
             app.merge_image_tag_catalog_from_hits(&new_images);
             let loaded_count = new_images.len();
             if append {
                 let before = app.images.len();
-                app.append_image_feed_results(new_images, next_page);
+                app.append_image_feed_results(new_images, next_page, total_hits);
                 if app.active_tab == crate::tui::app::MainTab::Images {
                     app.set_status(format!(
                         "Loaded {} more images (total {})",
@@ -24,7 +24,7 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                     ));
                 }
             } else {
-                app.set_image_feed_results(new_images, next_page);
+                app.set_image_feed_results(new_images, next_page, total_hits);
                 if app.active_tab == crate::tui::app::MainTab::Images {
                     app.set_status(format!("Loaded {} images", app.images.len()));
                 }

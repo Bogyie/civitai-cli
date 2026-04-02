@@ -24,6 +24,7 @@ fn build_api_client(api_key: Option<&str>) -> Result<ApiClient> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut app_config = AppConfig::load().unwrap_or_default();
+    app_config.apply_runtime_env_overrides();
     let cli = Cli::parse();
 
     match &cli.command {

@@ -130,7 +130,12 @@ impl App {
         }
     }
 
-    pub fn set_image_feed_results(&mut self, mut images: Vec<ImageItem>, next_page: Option<u32>) {
+    pub fn set_image_feed_results(
+        &mut self,
+        mut images: Vec<ImageItem>,
+        next_page: Option<u32>,
+        total_hits: Option<u64>,
+    ) {
         let new_ids = images.iter().map(|item| item.id).collect::<HashSet<_>>();
         self.image_cache.retain(|id, _| new_ids.contains(id));
         self.image_bytes_cache.retain(|id, _| new_ids.contains(id));
@@ -138,6 +143,7 @@ impl App {
         self.selected_image_model_index
             .retain(|id, _| new_ids.contains(id));
         self.image_feed_next_page = next_page;
+        self.image_feed_total_hits = total_hits;
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loaded = true;
         self.image_feed_loading = false;
@@ -153,6 +159,7 @@ impl App {
         &mut self,
         mut images: Vec<ImageItem>,
         next_page: Option<u32>,
+        total_hits: Option<u64>,
     ) {
         if !self.images.is_empty() && !images.is_empty() {
             let known_ids: HashSet<u64> = self.images.iter().map(|item| item.id).collect();
@@ -161,6 +168,9 @@ impl App {
 
         self.images.append(&mut images);
         self.image_feed_next_page = next_page;
+        if total_hits.is_some() {
+            self.image_feed_total_hits = total_hits;
+        }
         self.image_feed_has_more = self.image_feed_next_page.is_some();
         self.image_feed_loading = false;
         if !self.images.is_empty() && self.selected_index >= self.images.len() {

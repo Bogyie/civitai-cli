@@ -58,9 +58,22 @@ pub(super) fn draw_saved_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Image View ");
     let items = app.active_image_items();
     let selected_index = app.active_image_selected_index();
+    let total_count = if app.active_tab == MainTab::Images {
+        app.image_feed_total_hits
+            .unwrap_or(items.len() as u64)
+            .max(items.len() as u64)
+    } else {
+        items.len() as u64
+    };
+    let current_index = if items.is_empty() {
+        0
+    } else {
+        (selected_index + 1).min(items.len()) as u64
+    };
+    let title = format!(" Image View ({current_index} / {total_count}) ");
+    let block = Block::default().borders(Borders::ALL).title(title);
 
     if items.is_empty() {
         let empty_message = if app.active_tab == MainTab::SavedImages {

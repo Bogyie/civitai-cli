@@ -1,4 +1,4 @@
-.PHONY: build run run-debug lint fmt fetch-log tail-fetch-log clear-fetch-log
+.PHONY: build run run-cache run-no-cache run-debug lint fmt fetch-log tail-fetch-log clear-fetch-log
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -12,8 +12,13 @@ FETCH_LOG_PATH := $(CONFIG_DIR)/fetch_debug.log
 build:
 	cargo build
 
-run:
+run: run-cache
+
+run-cache:
 	cargo run
+
+run-no-cache:
+	CIVITAI_DISABLE_CACHE=1 cargo run
 
 run-debug:
 	RUST_LOG=debug cargo run
