@@ -23,6 +23,8 @@ use std::io::{self, Stdout};
 use crate::tui::app::{App, AppMode, MainTab};
 
 const TAB_COUNT: usize = 6;
+const FULL_TAB_LAYOUT_BUFFER: usize = 10;
+const MEDIUM_TAB_LAYOUT_BUFFER: usize = 4;
 
 fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'static str) {
     let inner_width = width.saturating_sub(2) as usize;
@@ -49,7 +51,7 @@ fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'stati
 
     let full_width =
         full.iter().map(|label| label.len()).sum::<usize>() + full_divider.len() * (TAB_COUNT - 1);
-    if full_width <= inner_width {
+    if full_width + FULL_TAB_LAYOUT_BUFFER <= inner_width {
         return (
             full.into_iter().collect(),
             full_divider,
@@ -59,7 +61,7 @@ fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'stati
 
     let medium_width = medium.iter().map(|label| label.len()).sum::<usize>()
         + compact_divider.len() * (TAB_COUNT - 1);
-    if medium_width <= inner_width {
+    if medium_width + MEDIUM_TAB_LAYOUT_BUFFER <= inner_width {
         return (
             medium.into_iter().collect(),
             compact_divider,
@@ -147,6 +149,14 @@ mod tests {
         assert_eq!(divider, "|");
         assert_eq!(titles[1], "Liked Models(2)");
         assert_eq!(titles[4], "Down(5)");
+        assert_eq!(title, " Civitai | [1-6] Tabs ");
+    }
+
+    #[test]
+    fn leaves_full_layout_earlier_before_labels_start_feeling_cramped() {
+        let (titles, divider, title) = tab_layout_for_width(102);
+        assert_eq!(divider, "|");
+        assert_eq!(titles[1], "Liked Models(2)");
         assert_eq!(title, " Civitai | [1-6] Tabs ");
     }
 
