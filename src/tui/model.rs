@@ -144,9 +144,6 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
 
     for version in &mut versions {
         merge_metrics(&mut version.stats, &top_level_metrics);
-        if version.files.is_empty() {
-            version.files = synthetic_files(hit);
-        }
     }
 
     versions
@@ -411,33 +408,6 @@ fn parse_files(items: &[SearchModelFile]) -> Vec<ParsedModelFile> {
         .collect()
 }
 
-fn synthetic_files(hit: &SearchModelHit) -> Vec<ParsedModelFile> {
-    if hit.file_formats.is_empty() {
-        return Vec::new();
-    }
-
-    hit.file_formats
-        .iter()
-        .enumerate()
-        .map(|(idx, format)| ParsedModelFile {
-            id: None,
-            name: if idx == 0 {
-                format!("Primary {format}")
-            } else {
-                format!("{format} file")
-            },
-            file_type: hit.r#type.clone(),
-            size_kb: None,
-            format: Some(format.clone()),
-            fp: None,
-            primary: idx == 0,
-            download_url: None,
-            pickle_scan_result: None,
-            virus_scan_result: None,
-        })
-        .collect()
-}
-
 fn parse_images(items: &[SearchModelImage]) -> Vec<ParsedModelImage> {
     items
         .iter()
@@ -506,5 +476,23 @@ mod tests {
         );
 
         assert_eq!(name, "My Model_v1.0 release.safetensors");
+    }
+
+    #[test]
+    fn leaves_files_empty_until_detail_payload_arrives() {
+        let hit: SearchModelHit = serde_json::from_value(serde_json::json!({
+            "id": 42,
+            "fileFormats": ["SafeTensor"],
+            "version": {
+                "id": 7,
+                "name": "v1"
+            }
+        }))
+        .expect("valid search model hit");
+
+        let versions = model_versions(&hit);
+
+        assert_eq!(versions.len(), 1);
+        assert!(versions[0].files.is_empty());
     }
 }

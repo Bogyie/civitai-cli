@@ -352,6 +352,13 @@ impl SearchModelHit {
             build_model_download_url_with_token_and_base(base_url, version_id, token)
         })
     }
+
+    pub fn detail_loaded(&self) -> bool {
+        self.extras
+            .get("detailLoaded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -649,6 +656,7 @@ impl From<ApiModel> for SearchModelHit {
             nsfw_level: None,
             extras: serde_json::json!({
                 "description": value.description,
+                "detailLoaded": true,
             }),
         }
     }

@@ -567,7 +567,12 @@ pub(super) fn draw_model_sidebar(
 
         let file_lines = if let Some(version) = selected_version {
             if version.files.is_empty() {
-                vec![Line::from("No files available for this version.")]
+                let message = if model.detail_loaded() {
+                    "No files available for this version."
+                } else {
+                    "Loading file details..."
+                };
+                vec![Line::from(message)]
             } else {
                 version
                     .files
