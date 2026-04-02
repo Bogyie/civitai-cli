@@ -526,19 +526,24 @@ pub(super) fn compact_number(v: u64) -> String {
 
 pub(super) fn compact_file_size(size_kb: f64) -> String {
     if size_kb <= 0.0 {
-        return "0.0 MB".to_string();
+        return "0 B".to_string();
     }
 
     let mb = 1024.0;
     let gb = mb * 1024.0;
     let tb = gb * 1024.0;
+    let size_bytes = size_kb * 1024.0;
 
     if size_kb >= tb {
         format!("{:.1} TB", size_kb / tb)
     } else if size_kb >= gb {
         format!("{:.1} GB", size_kb / gb)
-    } else {
+    } else if size_kb >= mb {
         format!("{:.1} MB", size_kb / mb)
+    } else if size_bytes >= 1024.0 {
+        format!("{:.1} KB", size_kb)
+    } else {
+        format!("{:.0} B", size_bytes.round())
     }
 }
 
@@ -908,6 +913,13 @@ mod tests {
     fn compacts_byte_units() {
         assert_eq!(compact_bytes(512), "512 B");
         assert_eq!(compact_bytes(2 * 1024 * 1024), "2.0 MB");
+    }
+
+    #[test]
+    fn compacts_file_sizes_below_one_mb_without_showing_zero_mb() {
+        assert_eq!(compact_file_size(0.25), "256 B");
+        assert_eq!(compact_file_size(512.0), "512.0 KB");
+        assert_eq!(compact_file_size(1024.0), "1.0 MB");
     }
 
     #[test]
