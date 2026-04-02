@@ -313,12 +313,14 @@ pub async fn spawn_worker(
                                 .map(|response| {
                                     let total_hits =
                                         response.total_hits.or(response.estimated_total_hits);
-                                    let next_page = match (response.page, response.total_pages) {
-                                        (Some(page), Some(total_pages)) if page < total_pages => {
-                                            Some(page + 1)
-                                        }
-                                        _ => None,
-                                    };
+                                    let has_more = has_more_from_response(
+                                        response.limit.or(request_state.limit),
+                                        response.offset,
+                                        total_hits,
+                                    );
+                                    let next_page = has_more.then_some(
+                                        request_state.page.unwrap_or(1).saturating_add(1),
+                                    );
                                     (response.hits, next_page, total_hits)
                                 })
                         };
@@ -833,7 +835,7 @@ pub async fn spawn_worker(
                                     res.estimated_total_hits,
                                 );
                                 let next_page = has_more
-                                    .then_some(request_state.page.unwrap_or(0).saturating_add(1));
+                                    .then_some(request_state.page.unwrap_or(1).saturating_add(1));
                                 debug_fetch_log(
                                     &debug_config,
                                     &format!(

@@ -976,8 +976,7 @@ fn build_http_client(config: &SearchSdkConfig) -> Result<Client> {
 
 fn build_image_meili_payload(state: &ImageSearchState) -> Value {
     let limit = state.limit.unwrap_or(50);
-    let page_index = state.page.unwrap_or(0);
-    let offset = page_index.saturating_mul(limit);
+    let offset = page_to_offset(state.page, limit);
     let media_types = state
         .media_types
         .iter()
@@ -1071,8 +1070,7 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
 
 fn build_model_meili_payload(state: &ModelSearchState) -> Value {
     let limit = state.limit.unwrap_or(50);
-    let page_index = state.page.unwrap_or(0);
-    let offset = page_index.saturating_mul(limit);
+    let offset = page_to_offset(state.page, limit);
     let base_models = state
         .base_models
         .iter()
@@ -1163,6 +1161,10 @@ fn append_query_token(url: &str, token: &str) -> Result<String> {
     Ok(parsed.into())
 }
 
+fn page_to_offset(page: Option<u32>, limit: u32) -> u32 {
+    page.unwrap_or(1).saturating_sub(1).saturating_mul(limit)
+}
+
 async fn maybe_emit_progress(
     progress_tx: &Option<mpsc::Sender<DownloadEvent>>,
     downloaded_bytes: u64,
@@ -1205,7 +1207,7 @@ async fn maybe_emit_progress(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_model_search_response;
+    use super::{page_to_offset, parse_model_search_response};
 
     #[test]
     fn model_search_response_falls_back_to_lenient_hit_parsing() {
@@ -1244,5 +1246,12 @@ mod tests {
                 .and_then(|value| value.as_u64()),
             Some(1)
         );
+    }
+
+    #[test]
+    fn page_to_offset_uses_one_based_pages() {
+        assert_eq!(page_to_offset(None, 50), 0);
+        assert_eq!(page_to_offset(Some(1), 50), 0);
+        assert_eq!(page_to_offset(Some(2), 50), 50);
     }
 }
