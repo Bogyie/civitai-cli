@@ -30,6 +30,7 @@ pub struct ImageSearchState {
     pub techniques: Vec<ImageTechnique>,
     pub users: Vec<String>,
     pub base_models: Vec<ImageBaseModel>,
+    pub excluded_base_models: Vec<ImageBaseModel>,
     pub aspect_ratios: Vec<ImageAspectRatio>,
     pub created_at: Option<String>,
     pub image_id: Option<u64>,
@@ -94,6 +95,15 @@ impl ImageSearchState {
             "baseModel",
             &self
                 .base_models
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect::<Vec<_>>(),
+        );
+        append_csv_pair(
+            &mut pairs,
+            "excludedBaseModel",
+            &self
+                .excluded_base_models
                 .iter()
                 .map(|value| value.as_query_value().to_string())
                 .collect::<Vec<_>>(),
@@ -168,6 +178,11 @@ impl ImageSearchState {
             .into_iter()
             .map(|value| ImageBaseModel::from_query_value(&value))
             .collect();
+        query.excluded_base_models =
+            split_multi_keys(&map, &["excludedBaseModel", "excludedBaseModels"])
+                .into_iter()
+                .map(|value| ImageBaseModel::from_query_value(&value))
+                .collect();
         query.aspect_ratios = split_multi(map.get("aspectRatio"))
             .into_iter()
             .map(|value| ImageAspectRatio::from_query_value(&value))
@@ -230,6 +245,8 @@ fn is_known_image_key(key: &str) -> bool {
             | "techniques"
             | "users"
             | "baseModel"
+            | "excludedBaseModel"
+            | "excludedBaseModels"
             | "aspectRatio"
             | "createdAt"
             | "imageId"

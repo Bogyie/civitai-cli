@@ -997,6 +997,11 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
         .iter()
         .map(|value| value.as_query_value().to_string())
         .collect::<Vec<_>>();
+    let excluded_base_models = state
+        .excluded_base_models
+        .iter()
+        .map(|value| value.as_query_value().to_string())
+        .collect::<Vec<_>>();
     let aspect_ratios = state
         .aspect_ratios
         .iter()
@@ -1018,6 +1023,16 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
     push_equals_filters(&mut filters, "techniqueNames", &techniques);
     push_equals_filters(&mut filters, "user.username", &state.users);
     push_equals_filters(&mut filters, "baseModel", &base_models);
+    for base_model in excluded_base_models
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        filters.push(format!(
+            "baseModel != \"{}\"",
+            base_model.replace('"', "\\\"")
+        ));
+    }
     push_equals_filters(&mut filters, "aspectRatio", &aspect_ratios);
 
     if let Some(created_at) = state.created_at.as_ref() {
@@ -1207,7 +1222,8 @@ async fn maybe_emit_progress(
 
 #[cfg(test)]
 mod tests {
-    use super::{page_to_offset, parse_model_search_response};
+    use super::{build_image_meili_payload, page_to_offset, parse_model_search_response};
+    use crate::sdk::{ImageBaseModel, ImageSearchState};
 
     #[test]
     fn model_search_response_falls_back_to_lenient_hit_parsing() {
@@ -1253,5 +1269,24 @@ mod tests {
         assert_eq!(page_to_offset(None, 50), 0);
         assert_eq!(page_to_offset(Some(1), 50), 0);
         assert_eq!(page_to_offset(Some(2), 50), 50);
+    }
+
+    #[test]
+    fn image_payload_includes_excluded_base_model_filters() {
+        let state = ImageSearchState {
+            excluded_base_models: vec![ImageBaseModel::Flux1D, ImageBaseModel::Sd15],
+            ..Default::default()
+        };
+
+        let payload = build_image_meili_payload(&state);
+        let filters = payload["filter"]
+            .as_array()
+            .expect("filter array")
+            .iter()
+            .filter_map(|value| value.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(filters.contains(&"baseModel != \"Flux.1 D\""));
+        assert!(filters.contains(&"baseModel != \"SD 1.5\""));
     }
 }

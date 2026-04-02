@@ -94,6 +94,7 @@ mod fixtures {
             tools: vec![ImageTool::ComfyUi, ImageTool::custom("lora")],
             techniques: vec![ImageTechnique::Txt2Img, ImageTechnique::custom("flux")],
             base_models: vec![ImageBaseModel::Sdxl10, ImageBaseModel::custom("SDXL")],
+            excluded_base_models: vec![ImageBaseModel::Flux1D],
             aspect_ratios: vec![ImageAspectRatio::Square],
             created_at: Some("1700000000-1705000000".to_string()),
             image_id: Some(42),
@@ -168,7 +169,7 @@ mod image_state_tests {
 
     #[test]
     fn parses_image_multi_value_query_parameters() {
-        let input = "/search/images?type=image,video&type=audio&tools=ComfyUI,KREA&techniques=txt2img,workflow&baseModel=SDXL%201.0,Flux.1%20D&aspectRatio=Square,Landscape&tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
+        let input = "/search/images?type=image,video&type=audio&tools=ComfyUI,KREA&techniques=txt2img,workflow&baseModel=SDXL%201.0,Flux.1%20D&excludedBaseModel=SD%201.5,Pony&aspectRatio=Square,Landscape&tags=a,b&tags=c&users=one,two&sortBy=images_v6:createdAt:desc";
         let state = ImageSearchState::from_web_url(input).unwrap();
 
         assert_eq!(
@@ -189,6 +190,10 @@ mod image_state_tests {
             vec![ImageBaseModel::Sdxl10, ImageBaseModel::Flux1D]
         );
         assert_eq!(
+            state.excluded_base_models,
+            vec![ImageBaseModel::Sd15, ImageBaseModel::Pony]
+        );
+        assert_eq!(
             state.aspect_ratios,
             vec![ImageAspectRatio::Square, ImageAspectRatio::Landscape]
         );
@@ -200,7 +205,7 @@ mod image_state_tests {
     #[test]
     fn preserves_unknown_image_filter_values() {
         let state = ImageSearchState::from_web_url(
-            "/search/images?type=panorama&tools=MyTool&techniques=my-technique&baseModel=MyBaseModel&aspectRatio=UltraWide&sortBy=images_v6:customMetric:desc",
+            "/search/images?type=panorama&tools=MyTool&techniques=my-technique&baseModel=MyBaseModel&excludedBaseModel=OtherBase&aspectRatio=UltraWide&sortBy=images_v6:customMetric:desc",
         )
         .unwrap();
 
@@ -213,6 +218,10 @@ mod image_state_tests {
         assert_eq!(
             state.base_models,
             vec![ImageBaseModel::custom("MyBaseModel")]
+        );
+        assert_eq!(
+            state.excluded_base_models,
+            vec![ImageBaseModel::custom("OtherBase")]
         );
         assert_eq!(
             state.aspect_ratios,
@@ -231,6 +240,7 @@ mod image_state_tests {
         assert!(round_trip.contains("tools=MyTool"));
         assert!(round_trip.contains("techniques=my-technique"));
         assert!(round_trip.contains("baseModel=MyBaseModel"));
+        assert!(round_trip.contains("excludedBaseModel=OtherBase"));
         assert!(round_trip.contains("aspectRatio=UltraWide"));
         assert!(round_trip.contains("sortBy=images_v6%3AcustomMetric%3Adesc"));
     }

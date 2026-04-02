@@ -63,6 +63,8 @@ pub struct PersistedImageFilterState {
     #[serde(default)]
     pub selected_base_models: Vec<String>,
     #[serde(default)]
+    pub excluded_base_models: Vec<String>,
+    #[serde(default)]
     pub selected_aspect_ratios: Vec<String>,
 }
 

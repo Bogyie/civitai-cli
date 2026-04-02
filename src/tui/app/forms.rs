@@ -93,6 +93,7 @@ pub enum ImageSearchFormSection {
     Tag,
     ExcludedTag,
     BaseModel,
+    ExcludedBaseModel,
     AspectRatio,
 }
 
@@ -113,6 +114,8 @@ pub struct ImageSearchFormState {
     pub base_options: Vec<ImageBaseModel>,
     pub base_cursor: usize,
     pub selected_base_models: BTreeSet<String>,
+    pub excluded_base_cursor: usize,
+    pub excluded_base_models: BTreeSet<String>,
     pub aspect_ratio_options: Vec<ImageAspectRatio>,
     pub aspect_ratio_cursor: usize,
     pub selected_aspect_ratios: BTreeSet<String>,
@@ -151,6 +154,8 @@ impl ImageSearchFormState {
             base_options: ImageBaseModel::all(),
             base_cursor: 0,
             selected_base_models: BTreeSet::new(),
+            excluded_base_cursor: 0,
+            excluded_base_models: BTreeSet::new(),
             aspect_ratio_options: ImageAspectRatio::all(),
             aspect_ratio_cursor: 0,
             selected_aspect_ratios: BTreeSet::new(),
@@ -187,6 +192,11 @@ impl ImageSearchFormState {
                 .collect(),
             base_models: self
                 .selected_base_models
+                .iter()
+                .map(|value| ImageBaseModel::from_query_value(value))
+                .collect(),
+            excluded_base_models: self
+                .excluded_base_models
                 .iter()
                 .map(|value| ImageBaseModel::from_query_value(value))
                 .collect(),
@@ -263,6 +273,13 @@ impl ImageSearchFormState {
             .filter(|value| !value.is_empty())
             .map(|value| value.to_string())
             .collect();
+        self.excluded_base_models = state
+            .excluded_base_models
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect();
         self.selected_aspect_ratios = state
             .selected_aspect_ratios
             .iter()
@@ -281,6 +298,7 @@ impl ImageSearchFormState {
             tag_query: self.tag_query.clone(),
             excluded_tag_query: self.excluded_tag_query.clone(),
             selected_base_models: self.selected_base_models.iter().cloned().collect(),
+            excluded_base_models: self.excluded_base_models.iter().cloned().collect(),
             selected_aspect_ratios: self.selected_aspect_ratios.iter().cloned().collect(),
         }
     }
@@ -432,6 +450,8 @@ mod tests {
         form.excluded_tag_query = "adult, nsfw".to_string();
         form.selected_base_models
             .insert(ImageBaseModel::Flux1D.as_query_value().to_string());
+        form.excluded_base_models
+            .insert(ImageBaseModel::Sdxl10.as_query_value().to_string());
         form.selected_aspect_ratios
             .insert(ImageAspectRatio::Landscape.as_query_value().to_string());
         form.set_linked_model_version(Some(42));
@@ -448,6 +468,7 @@ mod tests {
             vec!["adult".to_string(), "nsfw".to_string()]
         );
         assert_eq!(options.base_models, vec![ImageBaseModel::Flux1D]);
+        assert_eq!(options.excluded_base_models, vec![ImageBaseModel::Sdxl10]);
         assert_eq!(options.aspect_ratios, vec![ImageAspectRatio::Landscape]);
         assert_eq!(
             options.extras,
@@ -504,6 +525,8 @@ mod tests {
             .insert(ImageMediaType::Video.as_query_value().to_string());
         form.selected_base_models
             .insert(ImageBaseModel::Flux1D.as_query_value().to_string());
+        form.excluded_base_models
+            .insert(ImageBaseModel::Sdxl10.as_query_value().to_string());
         form.selected_aspect_ratios
             .insert(ImageAspectRatio::Landscape.as_query_value().to_string());
 
@@ -521,6 +544,11 @@ mod tests {
             restored
                 .selected_base_models
                 .contains(ImageBaseModel::Flux1D.as_query_value())
+        );
+        assert!(
+            restored
+                .excluded_base_models
+                .contains(ImageBaseModel::Sdxl10.as_query_value())
         );
         assert!(
             restored

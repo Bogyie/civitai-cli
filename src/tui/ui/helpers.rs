@@ -240,7 +240,7 @@ pub(super) fn build_image_modal_constraints(
     total_height: u16,
 ) -> Vec<Constraint> {
     let help_height = 2u16;
-    let collapsed = [3u16, 3, 3, 3, 3, 3, 3, 3];
+    let collapsed = [3u16, 3, 3, 3, 3, 3, 3, 3, 3];
     let focused_index = match focused {
         ImageSearchFormSection::Query => 0,
         ImageSearchFormSection::Sort => 1,
@@ -249,12 +249,13 @@ pub(super) fn build_image_modal_constraints(
         ImageSearchFormSection::Tag => 4,
         ImageSearchFormSection::ExcludedTag => 5,
         ImageSearchFormSection::BaseModel => 6,
-        ImageSearchFormSection::AspectRatio => 7,
+        ImageSearchFormSection::ExcludedBaseModel => 7,
+        ImageSearchFormSection::AspectRatio => 8,
     };
     let collapsed_total = collapsed.iter().sum::<u16>() + help_height;
     let extra = total_height.saturating_sub(collapsed_total);
 
-    let mut constraints = Vec::with_capacity(9);
+    let mut constraints = Vec::with_capacity(10);
     for (idx, base) in collapsed.into_iter().enumerate() {
         let height = if idx == focused_index {
             base.saturating_add(extra)

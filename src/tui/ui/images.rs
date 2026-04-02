@@ -382,6 +382,16 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let excluded_base_models = if app.image_search_form.excluded_base_models.is_empty() {
+        "None".to_string()
+    } else {
+        app.image_search_form
+            .excluded_base_models
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     let ratios = if app.image_search_form.selected_aspect_ratios.is_empty() {
         "All".to_string()
     } else {
@@ -403,7 +413,7 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
         app.image_search_form.excluded_tag_query.trim().to_string()
     };
     let summary = format!(
-        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Exclude: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
+        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Exclude: {} | Sort: {} | Base: {} | Excl Base: {} | Ratio: {} | Period: {}",
         query,
         media_types,
         tags,
@@ -414,6 +424,7 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
             .map(|value| value.label().to_string())
             .unwrap_or_else(|| "Relevance".into()),
         base_models,
+        excluded_base_models,
         ratios,
         app.image_search_form
             .periods
@@ -476,7 +487,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             Line::from(""),
             Line::from(Span::styled(
                 format!(
-                    " Current: sort={} | types={} | tags={} | excluded={} | bases={} | ratios={} | period={} ",
+                    " Current: sort={} | types={} | tags={} | excluded={} | bases={} | excl-bases={} | ratios={} | period={} ",
                     form.sort_options
                         .get(form.selected_sort)
                         .map(|sort| sort.label().to_string())
@@ -499,6 +510,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                             .count()
                     },
                     form.selected_base_models.len(),
+                    form.excluded_base_models.len(),
                     form.selected_aspect_ratios.len(),
                     form.periods
                         .get(form.selected_period)
@@ -543,6 +555,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     let tag_focused = form.focused_section == ImageSearchFormSection::Tag;
     let excluded_tag_focused = form.focused_section == ImageSearchFormSection::ExcludedTag;
     let base_focused = form.focused_section == ImageSearchFormSection::BaseModel;
+    let excluded_base_focused = form.focused_section == ImageSearchFormSection::ExcludedBaseModel;
     let ratio_focused = form.focused_section == ImageSearchFormSection::AspectRatio;
 
     let sort_items = form
@@ -615,6 +628,11 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         .collect::<Vec<_>>();
     let selected_base_models = form
         .selected_base_models
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let excluded_base_models = form
+        .excluded_base_models
         .iter()
         .cloned()
         .collect::<Vec<_>>();
@@ -790,14 +808,34 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     f.render_widget(
         Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
+            label: "Excluded Base Model",
+            focused: excluded_base_focused,
+            configured: !form.excluded_base_models.is_empty(),
+            items: &base_items,
+            selected: &excluded_base_models,
+            show_selected: false,
+            width: sections[7].width.saturating_sub(4) as usize,
+            height: sections[7].height.saturating_sub(3) as usize,
+        }))
+        .block(styled_search_block(
+            " Excluded Base Model ",
+            excluded_base_focused,
+            !form.excluded_base_models.is_empty(),
+        ))
+        .wrap(Wrap { trim: true }),
+        sections[7],
+    );
+
+    f.render_widget(
+        Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
             label: "Aspect Ratio",
             focused: ratio_focused,
             configured: !form.selected_aspect_ratios.is_empty(),
             items: &ratio_items,
             selected: &selected_aspect_ratios,
             show_selected: false,
-            width: sections[7].width.saturating_sub(4) as usize,
-            height: sections[7].height.saturating_sub(3) as usize,
+            width: sections[8].width.saturating_sub(4) as usize,
+            height: sections[8].height.saturating_sub(3) as usize,
         }))
         .block(styled_search_block(
             " Aspect Ratio ",
@@ -805,7 +843,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             !form.selected_aspect_ratios.is_empty(),
         ))
         .wrap(Wrap { trim: true }),
-        sections[7],
+        sections[8],
     );
 
     f.render_widget(
@@ -813,6 +851,6 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Cancel ",
         )
         .wrap(Wrap { trim: true }),
-        sections[8],
+        sections[9],
     );
 }

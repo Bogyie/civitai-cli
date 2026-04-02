@@ -496,7 +496,10 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::Tag => ImageSearchFormSection::MediaType,
                     ImageSearchFormSection::ExcludedTag => ImageSearchFormSection::Tag,
                     ImageSearchFormSection::BaseModel => ImageSearchFormSection::ExcludedTag,
-                    ImageSearchFormSection::AspectRatio => ImageSearchFormSection::BaseModel,
+                    ImageSearchFormSection::ExcludedBaseModel => ImageSearchFormSection::BaseModel,
+                    ImageSearchFormSection::AspectRatio => {
+                        ImageSearchFormSection::ExcludedBaseModel
+                    }
                 };
             }
         }
@@ -510,7 +513,10 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::MediaType => ImageSearchFormSection::Tag,
                     ImageSearchFormSection::Tag => ImageSearchFormSection::ExcludedTag,
                     ImageSearchFormSection::ExcludedTag => ImageSearchFormSection::BaseModel,
-                    ImageSearchFormSection::BaseModel => ImageSearchFormSection::AspectRatio,
+                    ImageSearchFormSection::BaseModel => ImageSearchFormSection::ExcludedBaseModel,
+                    ImageSearchFormSection::ExcludedBaseModel => {
+                        ImageSearchFormSection::AspectRatio
+                    }
                     ImageSearchFormSection::AspectRatio => ImageSearchFormSection::Query,
                 };
             }
@@ -553,6 +559,14 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                                 app.image_search_form.base_options.len().saturating_sub(1);
                         }
                     }
+                    ImageSearchFormSection::ExcludedBaseModel => {
+                        if app.image_search_form.excluded_base_cursor > 0 {
+                            app.image_search_form.excluded_base_cursor -= 1;
+                        } else {
+                            app.image_search_form.excluded_base_cursor =
+                                app.image_search_form.base_options.len().saturating_sub(1);
+                        }
+                    }
                     ImageSearchFormSection::AspectRatio => {
                         if app.image_search_form.aspect_ratio_cursor > 0 {
                             app.image_search_form.aspect_ratio_cursor -= 1;
@@ -591,6 +605,11 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::BaseModel => {
                         app.image_search_form.base_cursor = (app.image_search_form.base_cursor + 1)
                             % app.image_search_form.base_options.len();
+                    }
+                    ImageSearchFormSection::ExcludedBaseModel => {
+                        app.image_search_form.excluded_base_cursor =
+                            (app.image_search_form.excluded_base_cursor + 1)
+                                % app.image_search_form.base_options.len();
                     }
                     ImageSearchFormSection::AspectRatio => {
                         app.image_search_form.aspect_ratio_cursor =
@@ -669,6 +688,23 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                                 .insert(key.clone())
                             {
                                 app.image_search_form.selected_base_models.remove(&key);
+                            }
+                        }
+                    }
+                    ImageSearchFormSection::ExcludedBaseModel => {
+                        if let Some(item) = app
+                            .image_search_form
+                            .base_options
+                            .get(app.image_search_form.excluded_base_cursor)
+                            .cloned()
+                        {
+                            let key = item.as_query_value().to_string();
+                            if !app
+                                .image_search_form
+                                .excluded_base_models
+                                .insert(key.clone())
+                            {
+                                app.image_search_form.excluded_base_models.remove(&key);
                             }
                         }
                     }

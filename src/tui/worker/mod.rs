@@ -40,7 +40,7 @@ use crate::tui::runtime::{debug_fetch_log, render_request_key};
 use crate::tui::status::StatusEvent;
 use civitai_cli::sdk::{
     DownloadControl, DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec,
-    ModelDownloadAuth, SdkClientBuilder, SearchImageHit, SearchModelHit as Model,
+    ImageBaseModel, ModelDownloadAuth, SdkClientBuilder, SearchImageHit, SearchModelHit as Model,
 };
 
 fn image_has_excluded_tags(item: &SearchImageHit, excluded_tags: &[String]) -> bool {
@@ -60,6 +60,25 @@ fn image_has_excluded_tags(item: &SearchImageHit, excluded_tags: &[String]) -> b
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .any(|value| item_tags.contains(&value))
+}
+
+fn image_has_excluded_base_model(
+    item: &SearchImageHit,
+    excluded_base_models: &[ImageBaseModel],
+) -> bool {
+    let Some(base_model) = item.base_model.as_deref().map(str::trim) else {
+        return false;
+    };
+    if base_model.is_empty() || excluded_base_models.is_empty() {
+        return false;
+    }
+
+    let normalized = base_model.to_ascii_lowercase();
+    excluded_base_models
+        .iter()
+        .map(|value| value.as_query_value().trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .any(|value| value == normalized)
 }
 
 fn build_model_url(model: &Model, version_id: u64) -> String {
@@ -334,6 +353,14 @@ pub async fn spawn_worker(
                                 if !request_state.excluded_tags.is_empty() {
                                     visible_items.retain(|item| {
                                         !image_has_excluded_tags(item, &request_state.excluded_tags)
+                                    });
+                                }
+                                if !request_state.excluded_base_models.is_empty() {
+                                    visible_items.retain(|item| {
+                                        !image_has_excluded_base_model(
+                                            item,
+                                            &request_state.excluded_base_models,
+                                        )
                                     });
                                 }
                                 let skipped_videos =
