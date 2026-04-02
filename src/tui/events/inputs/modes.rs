@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::actions::{
     refresh_visible_media, reload_selected_image, reload_selected_model_cover,
@@ -13,6 +13,32 @@ use crate::tui::{
 };
 
 pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopControl> {
+    if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('r')) {
+        match app.mode {
+            AppMode::SearchForm => {
+                app.search_form.reset();
+                app.set_status("Reset model filters");
+                return Some(LoopControl::Continue);
+            }
+            AppMode::SearchSavedModels => {
+                app.bookmark_search_form_draft.reset();
+                app.set_status("Reset saved model filters");
+                return Some(LoopControl::Continue);
+            }
+            AppMode::SearchImages => {
+                app.image_search_form.reset();
+                app.set_status("Reset image filters");
+                return Some(LoopControl::Continue);
+            }
+            AppMode::SearchSavedImages => {
+                app.image_bookmark_query_draft.clear();
+                app.set_status("Reset saved image filter");
+                return Some(LoopControl::Continue);
+            }
+            _ => {}
+        }
+    }
+
     if app.mode == AppMode::SearchForm {
         handle_model_search_mode(app, key.code);
         return Some(LoopControl::Continue);
@@ -47,6 +73,34 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
 }
 
 fn handle_model_search_mode(app: &mut App, code: KeyCode) {
+    if let KeyCode::Char(c) = code
+        && matches!(
+            app.search_form.focused_section,
+            SearchFormSection::Query | SearchFormSection::Tag
+        )
+    {
+        if app.search_form.focused_section == SearchFormSection::Query {
+            app.search_form.query.push(c);
+        } else {
+            app.search_form.tag_query.push(c);
+        }
+        return;
+    }
+
+    if matches!(code, KeyCode::Backspace)
+        && matches!(
+            app.search_form.focused_section,
+            SearchFormSection::Query | SearchFormSection::Tag
+        )
+    {
+        if app.search_form.focused_section == SearchFormSection::Query {
+            app.search_form.query.pop();
+        } else {
+            app.search_form.tag_query.pop();
+        }
+        return;
+    }
+
     match code {
         KeyCode::Esc => {
             app.mode = AppMode::Browsing;
@@ -200,25 +254,39 @@ fn handle_model_search_mode(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Char(c) => {
-            if app.search_form.focused_section == SearchFormSection::Query {
-                app.search_form.query.push(c);
-            } else if app.search_form.focused_section == SearchFormSection::Tag {
-                app.search_form.tag_query.push(c);
-            }
-        }
-        KeyCode::Backspace => {
-            if app.search_form.focused_section == SearchFormSection::Query {
-                app.search_form.query.pop();
-            } else if app.search_form.focused_section == SearchFormSection::Tag {
-                app.search_form.tag_query.pop();
-            }
-        }
         _ => {}
     }
 }
 
 fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
+    if let KeyCode::Char(c) = code
+        && matches!(
+            app.bookmark_search_form_draft.focused_section,
+            SearchFormSection::Query | SearchFormSection::Tag
+        )
+    {
+        if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
+            app.bookmark_search_form_draft.query.push(c);
+        } else {
+            app.bookmark_search_form_draft.tag_query.push(c);
+        }
+        return;
+    }
+
+    if matches!(code, KeyCode::Backspace)
+        && matches!(
+            app.bookmark_search_form_draft.focused_section,
+            SearchFormSection::Query | SearchFormSection::Tag
+        )
+    {
+        if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
+            app.bookmark_search_form_draft.query.pop();
+        } else {
+            app.bookmark_search_form_draft.tag_query.pop();
+        }
+        return;
+    }
+
     match code {
         KeyCode::Esc => {
             app.cancel_bookmark_search();
@@ -367,25 +435,51 @@ fn handle_bookmark_search_mode(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Char(c) => {
-            if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
-                app.bookmark_search_form_draft.query.push(c);
-            } else if app.bookmark_search_form_draft.focused_section == SearchFormSection::Tag {
-                app.bookmark_search_form_draft.tag_query.push(c);
-            }
-        }
-        KeyCode::Backspace => {
-            if app.bookmark_search_form_draft.focused_section == SearchFormSection::Query {
-                app.bookmark_search_form_draft.query.pop();
-            } else if app.bookmark_search_form_draft.focused_section == SearchFormSection::Tag {
-                app.bookmark_search_form_draft.tag_query.pop();
-            }
-        }
         _ => {}
     }
 }
 
 fn handle_image_search_mode(app: &mut App, code: KeyCode) {
+    if let KeyCode::Char(c) = code
+        && matches!(
+            app.image_search_form.focused_section,
+            ImageSearchFormSection::Query
+                | ImageSearchFormSection::Tag
+                | ImageSearchFormSection::ExcludedTag
+        )
+    {
+        match app.image_search_form.focused_section {
+            ImageSearchFormSection::Query => app.image_search_form.query.push(c),
+            ImageSearchFormSection::Tag => app.image_search_form.tag_query.push(c),
+            ImageSearchFormSection::ExcludedTag => app.image_search_form.excluded_tag_query.push(c),
+            _ => {}
+        }
+        return;
+    }
+
+    if matches!(code, KeyCode::Backspace)
+        && matches!(
+            app.image_search_form.focused_section,
+            ImageSearchFormSection::Query
+                | ImageSearchFormSection::Tag
+                | ImageSearchFormSection::ExcludedTag
+        )
+    {
+        match app.image_search_form.focused_section {
+            ImageSearchFormSection::Query => {
+                app.image_search_form.query.pop();
+            }
+            ImageSearchFormSection::Tag => {
+                app.image_search_form.tag_query.pop();
+            }
+            ImageSearchFormSection::ExcludedTag => {
+                app.image_search_form.excluded_tag_query.pop();
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match code {
         KeyCode::Esc => {
             app.mode = AppMode::Browsing;
@@ -597,24 +691,6 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     }
                     _ => {}
                 }
-            }
-        }
-        KeyCode::Char(c) => {
-            if app.image_search_form.focused_section == ImageSearchFormSection::Query {
-                app.image_search_form.query.push(c);
-            } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
-                app.image_search_form.tag_query.push(c);
-            } else if app.image_search_form.focused_section == ImageSearchFormSection::ExcludedTag {
-                app.image_search_form.excluded_tag_query.push(c);
-            }
-        }
-        KeyCode::Backspace => {
-            if app.image_search_form.focused_section == ImageSearchFormSection::Query {
-                app.image_search_form.query.pop();
-            } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
-                app.image_search_form.tag_query.pop();
-            } else if app.image_search_form.focused_section == ImageSearchFormSection::ExcludedTag {
-                app.image_search_form.excluded_tag_query.pop();
             }
         }
         _ => {}

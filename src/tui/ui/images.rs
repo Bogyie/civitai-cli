@@ -508,7 +508,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                 Style::default().fg(Color::DarkGray),
             )),
             Line::from(Span::styled(
-                " [Type] Query | [Enter] Apply | [Esc] Cancel | [f] Open Builder ",
+                " [Type] Query | [Enter] Apply | [Esc] Cancel | [Ctrl+R] Reset | [f] Open Builder ",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
@@ -650,16 +650,30 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     .wrap(Wrap { trim: true });
     f.render_widget(query_box, sections[0]);
 
-    let mut sort_lines = vec![Line::from(Span::styled(
-        "Browse with Left/Right",
-        help_text_style(),
-    ))];
-    sort_lines.extend(build_wrapped_option_lines(
-        &sort_items,
-        sections[1].width.saturating_sub(4) as usize,
-        sections[1].height.saturating_sub(3) as usize,
-        sort_focused,
-    ));
+    let sort_lines = if sort_focused {
+        let mut lines = vec![Line::from(Span::styled(
+            "Browse with Left/Right",
+            help_text_style(),
+        ))];
+        lines.extend(build_wrapped_option_lines(
+            &sort_items,
+            sections[1].width.saturating_sub(4) as usize,
+            sections[1].height.saturating_sub(3) as usize,
+            sort_focused,
+        ));
+        lines
+    } else {
+        vec![Line::from(Span::styled(
+            format!(
+                "  Sort: {}",
+                form.sort_options
+                    .get(form.selected_sort)
+                    .map(|value| value.label().to_string())
+                    .unwrap_or_default()
+            ),
+            inactive_box_style(true),
+        ))]
+    };
     f.render_widget(
         Paragraph::new(sort_lines)
             .block(styled_search_block(" Sort ", sort_focused, true))
@@ -667,16 +681,30 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         sections[1],
     );
 
-    let mut period_lines = vec![Line::from(Span::styled(
-        "Browse with Left/Right",
-        help_text_style(),
-    ))];
-    period_lines.extend(build_wrapped_option_lines(
-        &period_items,
-        sections[2].width.saturating_sub(4) as usize,
-        sections[2].height.saturating_sub(3) as usize,
-        period_focused,
-    ));
+    let period_lines = if period_focused {
+        let mut lines = vec![Line::from(Span::styled(
+            "Browse with Left/Right",
+            help_text_style(),
+        ))];
+        lines.extend(build_wrapped_option_lines(
+            &period_items,
+            sections[2].width.saturating_sub(4) as usize,
+            sections[2].height.saturating_sub(3) as usize,
+            period_focused,
+        ));
+        lines
+    } else {
+        vec![Line::from(Span::styled(
+            format!(
+                "  Period: {}",
+                form.periods
+                    .get(form.selected_period)
+                    .map(|value| value.label().to_string())
+                    .unwrap_or_default()
+            ),
+            inactive_box_style(true),
+        ))]
+    };
     f.render_widget(
         Paragraph::new(period_lines)
             .block(styled_search_block(" Period ", period_focused, true))
@@ -782,7 +810,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     f.render_widget(
         Paragraph::new(
-            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [T] Templates | [Enter] Apply | [Esc] Cancel ",
+            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Ctrl+R] Reset | [T] Templates | [Enter] Apply | [Esc] Cancel ",
         )
         .wrap(Wrap { trim: true }),
         sections[8],

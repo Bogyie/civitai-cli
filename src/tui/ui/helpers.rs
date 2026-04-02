@@ -330,6 +330,20 @@ pub(super) fn build_text_filter_box_lines(props: TextFilterBoxProps<'_>) -> Vec<
     } else {
         inactive_box_style(false)
     };
+    if !focused {
+        let summary_width = width.saturating_sub(label.chars().count() + 4).max(1);
+        let summary = compact_cell_text_with_ellipsis(&display_value, summary_width);
+        lines.push(Line::from(Span::styled(
+            format!("  {label}: {summary}"),
+            if configured {
+                inactive_box_style(true)
+            } else {
+                inactive_box_style(false)
+            },
+        )));
+        return lines;
+    }
+
     lines.push(Line::from(Span::styled(
         format!(
             "{} {}{}",
@@ -425,6 +439,26 @@ pub(super) fn build_image_filter_box_lines(props: ImageFilterBoxProps<'_>) -> Ve
         width,
         height,
     } = props;
+    if !focused {
+        let summary = if selected.is_empty() {
+            "All".to_string()
+        } else {
+            selected.join(", ")
+        };
+        let summary_width = width.saturating_sub(label.chars().count() + 4).max(1);
+        return vec![Line::from(Span::styled(
+            format!(
+                "  {label}: {}",
+                compact_cell_text_with_ellipsis(&summary, summary_width)
+            ),
+            if configured {
+                inactive_box_style(true)
+            } else {
+                inactive_box_style(false)
+            },
+        ))];
+    }
+
     let current = items
         .iter()
         .find(|(_, current, _)| *current)

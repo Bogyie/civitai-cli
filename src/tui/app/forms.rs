@@ -220,6 +220,17 @@ impl ImageSearchFormState {
         }
     }
 
+    pub fn reset(&mut self) {
+        let mode = self.mode;
+        let linked_model_version_id = self.linked_model_version_id;
+        *self = Self::new();
+        self.linked_model_version_id = linked_model_version_id;
+        match mode {
+            SearchFormMode::Quick => self.begin_quick_search(),
+            SearchFormMode::Builder => self.begin_builder(),
+        }
+    }
+
     pub fn set_linked_model_version(&mut self, version_id: Option<u64>) {
         self.linked_model_version_id = version_id;
     }
@@ -334,6 +345,15 @@ impl SearchFormState {
         self.mode = SearchFormMode::Builder;
         if self.focused_section == SearchFormSection::Query {
             self.focused_section = SearchFormSection::Sort;
+        }
+    }
+
+    pub fn reset(&mut self) {
+        let mode = self.mode;
+        *self = Self::new();
+        match mode {
+            SearchFormMode::Quick => self.begin_quick_search(),
+            SearchFormMode::Builder => self.begin_builder(),
         }
     }
 
