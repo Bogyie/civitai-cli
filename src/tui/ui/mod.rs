@@ -24,7 +24,7 @@ use crate::tui::app::{App, AppMode, MainTab};
 
 const TAB_COUNT: usize = 6;
 const FULL_TAB_LAYOUT_BUFFER: usize = 10;
-const MEDIUM_TAB_LAYOUT_BUFFER: usize = 4;
+const MEDIUM_TAB_LAYOUT_BUFFER: usize = 10;
 
 fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'static str) {
     let inner_width = width.saturating_sub(2) as usize;
@@ -163,6 +163,15 @@ mod tests {
     #[test]
     fn falls_back_to_compact_tabs_for_narrow_widths() {
         let (titles, divider, title) = tab_layout_for_width(30);
+        assert_eq!(divider, "|");
+        assert_eq!(titles[1], "LM2");
+        assert_eq!(titles[4], "D5");
+        assert_eq!(title, " Tabs ");
+    }
+
+    #[test]
+    fn leaves_medium_layout_earlier_before_labels_start_feeling_cramped() {
+        let (titles, divider, title) = tab_layout_for_width(74);
         assert_eq!(divider, "|");
         assert_eq!(titles[1], "LM2");
         assert_eq!(titles[4], "D5");
