@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{Resize, StatefulImage};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::tui::{
@@ -57,29 +57,9 @@ pub(super) fn draw_liked_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn centered_media_rect(area: Rect, source_dims: Option<(u32, u32)>) -> Rect {
-    let Some((source_width, source_height)) = source_dims else {
-        return area;
-    };
-
-    if area.width == 0 || area.height == 0 || source_width == 0 || source_height == 0 {
-        return area;
-    }
-
-    let available_width = area.width as f32;
-    let available_height = area.height as f32;
-    let source_aspect = source_width as f32 / source_height as f32;
-    let area_aspect = available_width / available_height;
-
-    let (target_width, target_height) = if source_aspect > area_aspect {
-        let width = area.width;
-        let height = ((available_width / source_aspect).round() as u16).clamp(1, area.height);
-        (width, height)
-    } else {
-        let height = area.height;
-        let width = ((available_height * source_aspect).round() as u16).clamp(1, area.width);
-        (width, height)
-    };
+fn centered_media_rect(area: Rect, fitted_size: Rect) -> Rect {
+    let target_width = fitted_size.width.clamp(1, area.width);
+    let target_height = fitted_size.height.clamp(1, area.height);
 
     let x = area.x + area.width.saturating_sub(target_width) / 2;
     let y = area.y + area.height.saturating_sub(target_height) / 2;
@@ -97,7 +77,6 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let selected_index = app.active_image_selected_index();
     let selected_image = items.get(selected_index);
     let selected_image_id = selected_image.map(|img| img.id);
-    let selected_image_dims = selected_image.and_then(|image| image.width.zip(image.height));
     let total_count = if app.active_tab == MainTab::Images {
         app.image_feed_total_hits
             .unwrap_or(items.len() as u64)
@@ -147,8 +126,10 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Clear, inner_area);
 
     if let Some(protocol) = app.image_cache.get_mut(&image_id) {
-        let render_area = centered_media_rect(inner_area, selected_image_dims);
-        let image_widget = StatefulImage::new();
+        let resize_mode = Resize::Scale(None);
+        let fitted_size = protocol.size_for(resize_mode.clone(), inner_area);
+        let render_area = centered_media_rect(inner_area, fitted_size);
+        let image_widget = StatefulImage::new().resize(resize_mode);
         f.render_stateful_widget(image_widget, render_area, protocol);
     } else {
         let text = format!("Loading image {}/{}...", selected_index + 1, item_count);
