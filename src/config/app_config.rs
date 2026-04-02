@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use civitai_cli::sdk::{ImageSearchSortBy, ModelSearchSortBy};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -27,6 +28,63 @@ fn default_media_quality() -> MediaQualityPreference {
 
 fn default_debug_logging() -> bool {
     false
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct PersistedModelFilterState {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub selected_sort: usize,
+    #[serde(default)]
+    pub selected_period: usize,
+    #[serde(default)]
+    pub selected_types: Vec<String>,
+    #[serde(default)]
+    pub tag_query: String,
+    #[serde(default)]
+    pub selected_base_models: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct PersistedImageFilterState {
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub selected_sort: usize,
+    #[serde(default)]
+    pub selected_period: usize,
+    #[serde(default)]
+    pub selected_media_types: Vec<String>,
+    #[serde(default)]
+    pub tag_query: String,
+    #[serde(default)]
+    pub excluded_tag_query: String,
+    #[serde(default)]
+    pub selected_base_models: Vec<String>,
+    #[serde(default)]
+    pub selected_aspect_ratios: Vec<String>,
+}
+
+fn default_model_filter_state() -> PersistedModelFilterState {
+    PersistedModelFilterState {
+        selected_sort: ModelSearchSortBy::all()
+            .iter()
+            .position(|sort| *sort == ModelSearchSortBy::Relevance)
+            .unwrap_or(0),
+        ..PersistedModelFilterState::default()
+    }
+}
+
+fn default_image_filter_state() -> PersistedImageFilterState {
+    PersistedImageFilterState {
+        selected_sort: ImageSearchSortBy::all()
+            .iter()
+            .position(|sort| *sort == ImageSearchSortBy::MostReactions)
+            .unwrap_or(0),
+        selected_media_types: vec!["image".to_string()],
+        ..PersistedImageFilterState::default()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +148,10 @@ pub struct AppConfig {
     pub media_quality: MediaQualityPreference,
     #[serde(default = "default_debug_logging")]
     pub debug_logging: bool,
+    #[serde(default = "default_model_filter_state")]
+    pub model_filter_state: PersistedModelFilterState,
+    #[serde(default = "default_image_filter_state")]
+    pub image_filter_state: PersistedImageFilterState,
 }
 
 impl AppConfig {
@@ -127,8 +189,7 @@ impl AppConfig {
                 .with_context(|| format!("Failed to create config directory at {:?}", parent))?;
         }
 
-        let content =
-            toml::to_string_pretty(&normalized).context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(&normalized).context("Failed to serialize config")?;
         fs::write(&config_file, content)
             .with_context(|| format!("Failed to write config file at {:?}", config_file))?;
 
@@ -231,6 +292,8 @@ impl Default for AppConfig {
             image_cache_ttl_minutes: default_image_cache_ttl_minutes(),
             media_quality: default_media_quality(),
             debug_logging: default_debug_logging(),
+            model_filter_state: default_model_filter_state(),
+            image_filter_state: default_image_filter_state(),
         }
     }
 }

@@ -25,6 +25,7 @@ pub struct ImageSearchState {
     pub sort_by: ImageSearchSortBy,
     pub media_types: Vec<ImageMediaType>,
     pub tags: Vec<String>,
+    pub excluded_tags: Vec<String>,
     pub tools: Vec<ImageTool>,
     pub techniques: Vec<ImageTechnique>,
     pub users: Vec<String>,
@@ -68,6 +69,7 @@ impl ImageSearchState {
                 .collect::<Vec<_>>(),
         );
         append_csv_pair(&mut pairs, "tags", &self.tags);
+        append_csv_pair(&mut pairs, "excludedTags", &self.excluded_tags);
         append_csv_pair(
             &mut pairs,
             "tools",
@@ -152,6 +154,7 @@ impl ImageSearchState {
             .map(|value| ImageMediaType::from_query_value(&value))
             .collect();
         query.tags = split_multi(map.get("tags"));
+        query.excluded_tags = split_multi_keys(&map, &["excludedTags", "excluded_tags"]);
         query.tools = split_multi(map.get("tools"))
             .into_iter()
             .map(|value| ImageTool::from_query_value(&value))
@@ -221,6 +224,8 @@ fn is_known_image_key(key: &str) -> bool {
             | "type"
             | "types"
             | "tags"
+            | "excludedTags"
+            | "excluded_tags"
             | "tools"
             | "techniques"
             | "users"

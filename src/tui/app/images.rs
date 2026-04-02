@@ -1,6 +1,57 @@
 use super::*;
 
 impl App {
+    fn image_tag_suggestions_for(&self, query: &str, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        let prefix = query
+            .rsplit(',')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_lowercase();
+        let selected = query
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        let mut suggestions = self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| prefix.is_empty() || tag.to_lowercase().starts_with(&prefix))
+            .take(limit)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if suggestions.len() >= limit || prefix.is_empty() {
+            return suggestions;
+        }
+
+        for tag in self
+            .image_tag_catalog
+            .iter()
+            .filter(|tag| !selected.contains(&tag.to_lowercase()))
+            .filter(|tag| tag.to_lowercase().contains(&prefix))
+        {
+            if suggestions.len() >= limit {
+                break;
+            }
+            if !suggestions
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(tag))
+            {
+                suggestions.push(tag.clone());
+            }
+        }
+
+        suggestions
+    }
+
     pub fn visible_image_bookmarks(&self) -> &[ImageItem] {
         &self.visible_image_bookmarks_cache
     }
@@ -152,74 +203,36 @@ impl App {
     }
 
     pub fn image_tag_suggestions(&self, limit: usize) -> Vec<String> {
-        if limit == 0 {
-            return Vec::new();
-        }
-
-        let query = self.image_search_form.tag_query.as_str();
-        let prefix = query
-            .rsplit(',')
-            .next()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_lowercase();
-        let selected = query
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.to_lowercase())
-            .collect::<HashSet<_>>();
-
-        let mut suggestions = self
-            .image_tag_catalog
-            .iter()
-            .filter(|tag| !selected.contains(&tag.to_lowercase()))
-            .filter(|tag| prefix.is_empty() || tag.to_lowercase().starts_with(&prefix))
-            .take(limit)
-            .cloned()
-            .collect::<Vec<_>>();
-
-        if suggestions.len() >= limit || prefix.is_empty() {
-            return suggestions;
-        }
-
-        for tag in self
-            .image_tag_catalog
-            .iter()
-            .filter(|tag| !selected.contains(&tag.to_lowercase()))
-            .filter(|tag| tag.to_lowercase().contains(&prefix))
-        {
-            if suggestions.len() >= limit {
-                break;
-            }
-            if !suggestions
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(tag))
-            {
-                suggestions.push(tag.clone());
-            }
-        }
-
-        suggestions
+        self.image_tag_suggestions_for(&self.image_search_form.tag_query, limit)
     }
 
     pub fn accept_image_tag_suggestion(&mut self) -> bool {
-        let Some(suggestion) = self.image_tag_suggestions(1).into_iter().next() else {
+        let suggestions = self.image_tag_suggestions(1);
+        Self::accept_tag_suggestion(&mut self.image_search_form.tag_query, suggestions)
+    }
+
+    pub fn image_excluded_tag_suggestions(&self, limit: usize) -> Vec<String> {
+        self.image_tag_suggestions_for(&self.image_search_form.excluded_tag_query, limit)
+    }
+
+    pub fn accept_image_excluded_tag_suggestion(&mut self) -> bool {
+        let suggestions = self.image_excluded_tag_suggestions(1);
+        Self::accept_tag_suggestion(&mut self.image_search_form.excluded_tag_query, suggestions)
+    }
+
+    fn accept_tag_suggestion(target: &mut String, suggestions: Vec<String>) -> bool {
+        let Some(suggestion) = suggestions.into_iter().next() else {
             return false;
         };
 
-        let mut tags = self
-            .image_search_form
-            .tag_query
+        let mut tags = target
             .split(',')
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(|value| value.to_string())
             .collect::<Vec<_>>();
 
-        if self.image_search_form.tag_query.trim().is_empty()
-            || self.image_search_form.tag_query.trim_end().ends_with(',')
-        {
+        if target.trim().is_empty() || target.trim_end().ends_with(',') {
             tags.push(suggestion);
         } else if let Some(last) = tags.last_mut() {
             *last = suggestion;
@@ -229,7 +242,7 @@ impl App {
 
         let mut seen = HashSet::new();
         tags.retain(|tag| seen.insert(tag.to_lowercase()));
-        self.image_search_form.tag_query = tags.join(", ");
+        *target = tags.join(", ");
         true
     }
 

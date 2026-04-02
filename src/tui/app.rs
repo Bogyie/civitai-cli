@@ -262,6 +262,12 @@ impl App {
             tx: None,
         };
 
+        let model_filter_state = app.config.model_filter_state.clone();
+        let image_filter_state = app.config.image_filter_state.clone();
+        app.search_form.apply_persisted_state(&model_filter_state);
+        app.image_search_form
+            .apply_persisted_state(&image_filter_state);
+
         app.rebuild_parsed_model_cache();
         app.refresh_visible_bookmarks_cache();
         app.refresh_visible_image_bookmarks_cache();
@@ -280,6 +286,11 @@ impl App {
         }
 
         app
+    }
+
+    pub fn sync_filter_state_to_config(&mut self) {
+        self.config.model_filter_state = self.search_form.persisted_state();
+        self.config.image_filter_state = self.image_search_form.persisted_state();
     }
 
     pub fn set_worker_tx(&mut self, tx: mpsc::Sender<WorkerCommand>) {
@@ -342,7 +353,9 @@ impl App {
             self.status_level
         };
         let detail = if level == StatusLevel::Error {
-            self.last_error.clone().or_else(|| self.status_detail.clone())
+            self.last_error
+                .clone()
+                .or_else(|| self.status_detail.clone())
         } else {
             self.status_detail.clone()
         };

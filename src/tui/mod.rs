@@ -36,7 +36,11 @@ pub async fn run_tui(config: AppConfig) -> Result<()> {
 
     // Run the main UI event loop
     let result = run_event_loop(&mut terminal, &mut app, rx).await;
+    app.sync_filter_state_to_config();
+    let save_result = app.config.save().context("failed to save ui config");
 
     ui::restore_terminal(&mut terminal).context("restore terminal failed")?;
-    result
+    result?;
+    save_result?;
+    Ok(())
 }

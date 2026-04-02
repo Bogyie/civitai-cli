@@ -30,18 +30,37 @@ use self::media::{
     FeedImageLoadContext, build_image_display_url, decode_model_cover, load_feed_image,
 };
 use crate::config::AppConfig;
-use crate::tui::app::{AppMessage, MediaRenderRequest, WorkerCommand};
 use crate::tui::app::types::DownloadKey;
+use crate::tui::app::{AppMessage, MediaRenderRequest, WorkerCommand};
 use crate::tui::model::{
-    build_download_file_name, model_name, model_versions, resolve_model_download_target_dir,
-    resolve_image_download_target_dir,
+    build_download_file_name, model_name, model_versions, resolve_image_download_target_dir,
+    resolve_model_download_target_dir,
 };
 use crate::tui::runtime::{debug_fetch_log, render_request_key};
 use crate::tui::status::StatusEvent;
 use civitai_cli::sdk::{
     DownloadControl, DownloadDestination, DownloadKind, DownloadOptions, DownloadSpec,
-    ModelDownloadAuth, SdkClientBuilder, SearchModelHit as Model,
+    ModelDownloadAuth, SdkClientBuilder, SearchImageHit, SearchModelHit as Model,
 };
+
+fn image_has_excluded_tags(item: &SearchImageHit, excluded_tags: &[String]) -> bool {
+    if excluded_tags.is_empty() || item.tag_names.is_empty() {
+        return false;
+    }
+
+    let item_tags = item
+        .tag_names
+        .iter()
+        .filter_map(|value| value.as_deref())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+
+    excluded_tags
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .any(|value| item_tags.contains(&value))
+}
 
 fn build_model_url(model: &Model, version_id: u64) -> String {
     build_model_page_url(model, Some(version_id))
@@ -306,6 +325,11 @@ pub async fn spawn_worker(
                                     .await;
                                 visible_items
                                     .retain(|item| item.r#type.as_deref() != Some("video"));
+                                if !request_state.excluded_tags.is_empty() {
+                                    visible_items.retain(|item| {
+                                        !image_has_excluded_tags(item, &request_state.excluded_tags)
+                                    });
+                                }
                                 let skipped_videos =
                                     total_items.saturating_sub(visible_items.len());
 
@@ -347,13 +371,11 @@ pub async fn spawn_worker(
                                     &format!("FetchImages: get_images failed: {}", e),
                                 );
                                 let _ = tx_msg_clone
-                                    .send(status_message(
-                                        error_status_with_url(
-                                            "Error fetching images",
-                                            &current_url,
-                                            &e.to_string(),
-                                        ),
-                                    ))
+                                    .send(status_message(error_status_with_url(
+                                        "Error fetching images",
+                                        &current_url,
+                                        &e.to_string(),
+                                    )))
                                     .await;
                                 return;
                             }
@@ -944,9 +966,7 @@ pub async fn spawn_worker(
                                 } else {
                                     AppMessage::ModelSidebarDetailLoaded(Box::new(model.into()))
                                 };
-                                let _ = tx_msg_clone
-                                    .send(message)
-                                    .await;
+                                let _ = tx_msg_clone.send(message).await;
                             }
                             Err(err) => {
                                 let _ = tx_msg_clone
@@ -961,12 +981,10 @@ pub async fn spawn_worker(
                 }
                 WorkerCommand::ClearSearchCache => {
                     if !use_search_cache() {
-                            let _ = tx_msg
-                                .send(status_message(
-                                StatusEvent::debug(
-                                    "Debug mode: search cache is disabled, nothing to clear.",
-                                ),
-                            ))
+                        let _ = tx_msg
+                            .send(status_message(StatusEvent::debug(
+                                "Debug mode: search cache is disabled, nothing to clear.",
+                            )))
                             .await;
                         continue;
                     }
@@ -1148,11 +1166,11 @@ pub async fn spawn_worker(
                                 *image_detail_path = new_image_detail_cache_path;
                             }
 
-                                let _ = tx_msg
-                                    .send(status_message(
-                                    StatusEvent::debug("Configuration sync applied to worker"),
-                                ))
-                                    .await;
+                            let _ = tx_msg
+                                .send(status_message(StatusEvent::debug(
+                                    "Configuration sync applied to worker",
+                                )))
+                                .await;
                         }
                         Err(err) => {
                             let _ = tx_msg
@@ -1486,9 +1504,7 @@ pub async fn spawn_worker(
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Pause);
-                        let _ = tx_msg
-                            .send(AppMessage::DownloadPaused(download_key))
-                            .await;
+                        let _ = tx_msg.send(AppMessage::DownloadPaused(download_key)).await;
                     }
                 }
                 WorkerCommand::ResumeDownload(download_key) => {
@@ -1499,9 +1515,7 @@ pub async fn spawn_worker(
                     };
                     if let Some(control) = control {
                         let _ = control.try_send(DownloadControl::Resume);
-                        let _ = tx_msg
-                            .send(AppMessage::DownloadResumed(download_key))
-                            .await;
+                        let _ = tx_msg.send(AppMessage::DownloadResumed(download_key)).await;
                     }
                 }
                 WorkerCommand::CancelDownload(download_key) => {

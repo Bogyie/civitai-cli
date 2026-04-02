@@ -397,7 +397,8 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::Period => ImageSearchFormSection::Sort,
                     ImageSearchFormSection::MediaType => ImageSearchFormSection::Period,
                     ImageSearchFormSection::Tag => ImageSearchFormSection::MediaType,
-                    ImageSearchFormSection::BaseModel => ImageSearchFormSection::Tag,
+                    ImageSearchFormSection::ExcludedTag => ImageSearchFormSection::Tag,
+                    ImageSearchFormSection::BaseModel => ImageSearchFormSection::ExcludedTag,
                     ImageSearchFormSection::AspectRatio => ImageSearchFormSection::BaseModel,
                 };
             }
@@ -410,7 +411,8 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::Sort => ImageSearchFormSection::Period,
                     ImageSearchFormSection::Period => ImageSearchFormSection::MediaType,
                     ImageSearchFormSection::MediaType => ImageSearchFormSection::Tag,
-                    ImageSearchFormSection::Tag => ImageSearchFormSection::BaseModel,
+                    ImageSearchFormSection::Tag => ImageSearchFormSection::ExcludedTag,
+                    ImageSearchFormSection::ExcludedTag => ImageSearchFormSection::BaseModel,
                     ImageSearchFormSection::BaseModel => ImageSearchFormSection::AspectRatio,
                     ImageSearchFormSection::AspectRatio => ImageSearchFormSection::Query,
                 };
@@ -465,7 +467,9 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                                 .saturating_sub(1);
                         }
                     }
-                    ImageSearchFormSection::Tag | ImageSearchFormSection::Query => {}
+                    ImageSearchFormSection::Tag
+                    | ImageSearchFormSection::ExcludedTag
+                    | ImageSearchFormSection::Query => {}
                 }
             }
         }
@@ -499,6 +503,11 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                     ImageSearchFormSection::Tag => {
                         if app.accept_image_tag_suggestion() {
                             app.status = "Accepted image tag suggestion.".into();
+                        }
+                    }
+                    ImageSearchFormSection::ExcludedTag => {
+                        if app.accept_image_excluded_tag_suggestion() {
+                            app.status = "Accepted excluded image tag suggestion.".into();
                         }
                     }
                     ImageSearchFormSection::Query => {}
@@ -589,6 +598,8 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                 app.image_search_form.query.push(c);
             } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
                 app.image_search_form.tag_query.push(c);
+            } else if app.image_search_form.focused_section == ImageSearchFormSection::ExcludedTag {
+                app.image_search_form.excluded_tag_query.push(c);
             }
         }
         KeyCode::Backspace => {
@@ -596,6 +607,8 @@ fn handle_image_search_mode(app: &mut App, code: KeyCode) {
                 app.image_search_form.query.pop();
             } else if app.image_search_form.focused_section == ImageSearchFormSection::Tag {
                 app.image_search_form.tag_query.pop();
+            } else if app.image_search_form.focused_section == ImageSearchFormSection::ExcludedTag {
+                app.image_search_form.excluded_tag_query.pop();
             }
         }
         _ => {}

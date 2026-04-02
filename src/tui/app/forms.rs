@@ -1,3 +1,4 @@
+use crate::config::{PersistedImageFilterState, PersistedModelFilterState};
 use civitai_cli::sdk::{
     ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageSearchState,
     ModelBaseModel, ModelSearchSortBy, ModelSearchState, ModelType,
@@ -90,6 +91,7 @@ pub enum ImageSearchFormSection {
     Period,
     MediaType,
     Tag,
+    ExcludedTag,
     BaseModel,
     AspectRatio,
 }
@@ -107,6 +109,7 @@ pub struct ImageSearchFormState {
     pub media_type_cursor: usize,
     pub selected_media_types: BTreeSet<String>,
     pub tag_query: String,
+    pub excluded_tag_query: String,
     pub base_options: Vec<ImageBaseModel>,
     pub base_cursor: usize,
     pub selected_base_models: BTreeSet<String>,
@@ -144,6 +147,7 @@ impl ImageSearchFormState {
                 set
             },
             tag_query: String::new(),
+            excluded_tag_query: String::new(),
             base_options: ImageBaseModel::all(),
             base_cursor: 0,
             selected_base_models: BTreeSet::new(),
@@ -169,6 +173,13 @@ impl ImageSearchFormState {
                 .collect(),
             tags: self
                 .tag_query
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.to_string())
+                .collect(),
+            excluded_tags: self
+                .excluded_tag_query
                 .split(',')
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -211,6 +222,56 @@ impl ImageSearchFormState {
 
     pub fn set_linked_model_version(&mut self, version_id: Option<u64>) {
         self.linked_model_version_id = version_id;
+    }
+
+    pub fn apply_persisted_state(&mut self, state: &PersistedImageFilterState) {
+        self.query = state.query.clone();
+        self.selected_sort = state
+            .selected_sort
+            .min(self.sort_options.len().saturating_sub(1));
+        self.selected_period = state
+            .selected_period
+            .min(self.periods.len().saturating_sub(1));
+        self.selected_media_types = state
+            .selected_media_types
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect();
+        if self.selected_media_types.is_empty() {
+            self.selected_media_types
+                .insert(ImageMediaType::Image.as_query_value().to_string());
+        }
+        self.tag_query = state.tag_query.clone();
+        self.excluded_tag_query = state.excluded_tag_query.clone();
+        self.selected_base_models = state
+            .selected_base_models
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect();
+        self.selected_aspect_ratios = state
+            .selected_aspect_ratios
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect();
+    }
+
+    pub fn persisted_state(&self) -> PersistedImageFilterState {
+        PersistedImageFilterState {
+            query: self.query.clone(),
+            selected_sort: self.selected_sort,
+            selected_period: self.selected_period,
+            selected_media_types: self.selected_media_types.iter().cloned().collect(),
+            tag_query: self.tag_query.clone(),
+            excluded_tag_query: self.excluded_tag_query.clone(),
+            selected_base_models: self.selected_base_models.iter().cloned().collect(),
+            selected_aspect_ratios: self.selected_aspect_ratios.iter().cloned().collect(),
+        }
     }
 }
 
@@ -275,6 +336,46 @@ impl SearchFormState {
             self.focused_section = SearchFormSection::Sort;
         }
     }
+
+    pub fn apply_persisted_state(&mut self, state: &PersistedModelFilterState) {
+        self.query = state.query.clone();
+        self.selected_sort = state
+            .selected_sort
+            .min(self.sort_options.len().saturating_sub(1));
+        self.selected_period = state
+            .selected_period
+            .min(self.periods.len().saturating_sub(1));
+        self.selected_types = state
+            .selected_types
+            .iter()
+            .map(|value| ModelType::from_query_value(value))
+            .collect();
+        self.tag_query = state.tag_query.clone();
+        self.selected_base_models = state
+            .selected_base_models
+            .iter()
+            .map(|value| ModelBaseModel::from_query_value(value))
+            .collect();
+    }
+
+    pub fn persisted_state(&self) -> PersistedModelFilterState {
+        PersistedModelFilterState {
+            query: self.query.clone(),
+            selected_sort: self.selected_sort,
+            selected_period: self.selected_period,
+            selected_types: self
+                .selected_types
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect(),
+            tag_query: self.tag_query.clone(),
+            selected_base_models: self
+                .selected_base_models
+                .iter()
+                .map(|value| value.as_query_value().to_string())
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -308,6 +409,7 @@ mod tests {
         let mut form = ImageSearchFormState::new();
         form.query = "portrait".to_string();
         form.tag_query = "studio, cinematic".to_string();
+        form.excluded_tag_query = "adult, nsfw".to_string();
         form.selected_base_models
             .insert(ImageBaseModel::Flux1D.as_query_value().to_string());
         form.selected_aspect_ratios
@@ -320,6 +422,10 @@ mod tests {
         assert_eq!(
             options.tags,
             vec!["studio".to_string(), "cinematic".to_string()]
+        );
+        assert_eq!(
+            options.excluded_tags,
+            vec!["adult".to_string(), "nsfw".to_string()]
         );
         assert_eq!(options.base_models, vec![ImageBaseModel::Flux1D]);
         assert_eq!(options.aspect_ratios, vec![ImageAspectRatio::Landscape]);
@@ -337,5 +443,69 @@ mod tests {
 
         assert_eq!(form.mode, SearchFormMode::Builder);
         assert_eq!(form.focused_section, ImageSearchFormSection::Sort);
+    }
+
+    #[test]
+    fn persisted_model_filter_state_round_trips() {
+        let mut form = SearchFormState::new();
+        form.query = "flux".to_string();
+        form.selected_sort = 2;
+        form.selected_period = 3;
+        form.tag_query = "anime, detailed".to_string();
+        form.selected_types.insert(ModelType::Lora);
+        form.selected_base_models.insert(ModelBaseModel::Flux1D);
+
+        let persisted = form.persisted_state();
+        let mut restored = SearchFormState::new();
+        restored.apply_persisted_state(&persisted);
+
+        assert_eq!(restored.query, "flux");
+        assert_eq!(restored.selected_sort, 2);
+        assert_eq!(restored.selected_period, 3);
+        assert_eq!(restored.tag_query, "anime, detailed");
+        assert!(restored.selected_types.contains(&ModelType::Lora));
+        assert!(
+            restored
+                .selected_base_models
+                .contains(&ModelBaseModel::Flux1D)
+        );
+    }
+
+    #[test]
+    fn persisted_image_filter_state_round_trips() {
+        let mut form = ImageSearchFormState::new();
+        form.query = "portrait".to_string();
+        form.selected_sort = 1;
+        form.selected_period = 4;
+        form.tag_query = "studio".to_string();
+        form.excluded_tag_query = "adult".to_string();
+        form.selected_media_types.clear();
+        form.selected_media_types
+            .insert(ImageMediaType::Video.as_query_value().to_string());
+        form.selected_base_models
+            .insert(ImageBaseModel::Flux1D.as_query_value().to_string());
+        form.selected_aspect_ratios
+            .insert(ImageAspectRatio::Landscape.as_query_value().to_string());
+
+        let persisted = form.persisted_state();
+        let mut restored = ImageSearchFormState::new();
+        restored.apply_persisted_state(&persisted);
+
+        assert_eq!(restored.query, "portrait");
+        assert_eq!(restored.selected_sort, 1);
+        assert_eq!(restored.selected_period, 4);
+        assert_eq!(restored.tag_query, "studio");
+        assert_eq!(restored.excluded_tag_query, "adult");
+        assert!(restored.selected_media_types.contains("video"));
+        assert!(
+            restored
+                .selected_base_models
+                .contains(ImageBaseModel::Flux1D.as_query_value())
+        );
+        assert!(
+            restored
+                .selected_aspect_ratios
+                .contains(ImageAspectRatio::Landscape.as_query_value())
+        );
     }
 }

@@ -150,7 +150,16 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     let tag_lines = if tags.is_empty() {
         vec![Line::from("<none>")]
     } else {
-        wrap_joined_tags(&tags, sections[4].width.saturating_sub(2) as usize, 2)
+        let available_height = if app.image_advanced_visible {
+            sections[4].height.saturating_sub(4) as usize
+        } else {
+            sections[4].height.saturating_sub(2) as usize
+        };
+        wrap_joined_tags(
+            &tags,
+            sections[4].width.saturating_sub(2) as usize,
+            available_height.max(1),
+        )
     };
     let selected_model_idx = app
         .selected_image_model_index
@@ -375,11 +384,17 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     } else {
         app.image_search_form.tag_query.trim().to_string()
     };
+    let excluded_tags = if app.image_search_form.excluded_tag_query.trim().is_empty() {
+        "None".to_string()
+    } else {
+        app.image_search_form.excluded_tag_query.trim().to_string()
+    };
     let summary = format!(
-        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
+        "🖼 Query: \"{}\" | Type: {} | Tags: {} | Exclude: {} | Sort: {} | Base: {} | Ratio: {} | Period: {}",
         query,
         media_types,
         tags,
+        excluded_tags,
         app.image_search_form
             .sort_options
             .get(app.image_search_form.selected_sort)
@@ -448,7 +463,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             Line::from(""),
             Line::from(Span::styled(
                 format!(
-                    " Current: sort={} | types={} | tags={} | bases={} | ratios={} | period={} ",
+                    " Current: sort={} | types={} | tags={} | excluded={} | bases={} | ratios={} | period={} ",
                     form.sort_options
                         .get(form.selected_sort)
                         .map(|sort| sort.label().to_string())
@@ -458,6 +473,14 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
                         0
                     } else {
                         form.tag_query
+                            .split(',')
+                            .filter(|tag| !tag.trim().is_empty())
+                            .count()
+                    },
+                    if form.excluded_tag_query.trim().is_empty() {
+                        0
+                    } else {
+                        form.excluded_tag_query
                             .split(',')
                             .filter(|tag| !tag.trim().is_empty())
                             .count()
@@ -505,6 +528,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     let period_focused = form.focused_section == ImageSearchFormSection::Period;
     let type_focused = form.focused_section == ImageSearchFormSection::MediaType;
     let tag_focused = form.focused_section == ImageSearchFormSection::Tag;
+    let excluded_tag_focused = form.focused_section == ImageSearchFormSection::ExcludedTag;
     let base_focused = form.focused_section == ImageSearchFormSection::BaseModel;
     let ratio_focused = form.focused_section == ImageSearchFormSection::AspectRatio;
 
@@ -569,6 +593,8 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
         })
         .collect::<Vec<_>>();
     let tag_suggestions = app.image_tag_suggestions(sections[4].height.saturating_sub(4) as usize);
+    let excluded_tag_suggestions =
+        app.image_excluded_tag_suggestions(sections[5].height.saturating_sub(4) as usize);
     let selected_media_types = form
         .selected_media_types
         .iter()
@@ -683,6 +709,24 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
     .wrap(Wrap { trim: true });
     f.render_widget(tag_box, sections[4]);
 
+    let excluded_tag_box = Paragraph::new(build_text_filter_box_lines(TextFilterBoxProps {
+        label: "Excluded Tag",
+        focused: excluded_tag_focused,
+        configured: !form.excluded_tag_query.trim().is_empty(),
+        value: &form.excluded_tag_query,
+        placeholder: "Comma-separated tags to skip",
+        suggestions: Some(excluded_tag_suggestions.as_slice()),
+        width: sections[5].width.saturating_sub(4) as usize,
+        height: sections[5].height.saturating_sub(3) as usize,
+    }))
+    .block(styled_search_block(
+        " Excluded Tags ",
+        excluded_tag_focused,
+        !form.excluded_tag_query.trim().is_empty(),
+    ))
+    .wrap(Wrap { trim: true });
+    f.render_widget(excluded_tag_box, sections[5]);
+
     f.render_widget(
         Paragraph::new(build_image_filter_box_lines(ImageFilterBoxProps {
             label: "Base Model",
@@ -691,8 +735,8 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             items: &base_items,
             selected: &selected_base_models,
             show_selected: false,
-            width: sections[5].width.saturating_sub(4) as usize,
-            height: sections[5].height.saturating_sub(3) as usize,
+            width: sections[6].width.saturating_sub(4) as usize,
+            height: sections[6].height.saturating_sub(3) as usize,
         }))
         .block(styled_search_block(
             " Base Model ",
@@ -700,7 +744,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             !form.selected_base_models.is_empty(),
         ))
         .wrap(Wrap { trim: true }),
-        sections[5],
+        sections[6],
     );
 
     f.render_widget(
@@ -711,8 +755,8 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             items: &ratio_items,
             selected: &selected_aspect_ratios,
             show_selected: false,
-            width: sections[6].width.saturating_sub(4) as usize,
-            height: sections[6].height.saturating_sub(3) as usize,
+            width: sections[7].width.saturating_sub(4) as usize,
+            height: sections[7].height.saturating_sub(3) as usize,
         }))
         .block(styled_search_block(
             " Aspect Ratio ",
@@ -720,7 +764,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             !form.selected_aspect_ratios.is_empty(),
         ))
         .wrap(Wrap { trim: true }),
-        sections[6],
+        sections[7],
     );
 
     f.render_widget(
@@ -728,6 +772,6 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
             " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ",
         )
         .wrap(Wrap { trim: true }),
-        sections[7],
+        sections[8],
     );
 }

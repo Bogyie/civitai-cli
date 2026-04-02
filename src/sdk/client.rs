@@ -901,6 +901,14 @@ fn build_image_meili_payload(state: &ImageSearchState) -> Value {
     let mut filters = Vec::new();
     push_equals_filters(&mut filters, "type", &media_types);
     push_equals_filters(&mut filters, "tagNames", &state.tags);
+    for tag in state
+        .excluded_tags
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        filters.push(format!("tagNames != \"{}\"", tag.replace('"', "\\\"")));
+    }
     push_equals_filters(&mut filters, "toolNames", &tools);
     push_equals_filters(&mut filters, "techniqueNames", &techniques);
     push_equals_filters(&mut filters, "user.username", &state.users);

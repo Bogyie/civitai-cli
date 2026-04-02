@@ -89,6 +89,7 @@ mod fixtures {
             sort_by: ImageSearchSortBy::MostReactions,
             media_types: vec![ImageMediaType::Image, ImageMediaType::Video],
             tags: vec!["pg".to_string(), "anime".to_string()],
+            excluded_tags: vec!["adult".to_string()],
             users: vec!["alice".to_string()],
             tools: vec![ImageTool::ComfyUi, ImageTool::custom("lora")],
             techniques: vec![ImageTechnique::Txt2Img, ImageTechnique::custom("flux")],
@@ -509,7 +510,10 @@ mod model_hit_tests {
             hit.category.as_ref().and_then(|value| value.name()),
             Some("character")
         );
-        assert_eq!(hit.metrics.as_ref().map(|value| value.download_count), Some(12));
+        assert_eq!(
+            hit.metrics.as_ref().map(|value| value.download_count),
+            Some(12)
+        );
         assert_eq!(hit.version.as_ref().map(|value| value.id), Some(111));
         assert_eq!(
             hit.version
