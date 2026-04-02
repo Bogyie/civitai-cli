@@ -33,8 +33,8 @@ pub async fn run_event_loop(
         let poll_timeout_ms = match app.mode {
             AppMode::SearchForm
             | AppMode::SearchImages
-            | AppMode::SearchBookmarks
-            | AppMode::SearchImageBookmarks
+            | AppMode::SearchSavedModels
+            | AppMode::SearchSavedImages
             | AppMode::BookmarkPathPrompt => 200,
             _ => 50,
         };
@@ -109,11 +109,11 @@ fn handle_resize(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             reload_selected_model_cover(app);
             send_cover_prefetch(app);
         }
-        MainTab::Images | MainTab::ImageBookmarks => {
+        MainTab::Images | MainTab::SavedImages => {
             reload_selected_image(app);
         }
         _ => {}
@@ -133,8 +133,8 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
             app.mode,
             AppMode::SearchForm
                 | AppMode::SearchImages
-                | AppMode::SearchBookmarks
-                | AppMode::SearchImageBookmarks
+                | AppMode::SearchSavedModels
+                | AppMode::SearchSavedImages
                 | AppMode::BookmarkPathPrompt
         )
         || (app.active_tab == MainTab::Settings && app.settings_form.editing)
@@ -144,17 +144,17 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
 
     match code {
         KeyCode::Char('1') => switch_tab(app, MainTab::Models),
-        KeyCode::Char('2') => switch_tab(app, MainTab::Bookmarks),
+        KeyCode::Char('2') => switch_tab(app, MainTab::SavedModels),
         KeyCode::Char('3') => switch_tab(app, MainTab::Images),
-        KeyCode::Char('4') => switch_tab(app, MainTab::ImageBookmarks),
+        KeyCode::Char('4') => switch_tab(app, MainTab::SavedImages),
         KeyCode::Char('5') => switch_tab(app, MainTab::Downloads),
         KeyCode::Char('6') => switch_tab(app, MainTab::Settings),
         KeyCode::Tab => {
             let next = match app.active_tab {
-                MainTab::Models => MainTab::Bookmarks,
-                MainTab::Bookmarks => MainTab::Images,
-                MainTab::Images => MainTab::ImageBookmarks,
-                MainTab::ImageBookmarks => MainTab::Downloads,
+                MainTab::Models => MainTab::SavedModels,
+                MainTab::SavedModels => MainTab::Images,
+                MainTab::Images => MainTab::SavedImages,
+                MainTab::SavedImages => MainTab::Downloads,
                 MainTab::Downloads => MainTab::Settings,
                 MainTab::Settings => MainTab::Models,
             };
@@ -163,10 +163,10 @@ fn handle_tab_switch_key(app: &mut App, code: KeyCode) -> Option<LoopControl> {
         KeyCode::BackTab => {
             let prev = match app.active_tab {
                 MainTab::Models => MainTab::Settings,
-                MainTab::Bookmarks => MainTab::Models,
-                MainTab::Images => MainTab::Bookmarks,
-                MainTab::ImageBookmarks => MainTab::Images,
-                MainTab::Downloads => MainTab::ImageBookmarks,
+                MainTab::SavedModels => MainTab::Models,
+                MainTab::Images => MainTab::SavedModels,
+                MainTab::SavedImages => MainTab::Images,
+                MainTab::Downloads => MainTab::SavedImages,
                 MainTab::Settings => MainTab::Downloads,
             };
             switch_tab(app, prev);
@@ -182,14 +182,14 @@ fn switch_tab(app: &mut App, target: MainTab) {
     app.active_tab = target;
     app.mode = AppMode::Browsing;
     match app.active_tab {
-        MainTab::Bookmarks => app.clamp_bookmark_selection(),
+        MainTab::SavedModels => app.clamp_bookmark_selection(),
         MainTab::Images => {
             if prev_tab != MainTab::Images {
                 request_image_feed_if_needed(app, None);
             }
             ensure_selected_image_loaded(app);
         }
-        MainTab::ImageBookmarks => {
+        MainTab::SavedImages => {
             app.clamp_image_bookmark_selection();
             ensure_selected_image_loaded(app);
         }

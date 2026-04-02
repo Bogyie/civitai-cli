@@ -55,7 +55,7 @@ impl App {
             MainTab::Models => self
                 .models
                 .get(self.model_list_state.selected().unwrap_or(0)),
-            MainTab::Bookmarks => self
+            MainTab::SavedModels => self
                 .visible_bookmarks()
                 .get(self.bookmark_list_state.selected().unwrap_or(0)),
             _ => None,
@@ -77,7 +77,7 @@ impl App {
         self.deduplicate_bookmarks();
         self.rebuild_parsed_model_cache();
         self.refresh_visible_bookmarks_cache();
-        if self.active_tab == MainTab::Bookmarks {
+        if self.active_tab == MainTab::SavedModels {
             self.clamp_bookmark_selection();
         }
         self.persist_bookmarks();
@@ -111,7 +111,7 @@ impl App {
     }
 
     pub fn request_bookmark_remove_selected(&mut self) {
-        if self.active_tab != MainTab::Bookmarks {
+        if self.active_tab != MainTab::SavedModels {
             return;
         }
 
@@ -126,7 +126,7 @@ impl App {
     pub fn begin_bookmark_search(&mut self) {
         self.bookmark_search_form_draft = self.bookmark_search_form.clone();
         self.bookmark_query_draft = self.bookmark_search_form.query.clone();
-        self.mode = AppMode::SearchBookmarks;
+        self.mode = AppMode::SearchSavedModels;
         self.set_status("Filter bookmarks. Enter apply, Esc cancel");
     }
 

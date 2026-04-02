@@ -15,7 +15,7 @@ use crate::tui::{
 };
 
 pub(super) fn handle_modifier_key(app: &mut App, key: KeyEvent) -> Option<LoopControl> {
-    if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+    if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('d') => {
@@ -46,7 +46,7 @@ pub(super) fn handle_modifier_key(app: &mut App, key: KeyEvent) -> Option<LoopCo
                 _ => {}
             }
         }
-    } else if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks)
+    } else if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
         && key.modifiers.contains(KeyModifiers::SHIFT)
     {
         match key.code {
@@ -122,7 +122,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('[') => {
-            if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+            if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
                 app.select_previous_version();
                 send_cover_priority(app);
                 send_cover_prefetch(app);
@@ -130,7 +130,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char(']') => {
-            if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+            if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
                 app.select_next_version();
                 send_cover_priority(app);
                 send_cover_prefetch(app);
@@ -139,17 +139,17 @@ pub(super) fn handle_tab_key(
         }
         KeyCode::Char('J') => {
             match app.active_tab {
-                MainTab::Models | MainTab::Bookmarks => app.select_next_file(),
+                MainTab::Models | MainTab::SavedModels => app.select_next_file(),
                 MainTab::Downloads => app.select_next_history(),
-                MainTab::Images | MainTab::ImageBookmarks | MainTab::Settings => {}
+                MainTab::Images | MainTab::SavedImages | MainTab::Settings => {}
             }
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('K') => {
             match app.active_tab {
-                MainTab::Models | MainTab::Bookmarks => app.select_previous_file(),
+                MainTab::Models | MainTab::SavedModels => app.select_previous_file(),
                 MainTab::Downloads => app.select_previous_history(),
-                MainTab::Images | MainTab::ImageBookmarks | MainTab::Settings => {}
+                MainTab::Images | MainTab::SavedImages | MainTab::Settings => {}
             }
             return Some(LoopControl::Continue);
         }
@@ -170,7 +170,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('m') => {
-            if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+            if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages) {
                 app.show_image_prompt_modal = true;
                 app.image_prompt_scroll = 0;
                 app.status = "Prompt viewer opened".into();
@@ -185,7 +185,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('a') => {
-            if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+            if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages) {
                 app.image_advanced_visible = !app.image_advanced_visible;
                 app.status = if app.image_advanced_visible {
                     "Advanced image metadata enabled".into()
@@ -196,7 +196,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('o') => {
-            if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks)
+            if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
                 && let Some(image) = app.selected_image_in_active_view()
             {
                 match copy_to_clipboard(&image.image_page_url()) {
@@ -219,7 +219,7 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('v') => {
-            if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+            if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
                 app.show_model_details = !app.show_model_details;
                 if app.show_model_details {
                     app.request_selected_model_detail_sidebar();
@@ -257,13 +257,13 @@ pub(super) fn handle_tab_key(
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('e') => {
-            if app.active_tab == MainTab::Bookmarks {
+            if app.active_tab == MainTab::SavedModels {
                 app.begin_bookmark_export_prompt();
             }
             return Some(LoopControl::Continue);
         }
         KeyCode::Char('i') => {
-            if app.active_tab == MainTab::Bookmarks {
+            if app.active_tab == MainTab::SavedModels {
                 app.begin_bookmark_import_prompt();
             }
             return Some(LoopControl::Continue);
@@ -276,7 +276,7 @@ pub(super) fn handle_tab_key(
 
 fn handle_enter(app: &mut App) {
     match app.active_tab {
-        MainTab::Images | MainTab::ImageBookmarks => {
+        MainTab::Images | MainTab::SavedImages => {
             if let Some(selected_model) = app.selected_image_used_model()
                 && selected_model.navigable
             {
@@ -298,7 +298,7 @@ fn handle_enter(app: &mut App) {
                 }
             }
         }
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             if let Some((_, version_id)) = app.selected_model_version() {
                 app.image_search_form
                     .set_linked_model_version(Some(version_id));
@@ -424,7 +424,7 @@ fn handle_left(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             app.select_previous_version();
             send_cover_priority(app);
             send_cover_prefetch(app);
@@ -450,7 +450,7 @@ fn handle_right(app: &mut App) {
     }
 
     match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             app.select_next_version();
             send_cover_priority(app);
             send_cover_prefetch(app);
@@ -466,8 +466,8 @@ fn handle_bookmark_toggle(app: &mut App) {
                 app.toggle_bookmark_for_selected_model(&model);
             }
         }
-        MainTab::Bookmarks => app.request_bookmark_remove_selected(),
-        MainTab::Images | MainTab::ImageBookmarks => {
+        MainTab::SavedModels => app.request_bookmark_remove_selected(),
+        MainTab::Images | MainTab::SavedImages => {
             if let Some(image) = app.selected_image_in_active_view().cloned() {
                 app.toggle_bookmark_for_selected_image(&image);
             }
@@ -520,7 +520,7 @@ fn handle_next_selection(app: &mut App) {
             request_image_feed_if_needed(app, Some(next_page));
         }
         ensure_selected_image_loaded(app);
-        if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+        if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
             send_cover_priority(app);
             send_cover_prefetch(app);
         }
@@ -541,7 +541,7 @@ fn handle_previous_selection(app: &mut App) {
     } else {
         app.select_previous();
         ensure_selected_image_loaded(app);
-        if matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+        if matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
             send_cover_priority(app);
             send_cover_prefetch(app);
         }
@@ -562,7 +562,7 @@ fn handle_down(app: &mut App) {
                 app.select_next_download();
             }
         }
-        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => {
+        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => {
             handle_next_selection(app);
         }
     }
@@ -582,7 +582,7 @@ fn handle_up(app: &mut App) {
                 app.select_previous_download();
             }
         }
-        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => {
+        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => {
             handle_previous_selection(app);
         }
     }
@@ -682,7 +682,7 @@ fn handle_c_action(app: &mut App) {
             let _ = tx.try_send(WorkerCommand::ClearSearchCache);
             app.status = "Clearing cached search results...".into();
         }
-    } else if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks)
+    } else if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
         && let Some(image) = app.selected_image_in_active_view()
     {
         if let Some(json) = comfy_workflow_json(image) {
@@ -706,7 +706,7 @@ fn handle_c_action(app: &mut App) {
 }
 
 fn copy_image_workflow(app: &mut App) {
-    if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks)
+    if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
         && let Some(image) = app.selected_image_in_active_view()
     {
         if let Some(json) = comfy_workflow_json(image) {
@@ -725,7 +725,7 @@ fn copy_image_workflow(app: &mut App) {
 }
 
 fn save_image_workflow(app: &mut App) {
-    if matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks)
+    if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
         && let Some(image) = app.selected_image_in_active_view()
     {
         if let Some(json) = comfy_workflow_json(image) {
@@ -819,8 +819,8 @@ fn handle_quick_search(app: &mut App) {
             app.image_search_form.begin_quick_search();
             app.status = "Quick image search. Type query, Enter apply, Esc cancel.".into();
         }
-        MainTab::ImageBookmarks => app.begin_image_bookmark_search(),
-        MainTab::Bookmarks => {
+        MainTab::SavedImages => app.begin_image_bookmark_search(),
+        MainTab::SavedModels => {
             app.begin_bookmark_search();
             app.bookmark_search_form_draft.begin_quick_search();
         }
@@ -844,7 +844,7 @@ fn handle_filter_builder(app: &mut App) {
                 "Image filters. Up/Down sections, Left/Right options, Space toggle, Enter apply."
                     .into();
         }
-        MainTab::Bookmarks => {
+        MainTab::SavedModels => {
             app.begin_bookmark_search();
             app.bookmark_search_form_draft.begin_builder();
             app.status =
@@ -857,20 +857,20 @@ fn handle_filter_builder(app: &mut App) {
 
 fn handle_jump_first(app: &mut App) {
     match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             app.select_list_first();
             send_cover_priority(app);
             send_cover_prefetch(app);
         }
         MainTab::Images => app.selected_index = 0,
-        MainTab::ImageBookmarks => app.selected_image_bookmark_index = 0,
+        MainTab::SavedImages => app.selected_image_bookmark_index = 0,
         _ => {}
     }
 }
 
 fn handle_jump_last(app: &mut App) {
     match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks => {
+        MainTab::Models | MainTab::SavedModels => {
             app.select_list_last();
             send_cover_priority(app);
             send_cover_prefetch(app);
@@ -880,7 +880,7 @@ fn handle_jump_last(app: &mut App) {
                 app.selected_index = app.images.len().saturating_sub(1);
             }
         }
-        MainTab::ImageBookmarks => {
+        MainTab::SavedImages => {
             let visible = app.visible_image_bookmarks();
             if !visible.is_empty() {
                 app.selected_image_bookmark_index = visible.len().saturating_sub(1);

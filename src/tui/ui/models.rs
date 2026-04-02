@@ -64,7 +64,7 @@ pub(super) fn draw_models_tab(f: &mut Frame, app: &mut App, area: Rect, enable_n
     }
 }
 
-pub(super) fn draw_bookmarks_tab(
+pub(super) fn draw_saved_models_tab(
     f: &mut Frame,
     app: &mut App,
     area: Rect,
@@ -106,12 +106,12 @@ pub(super) fn draw_bookmarks_tab(
         );
     }
 
-    if app.mode == AppMode::SearchBookmarks {
+    if app.mode == AppMode::SearchSavedModels {
         draw_search_popup(
             f,
             &app.bookmark_search_form_draft,
-            "Bookmark Filters",
-            "Bookmark Search",
+            "Saved Filters",
+            "Saved Search",
         );
     }
     if app.mode == AppMode::BookmarkPathPrompt {
@@ -997,7 +997,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
 fn draw_bookmark_path_prompt(f: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Bookmark File Path ");
+        .title(" Saved List Path ");
 
     let action = if app.is_bookmark_export_prompt() {
         "Export"

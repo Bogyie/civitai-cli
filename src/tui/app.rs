@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn bookmark_selection_clamps_after_filtered_removal() {
         let mut app = App::new(isolated_config());
-        app.active_tab = MainTab::Bookmarks;
+        app.active_tab = MainTab::SavedModels;
         app.bookmarks = vec![
             model(json!({ "id": 1, "name": "Flux Portrait" })),
             model(json!({ "id": 2, "name": "Flux Landscape" })),
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn image_bookmark_selection_clamps_after_filtered_removal() {
         let mut app = App::new(isolated_config());
-        app.active_tab = MainTab::ImageBookmarks;
+        app.active_tab = MainTab::SavedImages;
         app.image_bookmarks = vec![
             image(json!({ "id": 10, "baseModel": "Flux.1 D" })),
             image(json!({ "id": 20, "baseModel": "Flux.1 D" })),

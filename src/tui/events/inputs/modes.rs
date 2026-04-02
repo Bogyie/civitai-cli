@@ -18,7 +18,7 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
         return Some(LoopControl::Continue);
     }
 
-    if app.mode == AppMode::SearchBookmarks {
+    if app.mode == AppMode::SearchSavedModels {
         handle_bookmark_search_mode(app, key.code);
         return Some(LoopControl::Continue);
     }
@@ -28,7 +28,7 @@ pub(super) fn handle_mode_key(app: &mut App, key: KeyEvent) -> Option<LoopContro
         return Some(LoopControl::Continue);
     }
 
-    if app.mode == AppMode::SearchImageBookmarks {
+    if app.mode == AppMode::SearchSavedImages {
         handle_image_bookmark_search_mode(app, key.code);
         return Some(LoopControl::Continue);
     }

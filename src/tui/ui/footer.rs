@@ -34,13 +34,13 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
         MainTab::Models => {
             "[?] Help  [M] Status Log  [↑/↓ or j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [d] Download"
         }
-        MainTab::Bookmarks => {
+        MainTab::SavedModels => {
             "[?] Help  [M] Status Log  [↑/↓ or j/k] Move  [/] Search  [f] Filter  [v] Detail  [←/→] Ver  [⇧↑/↓] File  [b] Remove"
         }
         MainTab::Images => {
             "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
-        MainTab::ImageBookmarks => {
+        MainTab::SavedImages => {
             "[?] Help  [M] Status Log  [↑/↓ or j/k] Image  [⇧↑/↓] Models  [Enter] Model  [m] Prompt  [d] Download  [c] Comfy"
         }
         MainTab::Downloads => {

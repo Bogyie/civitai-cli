@@ -56,7 +56,7 @@ impl App {
     pub fn selected_image_in_active_view(&self) -> Option<&ImageItem> {
         match self.active_tab {
             MainTab::Images => self.images.get(self.selected_index),
-            MainTab::ImageBookmarks => self
+            MainTab::SavedImages => self
                 .visible_image_bookmarks()
                 .get(self.selected_image_bookmark_index),
             _ => None,
@@ -66,7 +66,7 @@ impl App {
     pub fn active_image_items(&self) -> &[ImageItem] {
         match self.active_tab {
             MainTab::Images => &self.images,
-            MainTab::ImageBookmarks => self.visible_image_bookmarks(),
+            MainTab::SavedImages => self.visible_image_bookmarks(),
             _ => &[],
         }
     }
@@ -74,7 +74,7 @@ impl App {
     pub fn active_image_selected_index(&self) -> usize {
         match self.active_tab {
             MainTab::Images => self.selected_index,
-            MainTab::ImageBookmarks => self.selected_image_bookmark_index,
+            MainTab::SavedImages => self.selected_image_bookmark_index,
             _ => 0,
         }
     }
@@ -241,7 +241,7 @@ impl App {
                 let _ = tx.try_send(WorkerCommand::DownloadImage(img.clone()));
                 self.set_status(format!("Downloading image {}...", img.id));
             }
-        } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+        } else if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.request_download_for_model(&model);
@@ -254,7 +254,7 @@ impl App {
     }
 
     pub fn select_next_image_model(&mut self) {
-        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::SavedImages) {
             return;
         }
         if let Some(image) = self.selected_image_in_active_view() {
@@ -270,7 +270,7 @@ impl App {
     }
 
     pub fn select_previous_image_model(&mut self) {
-        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::ImageBookmarks) {
+        if !(self.active_tab == MainTab::Images || self.active_tab == MainTab::SavedImages) {
             return;
         }
         if let Some(image) = self.selected_image_in_active_view() {
@@ -400,7 +400,7 @@ impl App {
         }
         self.deduplicate_image_bookmarks();
         self.refresh_visible_image_bookmarks_cache();
-        if self.active_tab == MainTab::ImageBookmarks {
+        if self.active_tab == MainTab::SavedImages {
             self.clamp_image_bookmark_selection();
         }
         self.persist_image_bookmarks();
@@ -408,7 +408,7 @@ impl App {
 
     pub fn begin_image_bookmark_search(&mut self) {
         self.image_bookmark_query_draft = self.image_bookmark_query.clone();
-        self.mode = AppMode::SearchImageBookmarks;
+        self.mode = AppMode::SearchSavedImages;
         self.set_status("Search image bookmarks. Enter apply, Esc cancel");
     }
 

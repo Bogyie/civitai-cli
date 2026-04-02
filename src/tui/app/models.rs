@@ -54,7 +54,7 @@ impl App {
             if !self.images.is_empty() && self.selected_index < self.images.len() - 1 {
                 self.selected_index += 1;
             }
-        } else if self.active_tab == MainTab::ImageBookmarks {
+        } else if self.active_tab == MainTab::SavedImages {
             let visible = self.visible_image_bookmarks();
             if !visible.is_empty() && self.selected_image_bookmark_index < visible.len() - 1 {
                 self.selected_image_bookmark_index += 1;
@@ -69,7 +69,7 @@ impl App {
                     self.request_selected_model_detail_sidebar();
                 }
             }
-        } else if self.active_tab == MainTab::Bookmarks {
+        } else if self.active_tab == MainTab::SavedModels {
             let visible = self.visible_bookmarks();
             if let Some(current) = self.bookmark_list_state.selected() {
                 if current < visible.len().saturating_sub(1) {
@@ -88,7 +88,7 @@ impl App {
             if self.selected_index > 0 {
                 self.selected_index -= 1;
             }
-        } else if self.active_tab == MainTab::ImageBookmarks {
+        } else if self.active_tab == MainTab::SavedImages {
             if self.selected_image_bookmark_index > 0 {
                 self.selected_image_bookmark_index -= 1;
                 self.image_bookmark_list_state
@@ -100,7 +100,7 @@ impl App {
                 self.model_list_state.select(Some(current - 1));
                 self.request_selected_model_detail_sidebar();
             }
-        } else if self.active_tab == MainTab::Bookmarks {
+        } else if self.active_tab == MainTab::SavedModels {
             let current = self.bookmark_list_state.selected().unwrap_or(0);
             if current > 0 {
                 self.bookmark_list_state.select(Some(current - 1));
@@ -122,7 +122,7 @@ impl App {
                 self.model_list_state.select(Some(next));
                 self.request_selected_model_detail_sidebar();
             }
-            MainTab::Bookmarks => {
+            MainTab::SavedModels => {
                 let visible = self.visible_bookmarks();
                 if visible.is_empty() {
                     self.bookmark_list_state.select(None);
@@ -148,7 +148,7 @@ impl App {
                     self.request_selected_model_detail_sidebar();
                 }
             }
-            MainTab::Bookmarks => {
+            MainTab::SavedModels => {
                 if self.visible_bookmarks().is_empty() {
                     self.bookmark_list_state.select(None);
                 } else {
@@ -171,7 +171,7 @@ impl App {
                     self.request_selected_model_detail_sidebar();
                 }
             }
-            MainTab::Bookmarks => {
+            MainTab::SavedModels => {
                 let visible = self.visible_bookmarks();
                 if visible.is_empty() {
                     self.bookmark_list_state.select(None);
@@ -244,7 +244,7 @@ impl App {
     }
 
     pub fn select_next_version(&mut self) {
-        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.select_next_version_for_model(&model);
@@ -252,7 +252,7 @@ impl App {
     }
 
     pub fn select_previous_version(&mut self) {
-        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.select_previous_version_for_model(&model);
@@ -260,7 +260,7 @@ impl App {
     }
 
     pub fn select_next_file(&mut self) {
-        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.select_next_file_for_model(&model);
@@ -268,7 +268,7 @@ impl App {
     }
 
     pub fn select_previous_file(&mut self) {
-        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::Bookmarks)
+        if (self.active_tab == MainTab::Models || self.active_tab == MainTab::SavedModels)
             && let Some(model) = self.selected_model_in_active_view().cloned()
         {
             self.select_previous_file_for_model(&model);

@@ -40,7 +40,7 @@ pub(super) fn draw_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-pub(super) fn draw_image_bookmarks_tab(f: &mut Frame, app: &mut App, area: Rect) {
+pub(super) fn draw_saved_images_tab(f: &mut Frame, app: &mut App, area: Rect) {
     let image_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -49,11 +49,11 @@ pub(super) fn draw_image_bookmarks_tab(f: &mut Frame, app: &mut App, area: Rect)
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(image_chunks[1]);
-    draw_image_bookmark_search_summary(f, app, image_chunks[0]);
+    draw_saved_image_search_summary(f, app, image_chunks[0]);
     draw_image_panel(f, app, main_chunks[0]);
     draw_image_sidebar(f, app, main_chunks[1]);
-    if app.mode == AppMode::SearchImageBookmarks {
-        draw_image_bookmark_search_popup(f, app);
+    if app.mode == AppMode::SearchSavedImages {
+        draw_saved_image_search_popup(f, app);
     }
 }
 
@@ -63,10 +63,10 @@ fn draw_image_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let selected_index = app.active_image_selected_index();
 
     if items.is_empty() {
-        let empty_message = if app.active_tab == MainTab::ImageBookmarks {
-            "No bookmarked images."
+        let empty_message = if app.active_tab == MainTab::SavedImages {
+            "No saved images."
         } else {
-            "Loading feed..."
+            "Loading images..."
         };
         f.render_widget(Paragraph::new(empty_message).block(block), area);
         return;
@@ -311,14 +311,14 @@ fn draw_image_sidebar(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_image_bookmark_search_summary(f: &mut Frame, app: &App, area: Rect) {
+fn draw_saved_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     let query = if app.image_bookmark_query.is_empty() {
         "<all>"
     } else {
         &app.image_bookmark_query
     };
     let summary = format!(
-        "🔍 Image Bookmarks Query: \"{}\" | Total: {}",
+        "🔍 Saved Images Query: \"{}\" | Total: {}",
         query,
         app.visible_image_bookmarks().len()
     );
@@ -405,7 +405,7 @@ fn draw_image_search_summary(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
+fn draw_saved_image_search_popup(f: &mut Frame, app: &App) {
     let visible_count = app.visible_image_bookmarks().len();
     let lines = vec![
         Line::from(vec![
@@ -426,7 +426,7 @@ fn draw_image_bookmark_search_popup(f: &mut Frame, app: &App) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Image Bookmark Search "),
+                .title(" Saved Image Search "),
         )
         .wrap(Wrap { trim: true });
     let area = centered_rect(60, 24, f.area());

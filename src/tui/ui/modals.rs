@@ -241,9 +241,9 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
 
     let title = match app.active_tab {
         MainTab::Models => "Models",
-        MainTab::Bookmarks => "Bookmarks",
-        MainTab::Images => "Image Feed",
-        MainTab::ImageBookmarks => "Image Bookmarks",
+        MainTab::SavedModels => "Saved",
+        MainTab::Images => "Images",
+        MainTab::SavedImages => "Saved Images",
         MainTab::Downloads => "Downloads",
         MainTab::Settings => "Settings",
     };
@@ -266,7 +266,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(header, sections[0]);
 
     let nav = Paragraph::new(match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
             Line::from(" [1-6] Switch tabs"),
             Line::from(" [M] Open status history"),
             Line::from(" [j/k] or [↑/↓] Move selection"),
@@ -286,7 +286,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
     f.render_widget(nav, sections[1]);
 
     let search = Paragraph::new(match app.active_tab {
-        MainTab::Models | MainTab::Bookmarks | MainTab::Images | MainTab::ImageBookmarks => vec![
+        MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
             Line::from(" [/] Quick search"),
             Line::from(" [f] Open filter builder"),
             Line::from(" [Enter] Apply search / run selected action"),
@@ -321,13 +321,13 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [b] Bookmark selected model"),
             Line::from(" [r] Refresh current search  [c] Clear model search cache"),
         ],
-        MainTab::Bookmarks => vec![
+        MainTab::SavedModels => vec![
             Line::from(" [v] Toggle detail panel"),
             Line::from(" [←/→] Change version"),
             Line::from(" [Shift+↑/↓] or [J/K] Change file"),
             Line::from(" [d] Download selected file"),
-            Line::from(" [b] Remove selected bookmark"),
-            Line::from(" [e] Export bookmarks  [i] Import bookmarks"),
+            Line::from(" [b] Remove selected saved model"),
+            Line::from(" [e] Export saved list  [i] Import saved list"),
         ],
         MainTab::Images => vec![
             Line::from(" [↑/↓] Change image"),
@@ -340,10 +340,10 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [Enter] Open selected model details"),
             Line::from(" [c] Copy workflow  [W] Save workflow JSON"),
         ],
-        MainTab::ImageBookmarks => vec![
+        MainTab::SavedImages => vec![
             Line::from(" [↑/↓] Change image"),
             Line::from(" [d] Download current image"),
-            Line::from(" [b] Remove current bookmark"),
+            Line::from(" [b] Remove current saved image"),
             Line::from(" [m] Open full prompt viewer"),
             Line::from(" [a] Toggle advanced metadata"),
             Line::from(" [o] Copy image page link"),

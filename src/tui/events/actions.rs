@@ -4,7 +4,7 @@ use crate::tui::runtime::{
 };
 
 pub(super) fn reload_selected_image(app: &mut App) {
-    if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+    if !matches!(app.active_tab, MainTab::Images | MainTab::SavedImages) {
         return;
     }
     if let Some(image) = app.selected_image_in_active_view().cloned()
@@ -25,7 +25,7 @@ pub(super) fn reload_selected_image(app: &mut App) {
 }
 
 pub(super) fn ensure_selected_image_loaded(app: &mut App) {
-    if !matches!(app.active_tab, MainTab::Images | MainTab::ImageBookmarks) {
+    if !matches!(app.active_tab, MainTab::Images | MainTab::SavedImages) {
         return;
     }
     if let Some(image) = app.selected_image_in_active_view().cloned() {
@@ -60,7 +60,7 @@ pub(super) fn send_cover_priority(app: &mut App) {
 }
 
 pub(super) fn reload_selected_model_cover(app: &mut App) {
-    if !matches!(app.active_tab, MainTab::Models | MainTab::Bookmarks) {
+    if !matches!(app.active_tab, MainTab::Models | MainTab::SavedModels) {
         return;
     }
     let Some((_, version_id)) = app.selected_model_version() else {
