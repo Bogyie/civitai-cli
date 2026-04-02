@@ -6,7 +6,8 @@ use crate::tui::app::{App, WorkerCommand};
 use crate::tui::status::StatusHistoryFilter;
 
 use super::actions::{
-    send_image_model_detail_cover_prefetch, send_image_model_detail_cover_priority,
+    reload_selected_image, send_image_model_detail_cover_prefetch,
+    send_image_model_detail_cover_priority,
 };
 use super::artifacts::copy_to_clipboard;
 
@@ -15,10 +16,17 @@ pub(super) enum ModalKeyOutcome {
     Break,
 }
 
+fn close_modal_and_refresh_image(app: &mut App, close: impl FnOnce(&mut App)) {
+    close(app);
+    reload_selected_image(app);
+}
+
 pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyOutcome> {
     if app.show_status_modal {
         if matches!(key.code, KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter) {
-            app.show_status_modal = false;
+            close_modal_and_refresh_image(app, |app| {
+                app.show_status_modal = false;
+            });
         }
         return Some(ModalKeyOutcome::Consumed);
     }
@@ -26,7 +34,9 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
     if app.show_status_history_modal {
         match key.code {
             KeyCode::Char('M') | KeyCode::Esc | KeyCode::Enter => {
-                app.close_status_history_modal();
+                close_modal_and_refresh_image(app, |app| {
+                    app.close_status_history_modal();
+                });
             }
             KeyCode::Char('0') => {
                 app.set_status_history_filter(StatusHistoryFilter::All);
@@ -77,7 +87,9 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
 
     if app.show_help_modal {
         if matches!(key.code, KeyCode::Char('?') | KeyCode::Esc | KeyCode::Enter) {
-            app.show_help_modal = false;
+            close_modal_and_refresh_image(app, |app| {
+                app.show_help_modal = false;
+            });
         }
         return Some(ModalKeyOutcome::Consumed);
     }
@@ -85,7 +97,9 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
     if app.show_image_prompt_modal {
         match key.code {
             KeyCode::Char('m') | KeyCode::Esc | KeyCode::Enter => {
-                app.show_image_prompt_modal = false;
+                close_modal_and_refresh_image(app, |app| {
+                    app.show_image_prompt_modal = false;
+                });
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 app.image_prompt_scroll = app.image_prompt_scroll.saturating_add(1);
@@ -98,10 +112,30 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
         return Some(ModalKeyOutcome::Consumed);
     }
 
+    if app.show_image_tags_modal {
+        match key.code {
+            KeyCode::Char('t') | KeyCode::Esc | KeyCode::Enter => {
+                close_modal_and_refresh_image(app, |app| {
+                    app.show_image_tags_modal = false;
+                });
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.image_tags_scroll = app.image_tags_scroll.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.image_tags_scroll = app.image_tags_scroll.saturating_sub(1);
+            }
+            _ => {}
+        }
+        return Some(ModalKeyOutcome::Consumed);
+    }
+
     if app.show_image_model_detail_modal {
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
-                app.close_image_model_detail_modal();
+                close_modal_and_refresh_image(app, |app| {
+                    app.close_image_model_detail_modal();
+                });
             }
             KeyCode::Char('b') => {
                 if let Some(model) = app.image_model_detail_model.clone() {
@@ -155,10 +189,14 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
     if app.show_bookmark_confirm_modal {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                app.confirm_remove_selected_bookmark();
+                close_modal_and_refresh_image(app, |app| {
+                    app.confirm_remove_selected_bookmark();
+                });
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                app.cancel_bookmark_remove();
+                close_modal_and_refresh_image(app, |app| {
+                    app.cancel_bookmark_remove();
+                });
             }
             _ => {}
         }
@@ -189,7 +227,9 @@ pub(super) fn handle_modal_key(app: &mut App, key: KeyEvent) -> Option<ModalKeyO
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('T') => {
-                app.close_search_template_modal();
+                close_modal_and_refresh_image(app, |app| {
+                    app.close_search_template_modal();
+                });
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 app.select_next_search_template();

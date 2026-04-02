@@ -179,15 +179,13 @@ pub(super) fn handle_tab_key(
             }
             return Some(LoopControl::Continue);
         }
-        KeyCode::Char('T') => {
-            match app.active_tab {
-                MainTab::Models | MainTab::SavedModels => {
-                    app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Model);
-                }
-                MainTab::Images | MainTab::SavedImages => {
-                    app.open_search_template_modal(crate::tui::app::SearchTemplateKind::Image);
-                }
-                MainTab::Downloads | MainTab::Settings => {}
+        KeyCode::Char('t') => {
+            if matches!(app.active_tab, MainTab::Images | MainTab::SavedImages)
+                && app.selected_image_in_active_view().is_some()
+            {
+                app.show_image_tags_modal = true;
+                app.image_tags_scroll = 0;
+                app.status = "Tag viewer opened".into();
             }
             return Some(LoopControl::Continue);
         }

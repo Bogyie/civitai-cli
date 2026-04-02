@@ -769,7 +769,7 @@ fn draw_image_search_popup(f: &mut Frame, app: &App) {
 
     f.render_widget(
         Paragraph::new(
-            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ",
+            " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [T] Templates | [Enter] Apply | [Esc] Cancel ",
         )
         .wrap(Wrap { trim: true }),
         sections[8],

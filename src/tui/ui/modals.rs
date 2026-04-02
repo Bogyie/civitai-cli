@@ -35,6 +35,10 @@ pub(super) fn draw_active_modals(f: &mut Frame, app: &mut App) {
         draw_image_prompt_modal(f, app);
     }
 
+    if app.show_image_tags_modal {
+        draw_image_tags_modal(f, app);
+    }
+
     if app.show_image_model_detail_modal {
         draw_image_model_detail_modal(f, app);
     }
@@ -94,6 +98,41 @@ fn draw_image_prompt_modal(f: &mut Frame, app: &App) {
 
     let help = Paragraph::new(Line::from(Span::styled(
         " [j/k or ↑/↓] Scroll  [m] Close  [Esc] Close ",
+        help_text_style(),
+    )))
+    .alignment(Alignment::Center);
+    f.render_widget(help, sections[1]);
+}
+
+fn draw_image_tags_modal(f: &mut Frame, app: &App) {
+    let Some(img) = app.selected_image_in_active_view() else {
+        return;
+    };
+
+    let tags = crate::tui::image::image_tags(img);
+    let content = if tags.is_empty() {
+        "<no tags>".to_string()
+    } else {
+        tags.join("\n")
+    };
+
+    let area = centered_rect(62, 78, f.area());
+    let block = Block::default().borders(Borders::ALL).title(" Tag Viewer ");
+    f.render_widget(Clear, area);
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(4), Constraint::Length(2)])
+        .split(inner);
+
+    let tags_para = Paragraph::new(content)
+        .wrap(Wrap { trim: false })
+        .scroll((app.image_tags_scroll, 0));
+    f.render_widget(tags_para, sections[0]);
+
+    let help = Paragraph::new(Line::from(Span::styled(
+        " [j/k or ↑/↓] Scroll  [t] Close  [Esc] Close ",
         help_text_style(),
     )))
     .alignment(Alignment::Center);
@@ -297,9 +336,8 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
         MainTab::Models | MainTab::SavedModels | MainTab::Images | MainTab::SavedImages => vec![
             Line::from(" [/] Quick search"),
             Line::from(" [f] Open filter builder"),
-            Line::from(" [T] Open search template manager"),
             Line::from(" [Enter] Apply search / run selected action"),
-            Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle"),
+            Line::from(" Filter modal: [↑/↓] section  [←/→] option  [Space] toggle  [T] templates"),
             Line::from(" Text sections accept typing directly"),
         ],
         MainTab::Downloads => vec![
@@ -343,6 +381,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [d] Download current image"),
             Line::from(" [b] Bookmark current image"),
             Line::from(" [m] Open full prompt viewer"),
+            Line::from(" [t] Open full tag viewer"),
             Line::from(" [a] Toggle advanced metadata"),
             Line::from(" [o] Copy image page link"),
             Line::from(" [Shift+↑/↓] Change used model"),
@@ -354,6 +393,7 @@ fn draw_help_modal(f: &mut Frame, app: &App) {
             Line::from(" [d] Download current image"),
             Line::from(" [b] Remove current saved image"),
             Line::from(" [m] Open full prompt viewer"),
+            Line::from(" [t] Open full tag viewer"),
             Line::from(" [a] Toggle advanced metadata"),
             Line::from(" [o] Copy image page link"),
             Line::from(" [Shift+↑/↓] Change used model"),

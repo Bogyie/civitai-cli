@@ -987,7 +987,7 @@ fn draw_search_popup(f: &mut Frame, fm: &SearchFormState, builder_title: &str, q
     f.render_widget(base_widget, sections[5]);
 
     let help = Paragraph::new(
-        " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [Enter] Apply | [Esc] Cancel ",
+        " [Up/Down] Section | [Left/Right] Change | [Space] Toggle | [Type] Query/Tag | [T] Templates | [Enter] Apply | [Esc] Cancel ",
     )
     .alignment(Alignment::Left)
     .wrap(Wrap { trim: true });
