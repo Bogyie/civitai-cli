@@ -115,7 +115,10 @@ pub fn model_versions(hit: &SearchModelHit) -> Vec<ParsedModelVersion> {
         versions.push(ParsedModelVersion {
             id: version_id,
             name: format!("Version {version_id}"),
-            base_model: hit.version.as_ref().and_then(|value| value.base_model.clone()),
+            base_model: hit
+                .version
+                .as_ref()
+                .and_then(|value| value.base_model.clone()),
             ..ParsedModelVersion::default()
         });
     }
@@ -161,7 +164,11 @@ pub fn selected_version(hit: &SearchModelHit, index: usize) -> Option<ParsedMode
 pub fn default_base_model(hit: &SearchModelHit) -> Option<String> {
     selected_version(hit, 0)
         .and_then(|version| version.base_model)
-        .or_else(|| hit.version.as_ref().and_then(|value| value.base_model.clone()))
+        .or_else(|| {
+            hit.version
+                .as_ref()
+                .and_then(|value| value.base_model.clone())
+        })
 }
 
 pub fn build_model_url(hit: &SearchModelHit, version_id: Option<u64>) -> String {
@@ -183,13 +190,17 @@ pub fn resolve_model_download_target_dir(
         Some(base) => base
             .join("models")
             .join(normalize_model_type_folder(model_type))
-            .join(normalize_base_model_component(base_model.unwrap_or("unknown-base"))),
+            .join(normalize_base_model_component(
+                base_model.unwrap_or("unknown-base"),
+            )),
         None => std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join("downloads")
             .join("models")
             .join(normalize_model_type_folder(model_type))
-            .join(normalize_base_model_component(base_model.unwrap_or("unknown-base"))),
+            .join(normalize_base_model_component(
+                base_model.unwrap_or("unknown-base"),
+            )),
     };
 
     if !target_dir.exists() {
@@ -322,7 +333,6 @@ fn push_or_merge_version(versions: &mut Vec<ParsedModelVersion>, incoming: Parse
     }
 }
 
-
 fn parse_version(value: &SearchModelVersion) -> Option<ParsedModelVersion> {
     let id = value.id;
     Some(ParsedModelVersion {
@@ -398,8 +408,14 @@ fn parse_files(items: &[SearchModelFile]) -> Vec<ParsedModelFile> {
                 .unwrap_or_else(|| "Unnamed file".to_string()),
             file_type: item.file_type.clone(),
             size_kb: item.size_kb,
-            format: item.metadata.as_ref().and_then(|metadata| metadata.format.clone()),
-            fp: item.metadata.as_ref().and_then(|metadata| metadata.fp.clone()),
+            format: item
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.format.clone()),
+            fp: item
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.fp.clone()),
             primary: item.primary,
             download_url: item.download_url.clone(),
             pickle_scan_result: item.pickle_scan_result.clone(),

@@ -9,9 +9,7 @@ pub(crate) fn normalize_optional_string(value: Option<String>) -> Option<String>
     })
 }
 
-pub(crate) fn deserialize_stringish_opt<'de, D>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error>
+pub(crate) fn deserialize_stringish_opt<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -32,9 +30,7 @@ where
     Ok(deserialize_option_u64ish(deserializer)?.unwrap_or(0))
 }
 
-pub(crate) fn deserialize_option_u64ish<'de, D>(
-    deserializer: D,
-) -> Result<Option<u64>, D::Error>
+pub(crate) fn deserialize_option_u64ish<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -43,9 +39,11 @@ where
         Some(Value::Number(number)) => number
             .as_u64()
             .or_else(|| number.as_i64().and_then(|value| u64::try_from(value).ok())),
-        Some(Value::String(text)) => text.trim().parse::<f64>().ok().and_then(|value| {
-            (value.is_finite() && value >= 0.0).then_some(value.round() as u64)
-        }),
+        Some(Value::String(text)) => {
+            text.trim().parse::<f64>().ok().and_then(|value| {
+                (value.is_finite() && value >= 0.0).then_some(value.round() as u64)
+            })
+        }
         Some(Value::Bool(value)) => Some(if value { 1 } else { 0 }),
         _ => None,
     })
@@ -58,9 +56,7 @@ where
     Ok(deserialize_option_f64ish(deserializer)?.unwrap_or(0.0))
 }
 
-pub(crate) fn deserialize_option_f64ish<'de, D>(
-    deserializer: D,
-) -> Result<Option<f64>, D::Error>
+pub(crate) fn deserialize_option_f64ish<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -99,9 +95,7 @@ where
     Ok(value.map(normalize_jsonish_value))
 }
 
-pub(crate) fn deserialize_normalized_vec<'de, D, T>(
-    deserializer: D,
-) -> Result<Vec<T>, D::Error>
+pub(crate) fn deserialize_normalized_vec<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: DeserializeOwned,

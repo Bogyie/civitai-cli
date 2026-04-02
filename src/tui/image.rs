@@ -75,10 +75,16 @@ pub fn image_negative_prompt(hit: &SearchImageHit) -> Option<String> {
 pub fn image_stats(hit: &SearchImageHit) -> ParsedImageStats {
     let stats = hit.stats.as_ref();
     ParsedImageStats {
-        reactions: stats.map(|value| value.reaction_count_all_time).unwrap_or(0),
+        reactions: stats
+            .map(|value| value.reaction_count_all_time)
+            .unwrap_or(0),
         comments: stats.map(|value| value.comment_count_all_time).unwrap_or(0),
-        collected: stats.map(|value| value.collected_count_all_time).unwrap_or(0),
-        buzz: stats.map(|value| value.tipped_amount_count_all_time).unwrap_or(0),
+        collected: stats
+            .map(|value| value.collected_count_all_time)
+            .unwrap_or(0),
+        buzz: stats
+            .map(|value| value.tipped_amount_count_all_time)
+            .unwrap_or(0),
         likes: stats.map(|value| value.like_count_all_time).unwrap_or(0),
         hearts: stats.map(|value| value.heart_count_all_time).unwrap_or(0),
     }
@@ -364,7 +370,9 @@ fn structured_generation_resources(
         .as_ref()
         .and_then(|metadata| metadata.get("resources"))
         .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(value).ok())
+        .and_then(|value| {
+            serde_json::from_value::<Vec<civitai_cli::sdk::ImageGenerationResource>>(value).ok()
+        })
         .unwrap_or_default()
 }
 

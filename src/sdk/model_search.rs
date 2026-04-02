@@ -3,21 +3,20 @@ use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-use super::constants::{CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL};
 use super::api_types::{
     Model as ApiModel, ModelCreator as ApiModelCreator, ModelFile as ApiModelFile,
     ModelImage as ApiModelImage, ModelStats as ApiModelStats, ModelTag as ApiModelTag,
     ModelVersion as ApiModelVersion, NsfwValue as ApiNsfwValue, VersionStats as ApiVersionStats,
 };
+use super::constants::{CIVITAI_MODEL_DOWNLOAD_API_URL, CIVITAI_WEB_URL};
 use super::image_search::ImageHitUser;
 use super::model_search_types::{
     ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,
     ModelType,
 };
 use super::serde_utils::{
-    deserialize_boolish, deserialize_f64ish, deserialize_option_f64ish,
-    deserialize_option_u64ish, deserialize_stringish_opt, deserialize_u64ish,
-    normalize_optional_string,
+    deserialize_boolish, deserialize_f64ish, deserialize_option_f64ish, deserialize_option_u64ish,
+    deserialize_stringish_opt, deserialize_u64ish, normalize_optional_string,
 };
 use super::shared::{append_csv_pair, normalize_search_url, parse_query_map, split_multi_keys};
 

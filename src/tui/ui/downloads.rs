@@ -155,18 +155,8 @@ fn draw_active_download_list(f: &mut Frame, app: &App, area: Rect) {
     );
 
     let mut rows: Vec<ListItem> = Vec::with_capacity(tracked_rows.len());
-    for (
-        i,
-        (
-            model_name,
-            filename,
-            version_id,
-            progress,
-            downloaded_bytes,
-            total_bytes,
-            state,
-        ),
-    ) in tracked_rows.iter().enumerate()
+    for (i, (model_name, filename, version_id, progress, downloaded_bytes, total_bytes, state)) in
+        tracked_rows.iter().enumerate()
     {
         let state_text = if *state == DownloadState::Running {
             "RUN"

@@ -17,7 +17,11 @@ pub(super) fn copy_to_clipboard(value: &str) -> Result<()> {
 
     let mut last_error = None;
     for (program, args) in commands {
-        match Command::new(program).args(args).stdin(Stdio::piped()).spawn() {
+        match Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .spawn()
+        {
             Ok(mut child) => {
                 if let Some(stdin) = child.stdin.as_mut() {
                     stdin.write_all(value.as_bytes())?;

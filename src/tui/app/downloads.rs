@@ -1,5 +1,5 @@
-use super::*;
 use super::types::DownloadKey;
+use super::*;
 
 impl App {
     pub fn set_download_history_file_path(&mut self, path: PathBuf) {
@@ -216,7 +216,11 @@ impl App {
         &self,
         session: &InterruptedDownloadSession,
     ) -> Option<DownloadKey> {
-        let key = DownloadKey::new(session.model_id, session.version_id, session.filename.clone());
+        let key = DownloadKey::new(
+            session.model_id,
+            session.version_id,
+            session.filename.clone(),
+        );
         self.active_downloads.contains_key(&key).then_some(key)
     }
 

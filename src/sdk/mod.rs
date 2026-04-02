@@ -31,9 +31,8 @@ pub use download::{
 };
 pub use image_search::{
     ImageGenerationComfy, ImageGenerationData, ImageGenerationMeta, ImageGenerationResource,
-    ImageGenerationTechnique, ImageGenerationTool, ImageHitUser, ImageSearchState,
-    MediaUrlOptions, SearchImageHit, SearchImageResponse, SearchImageStats,
-    media_url_from_raw_with_options,
+    ImageGenerationTechnique, ImageGenerationTool, ImageHitUser, ImageSearchState, MediaUrlOptions,
+    SearchImageHit, SearchImageResponse, SearchImageStats, media_url_from_raw_with_options,
 };
 pub use image_search_types::{
     ImageAspectRatio, ImageBaseModel, ImageMediaType, ImageSearchSortBy, ImageTechnique, ImageTool,
@@ -41,9 +40,9 @@ pub use image_search_types::{
 pub use model_search::{
     ModelDownloadAuth, ModelSearchState, SearchModelCategory, SearchModelFile,
     SearchModelFileMetadata, SearchModelHit, SearchModelImage, SearchModelMetrics,
-    SearchModelResponse, SearchModelTag, SearchModelVersion,
-    build_model_download_url, build_model_download_url_with_base,
-    build_model_download_url_with_token, build_model_download_url_with_token_and_base,
+    SearchModelResponse, SearchModelTag, SearchModelVersion, build_model_download_url,
+    build_model_download_url_with_base, build_model_download_url_with_token,
+    build_model_download_url_with_token_and_base,
 };
 pub use model_search_types::{
     ModelBaseModel, ModelCategory, ModelCheckpointType, ModelFileFormat, ModelSearchSortBy,

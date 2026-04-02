@@ -67,11 +67,7 @@ fn tab_layout_for_width(width: u16) -> (Vec<&'static str>, &'static str, &'stati
         );
     }
 
-    (
-        compact.into_iter().collect(),
-        compact_divider,
-        " Tabs ",
-    )
+    (compact.into_iter().collect(), compact_divider, " Tabs ")
 }
 
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
@@ -117,11 +113,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     );
 
     let tabs = Tabs::new(titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(block_title),
-        )
+        .block(Block::default().borders(Borders::ALL).title(block_title))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)

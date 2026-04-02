@@ -46,7 +46,9 @@ pub(super) fn draw_footer_section(f: &mut Frame, app: &App, area: Rect) {
         MainTab::Downloads => {
             "[?] Help  [M] Status Log  [j/k] Select  [p] Pause/Resume  [c] Cancel  [r] Resume  [d] Remove"
         }
-        MainTab::Settings => "[?] Help  [M] Status Log  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel",
+        MainTab::Settings => {
+            "[?] Help  [M] Status Log  [j/k] Select  [Enter] Edit/Run  [h/l] Cycle  [Esc] Cancel"
+        }
     };
 
     let shortcuts_row = Paragraph::new(Span::styled(

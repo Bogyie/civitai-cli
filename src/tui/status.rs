@@ -89,7 +89,11 @@ impl StatusEvent {
             format!("Summary: {}", self.summary),
         ];
 
-        if let Some(detail) = self.detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
+        if let Some(detail) = self
+            .detail
+            .as_deref()
+            .filter(|detail| !detail.trim().is_empty())
+        {
             lines.push(String::new());
             lines.push("Detail:".to_string());
             lines.push(detail.to_string());
@@ -99,7 +103,11 @@ impl StatusEvent {
     }
 
     pub fn history_preview(&self) -> String {
-        match self.detail.as_deref().filter(|detail| !detail.trim().is_empty()) {
+        match self
+            .detail
+            .as_deref()
+            .filter(|detail| !detail.trim().is_empty())
+        {
             Some(detail) => format!(
                 "{} [{}] {} | {}",
                 format_status_time_only(self.recorded_at),
@@ -166,8 +174,11 @@ pub fn is_status_stale(value: SystemTime) -> bool {
 fn format_time(value: SystemTime, format: &[FormatItem<'static>]) -> String {
     let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let dt = OffsetDateTime::from(value).to_offset(offset);
-    dt.format(format)
-        .unwrap_or_else(|_| OffsetDateTime::from(value).format(format).unwrap_or_default())
+    dt.format(format).unwrap_or_else(|_| {
+        OffsetDateTime::from(value)
+            .format(format)
+            .unwrap_or_default()
+    })
 }
 
 #[cfg(test)]

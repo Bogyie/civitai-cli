@@ -150,24 +150,14 @@ pub(super) fn handle_app_message(app: &mut App, msg: AppMessage) {
                 app.image_feed_loading = false;
             }
         }
-        AppMessage::DownloadProgress(
-            download_key,
-            progress,
-            downloaded_bytes,
-            total_bytes,
-        ) => {
+        AppMessage::DownloadProgress(download_key, progress, downloaded_bytes, total_bytes) => {
             if let Some(existing) = app.active_downloads.get_mut(&download_key) {
                 existing.progress = progress;
                 existing.downloaded_bytes = downloaded_bytes;
                 existing.total_bytes = total_bytes;
             }
         }
-        AppMessage::DownloadStarted(
-            download_key,
-            model_name,
-            total_bytes,
-            file_path,
-        ) => {
+        AppMessage::DownloadStarted(download_key, model_name, total_bytes, file_path) => {
             if !app.active_download_order.contains(&download_key) {
                 app.active_download_order.push(download_key.clone());
             }
