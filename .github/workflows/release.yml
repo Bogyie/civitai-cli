@@ -48,7 +48,7 @@ jobs:
   verify-release:
     name: Test and build gate
     needs: validate-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
@@ -62,7 +62,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-x86_64-unknown-linux-gnu
+          shared-key: release-x86_64-unknown-linux-gnu-ubuntu-22.04
           key: verify
           add-job-id-key: "false"
           cache-workspace-crates: "true"
@@ -142,6 +142,30 @@ jobs:
             cargo build --locked --release --target "${{ matrix.target }}"
           fi
 
+      - name: Verify musl artifact is statically linked
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BIN_PATH="target/${{ matrix.target }}/release/${BIN_NAME}"
+
+          file "${BIN_PATH}"
+
+          # A real musl release artifact should be fully static and should not
+          # depend on the glibc dynamic loader at runtime.
+          file "${BIN_PATH}" | grep -Eq 'statically linked|static-pie'
+
+          if ldd "${BIN_PATH}" 2>&1 | tee /tmp/ldd-output.txt | grep -qv 'not a dynamic executable'; then
+            echo "musl artifact unexpectedly links dynamically"
+            exit 1
+          fi
+
+          if readelf -l "${BIN_PATH}" | grep -q '/lib64/ld-linux-x86-64.so.2'; then
+            echo "musl artifact unexpectedly uses the glibc loader"
+            exit 1
+          fi
+
       - name: Package release artifact
         id: package
         shell: bash
@@ -196,7 +220,7 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-x86_64-unknown-linux-gnu
+          shared-key: release-x86_64-unknown-linux-gnu-ubuntu-22.04
           key: linux-packages
           add-job-id-key: "false"
           cache-workspace-crates: "true"
@@ -261,6 +285,123 @@ jobs:
           name: linux-x86_64-gnu
           path: dist/${{ env.BIN_NAME }}-v${{ needs.validate-release.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
 
+  smoke-test-linux-tarballs:
+    name: Smoke test ${{ matrix.label }}
+    needs:
+      - validate-release
+      - build-release-assets
+      - build-linux-packages
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: ubuntu-22.04 gnu
+            runner: ubuntu-22.04
+            artifact_name: linux-x86_64-gnu
+            target: x86_64-unknown-linux-gnu
+          - label: ubuntu-24.04 gnu
+            runner: ubuntu-24.04
+            artifact_name: linux-x86_64-gnu
+            target: x86_64-unknown-linux-gnu
+          - label: ubuntu-22.04 musl
+            runner: ubuntu-22.04
+            artifact_name: linux-x86_64-musl
+            target: x86_64-unknown-linux-musl
+          - label: ubuntu-24.04 musl
+            runner: ubuntu-24.04
+            artifact_name: linux-x86_64-musl
+            target: x86_64-unknown-linux-musl
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist
+
+      - name: Run smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          ARCHIVE_NAME="${BIN_NAME}-v${VERSION}-${{ matrix.target }}.tar.gz"
+          EXTRACTED_DIR="${BIN_NAME}-${VERSION}-${{ matrix.target }}"
+          tar -xzf "dist/${ARCHIVE_NAME}"
+          "./${EXTRACTED_DIR}/${BIN_NAME}" --version
+
+  smoke-test-deb:
+    name: Smoke test .deb on ${{ matrix.runner }}
+    needs:
+      - validate-release
+      - build-linux-packages
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04]
+
+    steps:
+      - name: Download linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-packages
+          path: dist
+
+      - name: Install and verify .deb package
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEB_PATH="$(find dist -maxdepth 1 -name '*.deb' | head -n1)"
+          test -n "${DEB_PATH}"
+          sudo dpkg -i "${DEB_PATH}"
+          /usr/bin/civitai-cli --version
+
+  smoke-test-macos:
+    name: Smoke test macOS artifact
+    needs:
+      - validate-release
+      - build-release-assets
+    runs-on: macos-latest
+
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-aarch64
+          path: dist
+
+      - name: Run smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          tar -xzf "dist/${BIN_NAME}-v${VERSION}-aarch64-apple-darwin.tar.gz"
+          "./${BIN_NAME}-${VERSION}-aarch64-apple-darwin/${BIN_NAME}" --version
+
+  smoke-test-windows:
+    name: Smoke test Windows artifact
+    needs:
+      - validate-release
+      - build-release-assets
+    runs-on: windows-latest
+
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: dist
+
+      - name: Run smoke test
+        shell: pwsh
+        run: |
+          $version = "${{ needs.validate-release.outputs.version }}"
+          Expand-Archive -Path "dist/${env:BIN_NAME}-v$version-x86_64-pc-windows-msvc.zip" -DestinationPath dist/unpacked
+          & "dist/unpacked/${env:BIN_NAME}-$version-x86_64-pc-windows-msvc.exe" --version
+
   publish-release:
     name: Create release and upload assets
     needs:
@@ -268,6 +409,10 @@ jobs:
       - verify-release
       - build-release-assets
       - build-linux-packages
+      - smoke-test-linux-tarballs
+      - smoke-test-deb
+      - smoke-test-macos
+      - smoke-test-windows
     runs-on: ubuntu-latest
 
     steps:
