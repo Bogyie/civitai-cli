@@ -13,7 +13,7 @@ ComfyUI 중심 워크플로를 위한 터미널 기반 Civitai 브라우저 및 
 
 ## 설치
 
-현재 프로젝트 버전: `1.4.3`
+현재 프로젝트 버전: `1.4.4`
 
 이 프로젝트는 Civitai 공개 API와 로컬 ComfyUI 모델 폴더를 기반으로 동작하는 TUI 중심 도구입니다.
 
@@ -51,23 +51,23 @@ make build
 Debian / Ubuntu:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli_1.4.3_amd64.deb
-sudo dpkg -i civitai-cli_1.4.3_amd64.deb
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli_1.4.4_amd64.deb
+sudo dpkg -i civitai-cli_1.4.4_amd64.deb
 ```
 
 Fedora / RHEL / openSUSE:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli-1.4.3-1.x86_64.rpm
-sudo rpm -i civitai-cli-1.4.3-1.x86_64.rpm
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli-1.4.4-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.4.4-1.x86_64.rpm
 ```
 
 리눅스 배포판의 `glibc` 버전이 부족하면, 정적 링크된 musl tarball을 사용하세요:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
-tar -xzf civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
-sudo install -m 755 civitai-cli-1.4.3-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli-v1.4.4-x86_64-unknown-linux-musl.tar.gz
+tar -xzf civitai-cli-v1.4.4-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 755 civitai-cli-1.4.4-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
 ```
 
 ## 스크린샷
@@ -412,8 +412,8 @@ Linux 기본 경로:
 예시:
 
 ```bash
-git tag v1.4.3
-git push origin v1.4.3
+git tag v1.4.4
+git push origin v1.4.4
 ```
 
 릴리즈 workflow는 [Cargo.toml](/Users/dev/repo/github/bogyie/civitai-cli/Cargo.toml)의 버전과 태그 버전이 일치하는지 검증합니다.

@@ -156,7 +156,10 @@ jobs:
           # depend on the glibc dynamic loader at runtime.
           file "${BIN_PATH}" | grep -Eq 'statically linked|static-pie'
 
-          if ldd "${BIN_PATH}" 2>&1 | tee /tmp/ldd-output.txt | grep -qv 'not a dynamic executable'; then
+          ldd_output="$(ldd "${BIN_PATH}" 2>&1 || true)"
+          printf '%s\n' "${ldd_output}"
+
+          if ! printf '%s\n' "${ldd_output}" | grep -Eq 'not a dynamic executable|statically linked'; then
             echo "musl artifact unexpectedly links dynamically"
             exit 1
           fi
@@ -286,7 +289,7 @@ jobs:
           path: dist/${{ env.BIN_NAME }}-v${{ needs.validate-release.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz
 
   smoke-test-linux-tarballs:
-    name: Smoke test ${{ matrix.label }}
+    name: Linux smoke test (${{ matrix.label }})
     needs:
       - validate-release
       - build-release-assets
@@ -298,18 +301,19 @@ jobs:
       matrix:
         include:
           - label: ubuntu-22.04 gnu
+          - label: Ubuntu 22.04 GNU tarball
             runner: ubuntu-22.04
             artifact_name: linux-x86_64-gnu
             target: x86_64-unknown-linux-gnu
-          - label: ubuntu-24.04 gnu
+          - label: Ubuntu 24.04 GNU tarball
             runner: ubuntu-24.04
             artifact_name: linux-x86_64-gnu
             target: x86_64-unknown-linux-gnu
-          - label: ubuntu-22.04 musl
+          - label: Ubuntu 22.04 musl tarball
             runner: ubuntu-22.04
             artifact_name: linux-x86_64-musl
             target: x86_64-unknown-linux-musl
-          - label: ubuntu-24.04 musl
+          - label: Ubuntu 24.04 musl tarball
             runner: ubuntu-24.04
             artifact_name: linux-x86_64-musl
             target: x86_64-unknown-linux-musl
@@ -332,7 +336,7 @@ jobs:
           "./${EXTRACTED_DIR}/${BIN_NAME}" --version
 
   smoke-test-deb:
-    name: Smoke test .deb on ${{ matrix.runner }}
+    name: Debian package smoke test (${{ matrix.runner }})
     needs:
       - validate-release
       - build-linux-packages
@@ -360,7 +364,7 @@ jobs:
           /usr/bin/civitai-cli --version
 
   smoke-test-macos:
-    name: Smoke test macOS artifact
+    name: macOS smoke test
     needs:
       - validate-release
       - build-release-assets
@@ -382,7 +386,7 @@ jobs:
           "./${BIN_NAME}-${VERSION}-aarch64-apple-darwin/${BIN_NAME}" --version
 
   smoke-test-windows:
-    name: Smoke test Windows artifact
+    name: Windows smoke test
     needs:
       - validate-release
       - build-release-assets

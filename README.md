@@ -23,30 +23,30 @@ If you spend more time in a terminal than in a browser, `civitai-cli` lets you b
 
 ## Quick Start
 
-Current project version: `1.4.3`
+Current project version: `1.4.4`
 
 ### Install from GitHub Releases
 
 Debian / Ubuntu:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli_1.4.3_amd64.deb
-sudo dpkg -i civitai-cli_1.4.3_amd64.deb
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli_1.4.4_amd64.deb
+sudo dpkg -i civitai-cli_1.4.4_amd64.deb
 ```
 
 Fedora / RHEL / openSUSE:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli-1.4.3-1.x86_64.rpm
-sudo rpm -i civitai-cli-1.4.3-1.x86_64.rpm
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli-1.4.4-1.x86_64.rpm
+sudo rpm -i civitai-cli-1.4.4-1.x86_64.rpm
 ```
 
 Static musl build for older Linux systems:
 
 ```bash
-curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
-tar -xzf civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
-sudo install -m 755 civitai-cli-1.4.3-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
+curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.4/civitai-cli-v1.4.4-x86_64-unknown-linux-musl.tar.gz
+tar -xzf civitai-cli-v1.4.4-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 755 civitai-cli-1.4.4-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
 ```
 
 ### Build from source
@@ -399,8 +399,8 @@ GitHub Actions creates a GitHub Release automatically when a tag matching `v*` i
 Example:
 
 ```bash
-git tag v1.4.3
-git push origin v1.4.3
+git tag v1.4.4
+git push origin v1.4.4
 ```
 
 The release workflow validates that the tag version matches the version in [Cargo.toml](/Users/dev/repo/github/bogyie/civitai-cli/Cargo.toml).
