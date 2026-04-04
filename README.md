@@ -1,52 +1,31 @@
 # civitai-cli
 
+[![Release](https://img.shields.io/github/v/release/Bogyie/civitai-cli)](https://github.com/Bogyie/civitai-cli/releases)
+[![License](https://img.shields.io/github/license/Bogyie/civitai-cli)](https://github.com/Bogyie/civitai-cli/blob/main/LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-stable-orange?logo=rust)](https://www.rust-lang.org/)
+
 Terminal-first Civitai browser and downloader for ComfyUI-focused workflows.
 
-`civitai-cli` provides:
-- model browsing and search
-- model bookmarks
-- image feed browsing and search
-- image bookmarks
-- download management with pause, resume, cancel, and history
-- persistent caches for model search, image search, model covers, and image bytes
-- configurable local settings and cache locations
+If you spend more time in a terminal than in a browser, `civitai-cli` lets you browse models, inspect versions, explore images, save favorites, and download directly into your local ComfyUI setup without leaving the keyboard.
 
-## Installation
+<p align="center">
+  <img src="assets/screenshots/model_detail.png" alt="civitai-cli overview" />
+</p>
+
+## Why `civitai-cli`
+
+- Fast keyboard-driven workflow for browsing Civitai
+- Built for ComfyUI users who want local downloads and cache control
+- Search models and images without bouncing between tabs in a browser
+- Inspect model details, versions, files, metadata, and related images in one place
+- Save liked models and images locally for later
+- Resume interrupted downloads and keep persistent history
+
+## Quick Start
 
 Current project version: `1.4.3`
 
-This is a TUI-heavy workflow tool built around the public Civitai API and local ComfyUI model folders.
-
-### Requirements
-
-- Rust stable
-- `cargo`
-- a terminal that supports the TUI stack used by `ratatui`
-
-Optional but recommended:
-- a configured ComfyUI directory
-- a Civitai API key
-
-### Clone
-
-```bash
-git clone https://github.com/Bogyie/civitai-cli.git
-cd civitai-cli
-```
-
-### Build
-
-```bash
-cargo build
-```
-
-Or:
-
-```bash
-make build
-```
-
-### Install from release packages
+### Install from GitHub Releases
 
 Debian / Ubuntu:
 
@@ -62,7 +41,7 @@ curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-
 sudo rpm -i civitai-cli-1.4.3-1.x86_64.rpm
 ```
 
-If your Linux distro is missing a new enough `glibc`, use the static musl tarball instead:
+Static musl build for older Linux systems:
 
 ```bash
 curl -LO https://github.com/Bogyie/civitai-cli/releases/download/v1.4.3/civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
@@ -70,224 +49,172 @@ tar -xzf civitai-cli-v1.4.3-x86_64-unknown-linux-musl.tar.gz
 sudo install -m 755 civitai-cli-1.4.3-x86_64-unknown-linux-musl/civitai-cli /usr/local/bin/civitai-cli
 ```
 
-## Screenshots
+### Build from source
 
-### Models
+Requirements:
 
-![Models](assets/screenshots/models.png)
+- Rust stable
+- `cargo`
+- a terminal that supports the TUI stack used by `ratatui`
 
-### Model Bookmarks
+Optional but recommended:
 
-![Model Bookmarks](assets/screenshots/model-bookmarks.png)
-
-### Image Feed
-
-![Image Feed](assets/screenshots/image-feed.png)
-
-### Image Bookmarks
-
-![Image Bookmarks](assets/screenshots/image-bookmarks.png)
-
-### Downloads
-
-![Downloads](assets/screenshots/downloads.png)
-
-### Settings
-
-![Settings](assets/screenshots/settings.png)
-
-## Features
-
-### Models
-
-- Browse model lists from Civitai
-- Query by:
-  - text query
-  - model type
-  - sort
-  - base model
-  - period
-- Infinite scrolling with `nextPage`-based loading
-- Per-query result caching with TTL
-- Highlight bookmarked models in the list
-- View:
-  - model description
-  - stats
-  - versions
-  - files
-  - cover image
-  - metadata
-- Prioritized model cover fetching for the currently selected model/version
-
-### Model bookmarks
-
-- Add or remove bookmarks directly from the model list
-- Dedicated bookmark tab with model-like browsing
-- Bookmark search/filter support
-- Import and export bookmark lists
-- Persistent bookmark storage
-
-### Image feed
-
-- Browse Civitai image feed in the TUI
-- Search/filter by:
-  - `nsfw`
-  - `sort`
-  - `period`
-  - `modelVersionId`
-  - `tags`
-- Tag text is mapped to numeric tag IDs before querying
-- Cursor-based pagination using `nextPage`
-- Prefetch when you approach the end of the loaded image list
-- Video items from the API are skipped automatically
-- If a fetched page contains only skipped items, the app keeps loading until it finds image items or reaches the end
-- Image panel supports:
-  - rendered image preview
-  - detailed image metadata
-  - direct Civitai image link
-
-### Image bookmarks
-
-- Add or remove bookmarks directly from the image feed
-- Dedicated image bookmark tab
-- Search/filter inside bookmarked images
-- Persistent image bookmark storage
-
-### Downloads
-
-- Download the selected model/version into ComfyUI-style folders
-- Smart filenames based on base model and original filename
-- Pause, resume, and cancel downloads
-- Download history tab with status and progress
-- Delete:
-  - history only
-  - history and downloaded file
-- Interrupted download state is persisted
-- On next app launch, interrupted downloads can be resumed
-
-### Caching
-
-- Model search cache:
-  - persisted on disk
-  - per-query cache entries
-  - configurable TTL
-- Image search cache:
-  - persisted on disk
-  - short TTL by default
-  - configurable in settings
-- Model cover cache:
-  - stored separately on disk
-- Image byte cache:
-  - stored separately on disk
-  - persistent by default unless TTL is configured
-
-### Settings
-
-Configurable from the TUI:
-- API key
-- ComfyUI path
-- model bookmark path
-- image bookmark path
-- model search cache folder
-- model cover cache folder
-- image cache folder
-- download history path
-- interrupted download history path
-- model search cache TTL
-- image search cache TTL
-- image byte cache TTL
-
-## Authentication
-
-The app supports authenticated Civitai requests using your API key.
-
-For downloads, the app currently sends:
-- `Authorization: Bearer <token>`
-- `Content-Type: application/json`
-- a `token=...` query parameter on the download URL
-
-This is intentionally redundant because some download endpoints behave differently depending on how authentication is provided.
-
-## Running
-
-### Run the TUI
+- a configured ComfyUI directory
+- a Civitai API key
 
 ```bash
-cargo run
+git clone https://github.com/Bogyie/civitai-cli.git
+cd civitai-cli
+cargo build
 ```
 
 Or:
 
 ```bash
-make run
+make build
 ```
 
-### Run in debug mode
+### First run
 
-```bash
-make run-debug
-```
-
-Debug mode also enables fetch debug logging to the local config directory.
-
-## CLI usage
-
-### Open the TUI
+Open the TUI:
 
 ```bash
 cargo run -- ui
 ```
 
-### Update config from CLI
+Set your API key:
 
 ```bash
 cargo run -- config --api-key YOUR_TOKEN
 ```
 
+Set your ComfyUI path:
+
 ```bash
 cargo run -- config --comfyui-path /path/to/ComfyUI
 ```
 
-### Download by model ID
+## Screenshots
 
-```bash
-cargo run -- download --id 123456
-```
+<table>
+  <tr>
+    <td align="center"><strong>Model List</strong></td>
+    <td align="center"><strong>Model Search</strong></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/model_list.png" alt="Model List" /></td>
+    <td><img src="assets/screenshots/model_search.png" alt="Model Search" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Model Detail</strong></td>
+    <td align="center"><strong>Liked Models</strong></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/model_detail.png" alt="Model Detail" /></td>
+    <td><img src="assets/screenshots/liked_models.png" alt="Liked Models" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Images</strong></td>
+    <td align="center"><strong>Image Search</strong></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/images.png" alt="Images" /></td>
+    <td><img src="assets/screenshots/image_search.png" alt="Image Search" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Images by Model</strong></td>
+    <td align="center"><strong>Liked Images</strong></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/images_model.png" alt="Images by Model" /></td>
+    <td><img src="assets/screenshots/liked_images.png" alt="Liked Images" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>Downloads</strong></td>
+    <td align="center"><strong>Settings</strong></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/downloads.png" alt="Downloads" /></td>
+    <td><img src="assets/screenshots/settings.png" alt="Settings" /></td>
+  </tr>
+</table>
 
-### Download by model version hash
+## Feature Highlights
 
-```bash
-cargo run -- download --hash abcdef123456
-```
+### Browse and search models
 
-## TUI manual
+- Browse Civitai model lists in the terminal
+- Search by text query, model type, sort, base model, and period
+- Infinite scrolling with `nextPage`-based loading
+- Per-query caching with configurable TTL
+
+### Inspect model details without leaving the TUI
+
+- View description, stats, versions, files, cover image, and metadata
+- Switch versions from the keyboard
+- Prioritized cover fetching for the currently selected model/version
+
+### Explore image results and related generations
+
+- Browse the Civitai image feed in the TUI
+- Search images by `nsfw`, `sort`, `period`, `modelVersionId`, and `tags`
+- Browse images related to the selected model or version
+- See rendered previews, metadata, direct Civitai links, and prompt-related data when available
+
+### Save what matters
+
+- Like or unlike models directly from the list
+- Keep a dedicated liked-models view with search and filters
+- Like or unlike images directly from image views
+- Keep a dedicated liked-images view with persistent local storage
+- Import and export liked model lists
+
+### Download like a local tool, not a web page
+
+- Download the selected model/version into ComfyUI-style folders
+- Generate smart filenames from base model and original filename
+- Pause, resume, cancel, and delete downloads
+- Persist download history across launches
+- Resume interrupted downloads on the next app launch
+
+### Control storage and caching
+
+- Configure API key, ComfyUI path, liked item paths, cache folders, and download history paths
+- Persist model search, image search, cover image, and image byte caches on disk
+- Tune TTL values for search and image caches from the TUI
+
+## Keyboard Workflow
 
 ### Tabs
 
-The current tabs are:
+Current tabs:
+
 - `1` Models
-- `2` Bookmarks
-- `3` Image Feed
-- `4` Image Bookmarks
+- `2` Liked Models
+- `3` Images
+- `4` Liked Images
 - `5` Downloads
 - `6` Settings
 
 Navigation:
+
 - `Tab`: next tab
 - number keys: jump to a tab directly
 
 ### Models tab
 
 Primary actions:
+
 - `j` / `k`: move through the model list
 - `h` / `l`: move between versions of the selected model
 - `/`: open model search form
 - `R`: refresh the current model query and invalidate that cached result
-- `b`: toggle bookmark for the selected model
+- `b`: like or unlike the selected model
 - `d`: download the selected model/version
 - `m`: open or close modal/details
 
 What you can inspect:
+
 - model description
 - versions with index display
 - file list
@@ -295,30 +222,34 @@ What you can inspect:
 - model cover image
 - metadata
 
-### Bookmarks tab
+### Liked Models tab
 
 Primary actions:
-- `j` / `k`: move through bookmarks
-- `/`: search bookmarks
-- `b`: remove bookmark
-- import/export are supported through modal-driven path input
 
-### Image Feed tab
+- `j` / `k`: move through liked models
+- `/`: search liked models
+- `b`: remove the selected like
+- import and export are supported through modal-driven path input
+
+### Images tab
 
 Primary actions:
+
 - `j` / `k`: move through loaded images
 - `/`: open image search form
-- `b`: toggle image bookmark
+- `b`: like or unlike the selected image
 - `m`: open or close modal/details
 
-Image feed behavior:
+Image behavior:
+
 - the feed starts loading when you enter the tab
 - results are fetched in batches
 - additional pages are loaded with `nextPage`
 - prefetch starts when your current position reaches the last `5` loaded images
-- video items are skipped
+- video items are skipped automatically
 
 Displayed metadata includes:
+
 - image id
 - Civitai link
 - original URL
@@ -335,22 +266,24 @@ Displayed metadata includes:
 - stats
 - full `meta` JSON when present
 
-### Image Bookmarks tab
+### Liked Images tab
 
 - browse saved images
-- search bookmarked images
-- remove bookmarks with `b`
+- search liked images
+- remove likes with `b`
 
 ### Downloads tab
 
 Primary actions:
+
 - `p`: pause selected download
 - `r`: resume selected download
 - `c`: cancel selected download
 - `d`: delete history entry only
 - `D`: cancel if needed, then delete file and history entry
 
-The downloads tab tracks:
+Tracked information:
+
 - current downloaded size
 - total size
 - progress
@@ -359,23 +292,69 @@ The downloads tab tracks:
 
 ### Settings tab
 
-Use the settings UI to manage:
+Manage from the TUI:
+
 - API key
 - local ComfyUI path
 - cache locations
-- bookmark/history paths
+- liked item paths
+- download history paths
 - TTL values for search and image caches
 
-## Cache layout
+## CLI Usage
+
+Open the TUI:
+
+```bash
+cargo run -- ui
+```
+
+Update config from CLI:
+
+```bash
+cargo run -- config --api-key YOUR_TOKEN
+```
+
+```bash
+cargo run -- config --comfyui-path /path/to/ComfyUI
+```
+
+Download by model ID:
+
+```bash
+cargo run -- download --id 123456
+```
+
+Download by model version hash:
+
+```bash
+cargo run -- download --hash abcdef123456
+```
+
+## Authentication
+
+The app supports authenticated Civitai requests using your API key.
+
+For downloads, the app currently sends:
+
+- `Authorization: Bearer <token>`
+- `Content-Type: application/json`
+- a `token=...` query parameter on the download URL
+
+This is intentionally redundant because some download endpoints behave differently depending on how authentication is provided.
+
+## Cache Layout
 
 Cache and persistence files are stored under the app config directory.
 
 Typical contents include:
+
 - model search cache directory
 - image search cache directory
 - model cover cache directory
 - image cache directory
-- bookmark files
+- liked model file
+- liked image file
 - download history
 - interrupted download state
 - debug fetch log in debug builds
@@ -392,7 +371,7 @@ On Linux, it is typically:
 ~/.config/com.civitai/civitai-cli
 ```
 
-## Make targets
+## Development
 
 Available targets from [Makefile](/Users/dev/repo/github/bogyie/civitai-cli/Makefile):
 
@@ -405,9 +384,17 @@ Available targets from [Makefile](/Users/dev/repo/github/bogyie/civitai-cli/Make
 - `make tail-fetch-log`
 - `make clear-fetch-log`
 
-## Release flow
+Run in debug mode:
 
-GitHub Actions is configured to create a GitHub Release automatically when a tag matching `v*` is pushed.
+```bash
+make run-debug
+```
+
+Debug mode also enables fetch debug logging to the local config directory.
+
+## Release Flow
+
+GitHub Actions creates a GitHub Release automatically when a tag matching `v*` is pushed.
 
 Example:
 
@@ -421,11 +408,9 @@ The release workflow validates that the tag version matches the version in [Carg
 ## Notes
 
 - This project targets the public Civitai REST API and local ComfyUI usage.
-- API response formats can be inconsistent, and the codebase contains compatibility handling for mixed field types.
-- Image feed pagination and filtering rely on Civitai API behavior and may need future adjustment if upstream behavior changes.
+- API response formats can be inconsistent, and the codebase includes compatibility handling for mixed field types.
+- Image feed pagination and filtering rely on Civitai API behavior and may need adjustment if upstream behavior changes.
 
-## Korean documentation
-
-Korean documentation is available at:
+## Korean Documentation
 
 - [README-KO.md](/Users/dev/repo/github/bogyie/civitai-cli/README-KO.md)
