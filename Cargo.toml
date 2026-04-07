@@ -1,7 +1,7 @@
 [package]
 name = "civitai-cli"
-version = "1.4.4"
-edition = "2024"
+version = "1.4.5"
+edition = "2026"
 description = "Terminal-first Civitai browser and downloader for ComfyUI-focused workflows"
 license = "Apache-2.0"
 repository = "https://github.com/Bogyie/civitai-cli"
